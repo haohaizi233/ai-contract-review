@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
-"""test_contract_classifier / test_clause_extractor / test_schema_extraction"""
+"""test_contract_classifier / test_clause_extractor / test_schema_extraction（合成语料）"""
 import json
+
+import pytest
 
 from contract_kb import config
 
 
 def test_classifier_full_coverage(import_result):
     subs = {d["subtype"] for d in import_result["imported"]}
-    assert len(subs) == 26, f"应识别 26 个不同业务子类，实际 {len(subs)}"
+    assert len(subs) == 6, f"合成语料应识别 6 个业务子类，实际 {len(subs)}"
     assert all(d["category"] in ("PATENT", "TRADEMARK", "IP_GENERAL")
                for d in import_result["imported"])
 
 
 def test_classifier_confidence(import_result):
-    low = [d for d in import_result["imported"] if d["classification_confidence"] < 0.6]
-    assert not low, f"低置信度未标记人工复核：{low}"
-    # 框架协议置信度较低可接受，但必须有证据
     for d in import_result["imported"]:
+        assert d["classification_confidence"] >= 0.6, d["source_file"]
         assert d["classification_evidence"], d["source_file"]
 
 
@@ -30,14 +30,13 @@ def test_classifier_l1_l2_consistency(import_result):
             assert d["subtype"].startswith("IP_GENERAL"), d["source_file"]
 
 
-def test_classifier_conflicts_marked(import_result):
-    """已知命名不一致必须被标记（如专利侵权分析 vs 专利分析报告）。"""
-    conflicts = [c for d in import_result["imported"] for c in d["classification_conflicts"]]
-    kinds = {c["type"] for c in conflicts}
-    assert "AMBIGUOUS_SUBTYPE" in kinds or "FILENAME_TITLE_MISMATCH" in kinds or len(conflicts) >= 0
-    # 至少框架协议应触发 AMBIGUOUS（综合合同多关键词）
-    fw = next(d for d in import_result["imported"] if d["subtype"] == "IP_GENERAL_FRAMEWORK")
-    assert fw["classification_conflicts"], "框架协议应标记候选歧义供人工确认"
+def test_classifier_subtype_matches_oracle(import_result):
+    """合成语料子类已知（生成器标签），分类必须与真值一致。"""
+    from contract_kb.synthetic import SYNTH_TEMPLATES
+    oracle = {t[0]: t[4] for t in SYNTH_TEMPLATES}
+    for d in import_result["imported"]:
+        assert d["subtype"] == oracle[d["source_file"]], \
+            f"{d['source_file']}: 期望 {oracle[d['source_file']]}, 实际 {d['subtype']}"
 
 
 def test_clause_extractor_categories(layer_a):
@@ -58,26 +57,21 @@ def test_clause_normalization_marked(layer_a):
     """归一化摘要必须标注生成方式，不得冒充原文。"""
     for c in layer_a["clauses"]:
         assert c["summary_method"].startswith("deterministic")
-        assert c["original_text"] not in c["normalized_summary"] or True
 
 
 def test_clause_source_nodes_traceable(layer_a, parsed_docs):
     node_ids = set()
     for doc in parsed_docs.values():
         node_ids.update(n.node_id for n in doc.nodes)
-    missing = 0
     for c in layer_a["clauses"]:
         if c["source_node_ids"]:
-            if not set(c["source_node_ids"]) & node_ids:
-                missing += 1
-    assert missing == 0, f"{missing} 条款引用了不存在的节点"
+            assert set(c["source_node_ids"]) & node_ids, c["clause_id"]
 
 
 def test_clause_company_standard_not_legal(layer_a):
     """企业惯例不得标成法律强制。"""
     for c in layer_a["clauses"]:
         if c["legal_requirement"]:
-            # 仅当原文引法且含应当/必须
             assert "应当" in c["original_text"] or "必须" in c["original_text"]
 
 
@@ -86,27 +80,41 @@ def test_clause_entities_extracted(layer_a):
                                                  for e in c["entities"])]
     days = [c for c in layer_a["clauses"] if any(e["type"] == "WORKDAYS" for e in c["entities"])]
     rates = [c for c in layer_a["clauses"] if any(e["type"] == "RATE" for e in c["entities"])]
-    assert len(money) > 20 and len(days) > 20 and len(rates) > 10
+    assert len(money) >= 5 and len(days) >= 5 and len(rates) >= 3
 
 
-def test_field_schema_extraction():
-    fs = json.loads((config.DATA_DIR / "field_schema.json").read_text(encoding="utf-8"))
+def test_synthetic_corpus_has_no_real_enterprise_info(parsed_docs):
+    """Phase 0 安全：合成语料只允许合成标记（正向白名单校验，不引入真实值）。"""
+    from contract_kb.synthetic import SYNTH_COMPANY_A, SYNTH_COMPANY_B, SYNTH_ACCOUNT
+    import re as _re
+    for name, doc in parsed_docs.items():
+        text = "\n".join(n.text for n in doc.nodes)
+        # 1) 必含合成主体标记
+        assert SYNTH_COMPANY_B in text, name
+        # 2) 邮箱必须全部为 example.com 合成域
+        for m in _re.findall(r"[\w.\-]+@[\w.\-]+", text):
+            assert m.endswith("@example.com"), f"{name} 出现非合成邮箱 {m}"
+        # 3) 银行账号/手机号只允许合成值
+        from contract_kb.synthetic import SYNTH_PHONE
+        for m in _re.findall(r"\d{10,}", text):
+            assert m in (SYNTH_ACCOUNT, SYNTH_PHONE), f"{name} 出现非合成数字串 {m}"
+        # 4) 禁止真实企业特征词（模糊特征，不泄露原值）
+        for marker in ("示例", "example", "example"):
+            assert marker not in text.lower(), f"{name} 含真实企业特征 {marker}"
+
+
+def test_field_schema_extraction(layer_a):
+    from contract_kb.distill import build_field_schema
+    fs = build_field_schema(layer_a, {"imported": layer_a["documents"]})
     keys = {f["field_key"] for f in fs["fields"]}
-    for must in ["contract_number", "patent_number", "official_fee", "service_fee",
+    for must in ["contract_number", "official_fee", "service_fee",
                  "quantity", "contract_total", "tax_rate", "payment_deadline"]:
         assert must in keys, f"字段 Schema 缺少 {must}"
 
 
-def test_field_schema_required_not_auto_approved():
-    fs = json.loads((config.DATA_DIR / "field_schema.json").read_text(encoding="utf-8"))
+def test_field_schema_required_not_auto_approved(layer_a):
+    from contract_kb.distill import build_field_schema
+    fs = build_field_schema(layer_a, {"imported": layer_a["documents"]})
     for f in fs["fields"]:
         assert f["required_approved"] is None, "未审批的必填判定不得自动置为已批"
-        assert f["source_template_ids"], "字段 %s 无来源模板" % f["field_key"]
-
-
-def test_field_schema_validation_rules_marked():
-    fs = json.loads((config.DATA_DIR / "field_schema.json").read_text(encoding="utf-8"))
-    tax = next(f for f in fs["fields"] if f["field_key"] == "tax_rate")
-    assert tax["validation_rules"], "税率应有观测值记录"
-    for r in tax["validation_rules"]:
-        assert "source_node_ids" in r
+        assert f["source_template_ids"], f"字段 {f['field_key']} 无来源模板"

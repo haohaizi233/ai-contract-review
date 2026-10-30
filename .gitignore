@@ -5,9 +5,31 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+.ruff_cache/
+.mypy_cache/
 
-# 运行时上传的待审合同（受控数据，不入仓库）
+# 受控数据：企业合同原件与派生数据（Phase 0 安全治理）
+参考/
+新系统合同审批注意事项*.docx
+深圳市统一电子印章管理平台*/
+_docx_extract.txt
+知识库_合同模板蒸馏*.md
+_tools/extracted/
+_tools/*.txt
+_tools/clause_library.json
+data/
+reports/
+# 测试语料（合成样本由 contract_kb.synthetic/golden 运行时生成；真实语料受控不入库）
+tests/fixtures/
+
+# 运行时上传的待审合同
 data/contract-kb/upload/
+
+# 本地企业配置（真实主体/编码映射/密钥，不入库）
+config/company_profile.local.json
+.env*
+*.key
+*.pem
 
 # 系统文件
 Thumbs.db

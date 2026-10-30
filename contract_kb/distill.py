@@ -314,9 +314,9 @@ def build_rule_candidates(layer_a: dict, data: dict, field_schema: dict) -> dict
         "rule_id": "CONTRACT_CODE_SUBJECT_MATCH", "name": "合同编码与我方签约主体一致",
         "contract_types": ["*"], "rule_type": "CROSS_FIELD_CONSISTENCY",
         "execution_mode": "DETERMINISTIC", "severity": "HIGH", "parameters":
-            {"known_mapping": {"HC": "示例知识产权代理有限公司"}},
+            {"known_mapping": "LOADED_FROM_LOCAL_CONFIG"},
         "source_clauses": [], "status": "DRAFT", "approved_by": None, "effective_at": None,
-        "evidence_note": "来源：《新系统合同审批注意事项20261015》第1条（仅给出 HC 一例映射，其余编码未知→MANUAL_REVIEW）",
+        "evidence_note": "来源：《新系统合同审批注意事项》第1条（编码↔主体映射由本地配置 config/company_profile.local.json 提供，仓库内不存真实主体）",
         "external_data_dependency": "业财系统-签约主体编码表",
     })
 
@@ -515,7 +515,7 @@ def _write_reports(data, taxonomy, fs, rc, diff):
     qs = [
         ("代理费底价数值未知", "《新系统合同审批注意事项》仅表述『不能低于系统底价』，无任何文档给出数值",
          "规则 AGENCY_FEE_FLOOR 无法确定性执行", "业务/财务部门"),
-        ("合同编码-签约主体完整映射未知", "注意事项仅举例 HC=示例知识产权代理有限公司", "CONTRACT_CODE_SUBJECT_MATCH 部分场景需人工", "业财系统管理员"),
+        ("合同编码-签约主体完整映射未知", "审批注意事项仅举例编码↔主体映射，完整映射在企业系统（本仓库不存真实主体）", "CONTRACT_CODE_SUBJECT_MATCH 部分场景需人工", "业财系统管理员"),
         ("仅优先审查模板管辖为『乙方所在地』", "模板原文与其他 25 份『深圳市南山区人民法院』不一致", "管辖条款不统一，起草时有歧义", "法务"),
         ("发票条款变体是否全部可接受", "分析报告类仅写『相应发票』，优先/快速预审仅写『服务费发票』未写 6% 专票", "开票类型一致性规则需人工确认口径", "财务/法务"),
         ("『有权可向』措辞变体（2 模板）", "年费缴纳/商标许可备案争议解决条款", "文字瑕疵，效力影响待评估", "法务"),

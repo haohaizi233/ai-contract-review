@@ -190,8 +190,14 @@ def import_template_file(path: Path) -> tuple[ImportedDoc | None, str | None]:
 
 
 def scan_and_import(template_dir: Path) -> dict:
-    """扫描目录（兼容直接目录或 ZIP 落盘目录），返回导入结果包。"""
-    files = sorted(p for p in template_dir.iterdir() if p.is_file() and not p.name.startswith("~"))
+    """扫描目录（兼容直接目录或 ZIP 落盘目录），返回导入结果包。
+
+    仅处理允许扩展名（.docx）；其他文件记录为 skipped 而非失败。
+    """
+    from . import config as _cfg
+    all_files = sorted(p for p in template_dir.iterdir() if p.is_file() and not p.name.startswith("~"))
+    files = [p for p in all_files if p.suffix.lower() in _cfg.ALLOWED_EXT]
+    skipped = [p.name for p in all_files if p.suffix.lower() not in _cfg.ALLOWED_EXT]
     docs, failures = [], []
     for p in files:
         rec, err = import_template_file(p)
@@ -202,6 +208,7 @@ def scan_and_import(template_dir: Path) -> dict:
     return {
         "scanned_dir": str(template_dir),
         "file_count": len(files),
+        "skipped_non_docx": skipped,
         "imported": [d.to_dict() for d in docs],
         "failures": failures,
         "_raw": docs,

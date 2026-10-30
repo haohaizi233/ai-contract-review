@@ -1,6 +1,13 @@
 # -*- coding: utf-8 -*-
-"""测试公共夹具：真实 26 模板导入一次（session 级缓存）。"""
+"""测试公共夹具（Phase 0 安全治理后）：
+
+- 默认使用**合成语料**（contract_kb.synthetic 生成，不含真实企业信息），CI/公开环境安全；
+- 真实模板回归测试仅在显式授权环境变量下启用：
+      CONTRACT_KB_REAL_CORPUS=1  且 CONTRACT_KB_TEMPLATE_DIR 指向受控真实模板目录
+  真实用例统一打 @pytest.mark.real_corpus，未授权时自动 skip。
+"""
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -11,6 +18,12 @@ sys.path.insert(0, str(ROOT))
 
 from contract_kb import config  # noqa: E402
 
+REAL_CORPUS_ENABLED = os.environ.get("CONTRACT_KB_REAL_CORPUS") == "1"
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "real_corpus: 需授权真实模板语料的回归用例（默认跳过）")
+
 
 @pytest.fixture(scope="session")
 def workspace_ready():
@@ -19,46 +32,59 @@ def workspace_ready():
 
 
 @pytest.fixture(scope="session")
-def import_result(workspace_ready):
-    p = config.DATA_DIR / "import_result.json"
-    if not p.exists():
-        from contract_kb.ingest import scan_and_import
-        result = scan_and_import(config.TEMPLATE_DIR)
-        result.pop("_raw", None)
-        p.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
-    return json.loads(p.read_text(encoding="utf-8"))
+def corpus_dir(workspace_ready) -> Path:
+    """测试语料目录：默认合成语料。"""
+    from contract_kb.synthetic import generate_corpus
+    d = ROOT / "tests" / "fixtures" / "synth_corpus"
+    generate_corpus(d)
+    return d
 
 
 @pytest.fixture(scope="session")
-def layer_a(workspace_ready, import_result):
-    p = config.DATA_DIR / "layer_a_raw.json"
-    if not p.exists():
-        pytest.skip("layer_a_raw.json 未生成，请先运行 python -m contract_kb.cli import")
-    return json.loads(p.read_text(encoding="utf-8"))
+def import_result(workspace_ready, corpus_dir, tmp_path_factory):
+    """导入合成语料到独立测试数据库（不触碰 data/ 生产库）。"""
+    from contract_kb.ingest import scan_and_import
+    result = scan_and_import(corpus_dir)
+    result.pop("_raw", None)
+    return result
 
 
 @pytest.fixture(scope="session")
-def parsed_docs(workspace_ready, import_result):
-    """AST 文档集合（真实模板）。"""
+def layer_a(workspace_ready, corpus_dir, import_result):
+    """合成语料的条款/Schema 层。"""
+    from contract_kb.ingest import scan_and_import
+    result = scan_and_import(corpus_dir)
+    layer = {"clauses": [], "table_schemas": [], "documents": []}
+    for d in result.get("_raw", []):
+        layer["clauses"].extend(d.clauses)
+        layer["table_schemas"].extend(d.table_schemas)
+        layer["documents"].append(d.to_dict())
+    if not layer["clauses"]:
+        pytest.skip("合成语料条款抽取为空")
+    return layer
+
+
+@pytest.fixture(scope="session")
+def parsed_docs(workspace_ready, corpus_dir):
+    """AST 文档集合（合成语料）。"""
     from contract_kb.docx_parser import parse_docx
     docs = {}
-    for f in sorted(config.TEMPLATE_DIR.iterdir()):
-        if f.suffix.lower() == ".docx" and not f.name.startswith("~"):
+    for f in sorted(corpus_dir.glob("*.docx")):
+        if not f.name.startswith("~"):
             docs[f.name] = parse_docx(f)
     return docs
 
 
 @pytest.fixture(scope="session")
-def storage(workspace_ready, import_result):
+def storage(workspace_ready, corpus_dir, tmp_path_factory):
+    """独立测试存储（临时 SQLite，session 级）。"""
     from contract_kb.storage import Storage
-    st = Storage(config.DB_PATH)
-    docs = json.loads((config.DATA_DIR / "import_result.json").read_text(encoding="utf-8"))
-    layer = json.loads((config.DATA_DIR / "layer_a_raw.json").read_text(encoding="utf-8"))
-    by_tid = {d["template_id"]: d for d in layer["documents"]}
-    for d in docs["imported"]:
-        merged = dict(d)
-        merged["clauses"] = by_tid.get(d["template_id"], {}).get("clauses", d.get("clauses", []))
-        st.upsert_document(merged)
+    from contract_kb.ingest import scan_and_import
+    db = tmp_path_factory.mktemp("db") / "test_contract_kb.db"
+    st = Storage(db)
+    result = scan_and_import(corpus_dir)
+    for d in result.get("_raw", []):
+        st.upsert_document(d.to_dict())
     yield st
     st.close()
 
@@ -66,4 +92,22 @@ def storage(workspace_ready, import_result):
 @pytest.fixture(scope="session")
 def golden_samples(workspace_ready):
     from contract_kb.golden import generate_all
-    return generate_all()
+    out = ROOT / "tests" / "fixtures" / "golden"
+    manifest = generate_all(out)
+    return {"dir": out, "items": manifest}
+
+
+# ---------------- 真实语料（授权回归） ----------------
+
+@pytest.fixture(scope="session")
+def real_corpus_dir():
+    if not REAL_CORPUS_ENABLED:
+        pytest.skip("真实语料回归未授权（CONTRACT_KB_REAL_CORPUS=1 启用）")
+    d = config.TEMPLATE_DIR
+    if not d.exists():
+        pytest.skip(f"真实模板目录不存在：{d}")
+    return d
+
+
+def is_real_corpus_marked(request) -> bool:
+    return any(m.name == "real_corpus" for m in request.node.own_markers)
