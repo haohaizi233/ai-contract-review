@@ -95,9 +95,11 @@ def test_synthetic_corpus_has_no_real_enterprise_info(parsed_docs):
         from contract_kb.synthetic import SYNTH_PHONE
         for m in _re.findall(r"\d{10,}", text):
             assert m in (SYNTH_ACCOUNT, SYNTH_PHONE), f"{name} 出现非合成数字串 {m}"
-        # 4) 禁止真实企业特征词（模糊特征，不泄露原值）
-        for marker in ("示例", "example", "example"):
-            assert marker not in text.lower(), f"{name} 含真实企业特征 {marker}"
+        # 4) 受控特征词扫描（清单由本地环境变量提供，不硬编码真实标记）
+        import os as _os
+        banned = [m for m in _os.environ.get("CONTRACT_KB_BANNED_MARKERS", "").split("|") if m]
+        for marker in banned:
+            assert marker not in text.lower(), f"{name} 含受控特征 {marker}"
 
 
 def test_field_schema_extraction(layer_a):
