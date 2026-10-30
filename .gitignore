@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# 运行时上传的待审合同（受控数据，不入仓库）
+data/contract-kb/upload/
+
+# 系统文件
+Thumbs.db
+.DS_Store
