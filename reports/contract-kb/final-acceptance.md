@@ -136,7 +136,16 @@ PG `upsert_document` 增量导入同 clause_id 主键冲突；PG ivfflat 小语�
 4. **真实企业合同语料回归**仅在受控环境（self-hosted + `environment: controlled` + `CONTRACT_KB_REAL_CORPUS=1`）执行，
    结果不进公开仓库（合规要求，非缺陷）。
 
-## 六、GitHub Actions 运行
+## 六、GitHub Actions 运行（实测）
 
-- 运行链接：<待首次 push 后回填，见提交说明>
-- 触发：push/PR（`lint-and-type`、`security-gate`、`test-synthetic`、`test-pg`）+ `workflow_dispatch`（受控真实语料回归）
+- 验证运行：<https://github.com/haohaizi233/ai-contract-review/actions/runs/41029312888>（push `228f8f3`）
+
+| Job | 状态 | 实测内容 |
+|---|---|---|
+| `lint-and-type` | ✅ 通过 | Ruff lint / Ruff format --check / mypy（均无 `|| true`） |
+| `test-synthetic` | ✅ 通过 | JUnit 实测：**200 跑 / 0 失败 / 22 跳过**（跳过 = 19 PG 行为（未配 DSN，由 test-pg 覆盖）+ 2 real_corpus + 1 real_model） |
+| `test-pg` | ✅ 通过 | pgvector/pgvector:pg16 服务容器真实执行：**26 跑 / 0 失败 / 0 跳过**（迁移/导入/检索排序与 LIMIT/回滚/维度校验/租户列/格式标准） |
+| `security-gate` | ⛔ 按设计阻断 | 结构性检查通过；精确敏感标记扫描因 `SENSITIVE_MARKERS` Secret 未配置而 **fail-closed 阻断**（见剩余阻塞问题 1） |
+| `real-corpus-regression` | ⏭ 未触发 | 仅 `workflow_dispatch` + self-hosted + environment: controlled 触发（合规设计） |
+
+- 触发：push/PR（上述四 job）+ `workflow_dispatch`（受控真实语料回归）。
