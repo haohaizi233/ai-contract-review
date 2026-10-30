@@ -6,7 +6,6 @@
       CONTRACT_KB_REAL_CORPUS=1  且 CONTRACT_KB_TEMPLATE_DIR 指向受控真实模板目录
   真实用例统一打 @pytest.mark.real_corpus，未授权时自动 skip。
 """
-import json
 import os
 import sys
 from pathlib import Path
@@ -84,7 +83,7 @@ def storage(workspace_ready, corpus_dir, tmp_path_factory):
     st = Storage(db)
     result = scan_and_import(corpus_dir)
     for d in result.get("_raw", []):
-        st.upsert_document(d.to_dict())
+        st.upsert_document(d.to_dict(), tenant="t1")
     yield st
     st.close()
 

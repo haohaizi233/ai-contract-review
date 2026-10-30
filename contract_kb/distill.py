@@ -18,8 +18,6 @@ import difflib
 import json
 import re
 from collections import defaultdict
-from decimal import Decimal
-from pathlib import Path
 
 from . import config
 
@@ -207,7 +205,7 @@ FIELD_NAME_MAP = {
 
 
 def build_field_schema(layer_a: dict, data: dict) -> dict:
-    src_by_tid = {d["template_id"]: d["source_file"] for d in data["imported"]}
+    src_by_tid = {d["template_id"]: d["source_file"] for d in data.get("imported", [])}
     fields: dict[str, dict] = {}
     for ts in layer_a["table_schemas"]:
         for f in ts["fields"]:
@@ -276,7 +274,6 @@ def _mk_field(key, name, dtype, req):
 # ---------------- 4. 规则候选 ----------------
 def build_rule_candidates(layer_a: dict, data: dict, field_schema: dict) -> dict:
     clauses = layer_a["clauses"]
-    src_by_tid = {d["template_id"]: d["source_file"] for d in data["imported"]}
 
     def find_clauses(pred, limit=6):
         return [{"clause_id": c["clause_id"], "template_id": c["template_id"],

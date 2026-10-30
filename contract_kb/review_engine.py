@@ -12,12 +12,46 @@ from __future__ import annotations
 
 import re
 import uuid
+import json
 from dataclasses import dataclass, field, asdict
 from decimal import Decimal, InvalidOperation
 
 from .ingest import import_template_file, security_check_file
-from .clause_extractor import extract_clauses
 from .storage import Storage
+
+
+class _ParsedView:
+    """把 ImportedDoc.ast dict 适配成 format_auditor 所需的对象视图。"""
+    def __init__(self, ast: dict, document_id: str):
+        self.document_id = document_id
+        self.nodes = [_NodeView(n) for n in ast.get("nodes", [])]
+        self.table_dims = [
+            {"table_index": i, "rows": sum(1 for n in self.nodes
+                                           if n.node_type == "table_cell" and n.table_index == i
+                                           and n.row_index == max((x.row_index for x in self.nodes
+                                                                  if x.node_type == "table_cell"
+                                                                  and x.table_index == i), default=-1)) + 1,
+             "cols": max((n.column_index for n in self.nodes
+                          if n.node_type == "table_cell" and n.table_index == i), default=-1) + 1}
+            for i in sorted({n.table_index for n in self.nodes
+                             if n.node_type == "table_cell" and n.table_index is not None})]
+        self.headers = ast.get("headers", [])
+        self.footers = ast.get("footers", [])
+        self.page_margins_cm = None   # 解析层暂未提取 pgMar → FORMAT_UNREADABLE 如实标注
+
+
+class _NodeView:
+    def __init__(self, d: dict):
+        self.__dict__.update({k: d.get(k) for k in
+                              ("node_id", "node_type", "order", "text", "section",
+                               "clause_number", "table_index", "row_index", "column_index",
+                               "style", "source_locator")})
+
+
+def audit_format_from_rec(rec) -> dict:
+    from .format_auditor import audit_format
+    view = _ParsedView(rec.ast or {}, rec.template_id)
+    return audit_format(view)
 
 # 系统强制核心规则：CUSTOM 用户要求不得覆盖
 CORE_RULE_IDS = {
@@ -98,8 +132,10 @@ def _cn_num_to_int(s: str) -> int | None:
 
 
 class ReviewEngine:
-    def __init__(self, storage: Storage):
+    def __init__(self, storage: Storage, llm_provider=None, llm_reviewer=None):
         self.storage = storage
+        self._llm_provider = llm_provider
+        self._llm_reviewer = llm_reviewer
 
     # ---------- 主链路 ----------
     def review(self, docx_path, mode: str = "STANDARD",
@@ -163,6 +199,33 @@ class ReviewEngine:
         issues.extend(self._check_identifier_format(clauses))
         issues.extend(self._check_contradiction(clauses))
 
+        # 4b. Word 格式审核（Phase 4）
+        fmt = audit_format_from_rec(rec)
+        for fi in fmt["issues"]:
+            if fi["issue_type"] == "NON_COMPLIANT":
+                sev = "MEDIUM" if fi.get("severity") == "MEDIUM" else "LOW"
+                issues.append(Issue(
+                    issue_id=uuid.uuid4().hex[:10], rule_id=f"FORMAT:{fi['check']}",
+                    severity=sev, category="FORMAT_NON_COMPLIANT",
+                    title=f"格式不符标准：{fi['check']}", description=fi["description"],
+                    expected_value=fi.get("expected"), actual_value=fi.get("actual"),
+                    execution_mode="DETERMINISTIC", requires_human_review=False))
+            elif fi["issue_type"] == "TEMPLATE_DIFF":
+                issues.append(Issue(
+                    issue_id=uuid.uuid4().hex[:10], rule_id=f"FORMAT:{fi['check']}",
+                    severity="LOW", category="FORMAT_TEMPLATE_DIFF",
+                    title=f"格式与模板差异：{fi['check']}", description=fi["description"],
+                    expected_value=fi.get("expected"), actual_value=fi.get("actual"),
+                    execution_mode="DETERMINISTIC", requires_human_review=True,
+                    check_status="NEEDS_MANUAL_REVIEW"))
+            else:  # FORMAT_UNREADABLE
+                issues.append(Issue(
+                    issue_id=uuid.uuid4().hex[:10], rule_id=f"FORMAT:{fi['check']}",
+                    severity="INFO", category="FORMAT_UNREADABLE",
+                    title=f"格式信息不可读：{fi['check']}", description=fi["description"],
+                    execution_mode="DETERMINISTIC", requires_human_review=True,
+                    check_status="INSUFFICIENT_EVIDENCE"))
+
         # 6. 确定性规则引擎（审批通过的规则才强制执行；DRAFT 仅提示）
         issues.extend(self._run_rules(rec, clauses, subtype))
 
@@ -174,29 +237,64 @@ class ReviewEngine:
                 rag_context.append({"query": kw, "clause_id": h["clause_id"],
                                     "document_id": h["document_id"], "text": h["text"][:120]})
 
-        # 8. LLM 语义审核（未配置 → NOT_CHECKED 如实标注）
-        from . import config
-        if config.LLM_PROVIDER == "none":
+        # 8. LLM 语义审核（含用户自定义要求真交 LLM 分析）
+        from .llm_review import LLMSemanticReviewer
+        llm = getattr(self, "_llm_reviewer", None) or LLMSemanticReviewer(
+            provider=getattr(self, "_llm_provider", None))
+        contract_text = "\n".join(c.get("original_text", "") for c in clauses)
+        custom_reqs = custom_requirements if mode in ("CUSTOM", "COMBINED") else []
+        llm_result = llm.review(contract_text, rag_context, custom_reqs)
+        if llm_result.status == "NOT_CHECKED":
             issues.append(Issue(
                 issue_id=uuid.uuid4().hex[:10], rule_id="LLM_SEMANTIC_REVIEW",
                 severity="INFO", category="NOT_CHECKED", title="LLM 语义审核未执行",
-                description="当前环境未配置授权 LLM 提供商（CONTRACT_KB_LLM=none）。"
-                            "依据数据治理要求，未经配置不得向外部大模型传输合同内容。"
-                            "语义级审查（条款矛盾/语义风险）标记为 NOT_CHECKED，"
+                description="当前环境未配置授权 LLM 提供商。依据数据治理要求，"
+                            "未经配置不得向外部大模型传输合同内容。语义级审查标记为 NOT_CHECKED，"
                             "本次结果仅包含确定性规则检查。",
                 execution_mode="LLM_SEMANTIC", check_status="NOT_CHECKED",
                 requires_human_review=True))
-
-        # 9. CUSTOM / COMBINED：用户要求（不覆盖核心规则）
-        if mode in ("CUSTOM", "COMBINED"):
-            for req in custom_requirements:
+            # 自定义要求未获 LLM 分析时如实标注（不伪称已审）
+            for req in custom_reqs:
                 issues.append(Issue(
                     issue_id=uuid.uuid4().hex[:10], rule_id="CUSTOM_REQUIREMENT",
-                    severity="LOW", category="MANUAL_REVIEW", title=f"用户指定审核要求：{req[:30]}",
-                    description=f"用户本次要求『{req}』需要语义理解，已标记人工复核。"
-                                "用户要求不会覆盖系统核心规则（如金额一致性、必备条款）。",
+                    severity="LOW", category="MANUAL_REVIEW",
+                    title=f"自定义要求未分析：{req[:30]}",
+                    description=f"要求『{req}』需 LLM 语义分析，当前未配置 LLM，"
+                                "标记 NOT_CHECKED，需人工复核。",
                     execution_mode="MANUAL_REVIEW", requires_human_review=True,
-                    check_status="NEEDS_MANUAL_REVIEW"))
+                    check_status="NOT_CHECKED"))
+        else:
+            for f in llm_result.findings:
+                issues.append(Issue(
+                    issue_id=uuid.uuid4().hex[:10], rule_id=f"LLM:{f.category}",
+                    severity=f.severity, category=f.category,
+                    title=f.title, description=f.description,
+                    source_reference=SourceReference(rec.template_id, [], None, f.original_text)
+                    if f.original_text else None,
+                    suggestion=f.suggestion, execution_mode="LLM_SEMANTIC",
+                    requires_human_review=f.requires_human_review,
+                    confidence=f.confidence,
+                    check_status="NEEDS_MANUAL_REVIEW" if f.requires_human_review else "CHECKED"))
+            for cr in llm_result.custom_requirement_results:
+                verdict = cr.get("verdict", "不确定")
+                issues.append(Issue(
+                    issue_id=uuid.uuid4().hex[:10], rule_id="CUSTOM_REQUIREMENT",
+                    severity="LOW" if verdict != "不满足" else "MEDIUM",
+                    category="CUSTOM_REQUIREMENT_RESULT",
+                    title=f"自定义要求结论：{verdict}",
+                    description=f"要求『{cr.get('requirement','')}』→ {verdict}；"
+                                f"证据：{cr.get('evidence','')}",
+                    execution_mode="LLM_SEMANTIC",
+                    requires_human_review=True,
+                    confidence=cr.get("confidence")))
+            if llm_result.failure:
+                issues.append(Issue(
+                    issue_id=uuid.uuid4().hex[:10], rule_id="LLM_SEMANTIC_REVIEW",
+                    severity="INFO", category="NOT_CHECKED",
+                    title=f"LLM 审核部分失败：{llm_result.failure}",
+                    description=f"失败类型 {llm_result.failure}，已降级处理，不伪造结论。",
+                    execution_mode="LLM_SEMANTIC", check_status="NEEDS_MANUAL_REVIEW",
+                    requires_human_review=True))
         if mode in ("STANDARD", "COMBINED") and matched:
             issues.extend(self._diff_vs_template(rec, clauses, matched))
 
@@ -547,20 +645,70 @@ class ReviewEngine:
         return out
 
     def _run_rules(self, rec, clauses, subtype) -> list[Issue]:
-        """执行审批通过（APPROVED）的规则；DRAFT 规则不强制执行，仅提示。"""
+        """Phase 1.1：通过 RuleEngine 真正执行规则。
+
+        - APPROVED 且生效期内的规则 → 执行器强制检查（FAIL 转 Issue）；
+        - DRAFT / 过期 / 类型不适用 / 例外 → SKIP 留痕（不强制）；
+        - 每次执行保留 rule_id、version、result、evidence。
+        """
+        from .rule_engine import RuleEngine, RuleSpec, ReviewContext
         out = []
+        specs = []
         for r in self.storage.get_rules():
-            if "*" not in r["contract_types"] and subtype not in r["contract_types"]:
+            try:
+                specs.append(RuleSpec(
+                    rule_id=r["rule_id"], version=r.get("version", 1), name=r.get("name", ""),
+                    rule_type=r["rule_type"], execution_mode=r.get("execution_mode", "DETERMINISTIC"),
+                    severity=r.get("severity", "MEDIUM"), priority=r.get("params", {}).get("priority", 100),
+                    contract_types=r.get("contract_types", ["*"]),
+                    parameters=r.get("params", {}) or {},
+                    exceptions=r.get("params", {}).get("exceptions", []) or [],
+                    source_clauses=r.get("source_clauses", []),
+                    status=r.get("status", "DRAFT"),
+                    approved_by=r.get("approved_by"),
+                    effective_at=r.get("effective_at"),
+                    effective_until=r.get("params", {}).get("effective_until"),
+                ))
+            except Exception:
                 continue
-            if r["status"] != "APPROVED":
+        ctx = ReviewContext(document_id=rec.template_id, subtype=subtype, category=rec.category,
+                            clauses=clauses)
+        engine = RuleEngine()
+        results = engine.execute(specs, ctx)
+        # 执行留痕（内存 + 数据库）
+        for res in results:
+            self.storage.conn.execute(
+                "INSERT OR REPLACE INTO rule_executions VALUES (?,?,?,?,?,?,?,?,?)",
+                (f"{res.rule_id}:{res.rule_version}:{res.executed_at:.3f}", res.rule_id, res.rule_version,
+                 res.rule_type, res.result, res.severity, res.message,
+                 json.dumps(res.evidence, ensure_ascii=False), res.executed_at))
+            if res.result == "FAIL":
                 out.append(Issue(
-                    issue_id=uuid.uuid4().hex[:10], rule_id=r["rule_id"],
+                    issue_id=uuid.uuid4().hex[:10], rule_id=res.rule_id,
+                    severity=res.severity, category="RULE_VIOLATION",
+                    title=f"规则不通过：{res.rule_id}",
+                    description=f"[v{res.rule_version}] {res.message}",
+                    source_reference=SourceReference(
+                        rec.template_id, res.evidence.get("node_ids", []),
+                        res.evidence.get("clause_number"), "") if res.evidence.get("node_ids") else None,
+                    execution_mode="DETERMINISTIC", requires_human_review=True))
+            elif res.result == "MANUAL_REQUIRED":
+                out.append(Issue(
+                    issue_id=uuid.uuid4().hex[:10], rule_id=res.rule_id,
+                    severity="LOW", category="MANUAL_REVIEW",
+                    title=f"规则需人工复核：{res.rule_id}",
+                    description=f"[v{res.rule_version}] {res.message}",
+                    execution_mode="MANUAL_REVIEW", requires_human_review=True,
+                    check_status="NEEDS_MANUAL_REVIEW"))
+            elif res.result == "SKIPPED_DRAFT":
+                out.append(Issue(
+                    issue_id=uuid.uuid4().hex[:10], rule_id=res.rule_id,
                     severity="INFO", category="RULE_PENDING_APPROVAL",
-                    title=f"规则未审批，未强制执行：{r['name']}",
-                    description=f"规则 {r['rule_id']} 状态为 {r['status']}，"
-                                "未经审批不得作为企业正式强制规则执行。本次仅提示。",
-                    execution_mode=r["execution_mode"], check_status="NOT_CHECKED",
+                    title=f"规则未审批，未强制执行：{res.rule_id}",
+                    description=f"[v{res.rule_version}] {res.message}",
+                    execution_mode="DETERMINISTIC", check_status="NOT_CHECKED",
                     requires_human_review=False))
+        self.storage.conn.commit()
         return out
 
     def _diff_vs_template(self, rec, clauses, matched) -> list[Issue]:

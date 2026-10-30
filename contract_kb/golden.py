@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 from docx import Document
@@ -24,6 +23,8 @@ BASE = {
     "fee_clause": "4.1 甲方向乙方支付费用总额为人民币 壹万圆整（¥10,000 元），前述费用不包括后续年限产生的专利年费。具体明细如下：",
     "fee_total": "合计 | 人民币 壹万圆整（¥10,000 元）",
     "payment": "4.2 甲方应自合同生效之日起三个工作日内向乙方支付上述全部费用。",
+    "account": "4.3 乙方的账户信息：账户名：示例知识产权代理有限公司 账号：6222000000000000000 开户行：示例银行测试支行。",
+    "startup": "4.4 乙方自收到甲方支付的全部费用后启动相关业务的办理（甲方支付的款项实际到达乙方指定账户之日为收到日），另有约定除外。",
     "invoice": "4.5 乙方自收到甲方支付的全部费用后，为甲方出具服务费增值税专用发票（税率6%）并提供官费官方收据。",
     "confidentiality": "第五条 保密条款\n甲乙双方对本合同内容及合同履行过程中知悉双方所有的经营信息、资料等商业秘密负有保密义务，未经对方书面同意，不得自行用于与本合同目的无关的其它事宜或向任何第三方披露、出售、许可使用，但法律要求披露或者通过合法公开途径可获得的除外。",
     "liability": "第六条 违约责任\n6.3 甲方应按本合同约定及时向乙方支付服务费用，逾期支付的甲方应按逾期付款金额日率3‰向乙方支付违约金。",
@@ -52,7 +53,7 @@ MUTANTS = [
     ("mut_09_patent_no_change", "修改专利号", ["FIELD_FORMAT", "IDENTIFIER_FORMAT_CHECK"],
      lambda t: {**t, "patent_no": "专利号：XXXX-INVALID"}),
     ("mut_10_contradictory_clause", "添加互相矛盾条款", ["SEMANTIC_RISK", "MANUAL_REVIEW"],
-     lambda t: {**t, "payment_extra": "4.3 甲方无需支付任何费用，本合同为无偿服务。"}),
+     lambda t: {**t, "payment_extra": "4.6 甲方无需支付任何费用，本合同为无偿服务。"}),
     ("mut_11_late_fee_change", "修改违约金比率", ["CLAUSE_VARIATION", "LATE_FEE_RATE"],
      lambda t: {**t, "liability": t["liability"].replace("3‰", "1‰")}),
     ("mut_12_missing_liability", "删除违约责任", ["CLAUSE_MISSING", "CLAUSE_REQUIRED_LIABILITY"],
@@ -90,8 +91,10 @@ def _build_docx(t: dict, out_path: Path):
     doc.add_paragraph(t["fee_clause"])
     doc.add_paragraph(t["fee_total"])
     doc.add_paragraph(t["payment"])
-    doc.add_paragraph(t.get("payment_extra", ""))
+    doc.add_paragraph(t.get("account", ""))
+    doc.add_paragraph(t.get("startup", ""))
     doc.add_paragraph(t["invoice"])
+    doc.add_paragraph(t.get("payment_extra", ""))
     if t.get("confidentiality"):
         doc.add_paragraph(t["confidentiality"])
     if t.get("liability"):

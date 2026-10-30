@@ -1,10 +1,7 @@
 # -*- coding: utf-8 -*-
 """test_contract_classifier / test_clause_extractor / test_schema_extraction（合成语料）"""
-import json
 
-import pytest
 
-from contract_kb import config
 
 
 def test_classifier_full_coverage(import_result):
@@ -85,7 +82,7 @@ def test_clause_entities_extracted(layer_a):
 
 def test_synthetic_corpus_has_no_real_enterprise_info(parsed_docs):
     """Phase 0 安全：合成语料只允许合成标记（正向白名单校验，不引入真实值）。"""
-    from contract_kb.synthetic import SYNTH_COMPANY_A, SYNTH_COMPANY_B, SYNTH_ACCOUNT
+    from contract_kb.synthetic import SYNTH_COMPANY_B, SYNTH_ACCOUNT
     import re as _re
     for name, doc in parsed_docs.items():
         text = "\n".join(n.text for n in doc.nodes)

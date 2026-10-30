@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 """test_rule_engine / test_document_diff / test_review_pipeline / test_regression"""
-import json
 from decimal import Decimal
 
 import pytest
 
-from contract_kb import config
 from contract_kb.review_engine import ReviewEngine, _cn_num_to_int, _dec
 
 
@@ -195,7 +193,8 @@ def test_rule_lifecycle_create_approve_execute(storage, golden_samples):
         "rule_id": "TEST_LATE_FEE_EXEC", "version": 1,
         "name": "违约金比率强制核对", "rule_type": "CLAUSE_VARIATION",
         "execution_mode": "DETERMINISTIC", "severity": "MEDIUM",
-        "contract_types": ["*"], "parameters": {"expected_rate_per_day": "3‰"},
+        "contract_types": ["*"],
+        "parameters": {"clause_category": "LIABILITY", "must_contain": ["3‰"]},
         "source_clauses": [], "status": "DRAFT", "approved_by": None, "effective_at": None,
     })
     engine = ReviewEngine(st)
@@ -206,12 +205,20 @@ def test_rule_lifecycle_create_approve_execute(storage, golden_samples):
     assert any(i["category"] == "RULE_PENDING_APPROVAL" and i["rule_id"] == "TEST_LATE_FEE_EXEC"
                for i in r1["issues"])
 
-    # 审批后：规则参与执行（与内置检查同向报出）
+    # 审批后：规则真正执行（mut_11 违约金为 1‰，must_contain 3‰ 必失败）
     assert st.approve_rule("TEST_LATE_FEE_EXEC", "legal_tester")
     r2 = engine.review(sample, mode="COMBINED")
     hits = [i for i in r2["issues"] if i["rule_id"] == "TEST_LATE_FEE_EXEC"
             and i["category"] != "RULE_PENDING_APPROVAL"]
-    assert hits or any(i["rule_id"] == "LATE_FEE_RATE" for i in r2["issues"])
+    assert hits, "已审批规则必须真正执行并报出结果"
+    assert hits[0]["category"] == "RULE_VIOLATION"
+
+    # 执行留痕含 rule_id + version + result + evidence
+    rows = st.conn.execute(
+        "SELECT rule_id, rule_version, result, evidence FROM rule_executions "
+        "WHERE rule_id='TEST_LATE_FEE_EXEC'").fetchall()
+    assert rows, "规则执行必须留痕"
+    assert any(r["result"] in ("PASS", "FAIL") for r in rows)
 
     # 审计留痕
     log = st.conn.execute("SELECT * FROM audit_log WHERE action='approve_rule'").fetchall()

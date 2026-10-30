@@ -12,7 +12,6 @@
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field, asdict
 
 # 二级分类关键词字典：key=子类代码, value=(中文名, [正文关键词], [文件名关键词], [特征列头/条款关键词])

@@ -13,7 +13,6 @@ import json
 import re
 import sqlite3
 import time
-import uuid
 from pathlib import Path
 
 import numpy as np
@@ -61,6 +60,10 @@ CREATE TABLE IF NOT EXISTS review_issues (
     knowledge_refs TEXT, suggestion TEXT, execution_mode TEXT,
     requires_human_review INTEGER, confidence REAL,
     human_state TEXT DEFAULT 'PENDING', human_note TEXT
+);
+CREATE TABLE IF NOT EXISTS rule_executions (
+    exec_id TEXT PRIMARY KEY, rule_id TEXT, rule_version INTEGER, rule_type TEXT,
+    result TEXT, severity TEXT, message TEXT, evidence TEXT, executed_at REAL
 );
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL, actor TEXT,
@@ -193,11 +196,16 @@ class Storage:
     def search(self, query: str, top_k: int = 8, business_category: str | None = None,
                contract_subtype: str | None = None, clause_number: str | None = None,
                keyword: str | None = None, knowledge_type: str | None = None,
-               approved_only: bool = False, rerank: bool = True) -> list[dict]:
+               approved_only: bool = False, rerank: bool = True,
+               tenant_id: str | None = None) -> list[dict]:
+        # tenant_id 过滤：embeddings 层已带 document_id，租户约束在文档准入时生效；
+        # 此处显式接受参数保持与 PgVectorStorage 接口一致。
         fts_hits = self._fts_search(keyword or query, top_k * 3, business_category,
-                                    contract_subtype, clause_number, knowledge_type, approved_only)
+                                    contract_subtype, clause_number, knowledge_type,
+                                    approved_only, tenant_id=tenant_id)
         vec_hits = self._vector_search(query, top_k * 3, business_category,
-                                       contract_subtype, knowledge_type, approved_only)
+                                       contract_subtype, knowledge_type,
+                                       approved_only, tenant_id=tenant_id)
         fused = self._rrf(fts_hits, vec_hits)
         if clause_number:
             fused = [h for h in fused if (h.get("clause_number") == clause_number
@@ -206,20 +214,27 @@ class Storage:
             fused = self._rerank(query, fused)
         return fused[:top_k]
 
-    def _filters(self, business_category, contract_subtype, knowledge_type, approved_only, alias="e"):
+    def _filters(self, business_category, contract_subtype, knowledge_type, approved_only,
+                 alias="e", tenant_id=None):
         sql, params = "", []
         if business_category:
-            sql += f" AND {alias}.business_category=?"; params.append(business_category)
+            sql += f" AND {alias}.business_category=?"
+            params.append(business_category)
         if contract_subtype:
-            sql += f" AND {alias}.contract_subtype=?"; params.append(contract_subtype)
+            sql += f" AND {alias}.contract_subtype=?"
+            params.append(contract_subtype)
         if knowledge_type:
-            sql += f" AND {alias}.knowledge_type=?"; params.append(knowledge_type)
+            sql += f" AND {alias}.knowledge_type=?"
+            params.append(knowledge_type)
         if approved_only:
             sql += f" AND {alias}.approved_status='APPROVED'"
+        if tenant_id:
+            sql += " AND documents.tenant_id=?"
+            params.append(tenant_id)
         return sql, params
 
     def _fts_search(self, query, limit, business_category, contract_subtype,
-                    clause_number, knowledge_type, approved_only) -> list[dict]:
+                    clause_number, knowledge_type, approved_only, tenant_id=None) -> list[dict]:
         # 中文 FTS5 默认分词不足：提取中文词组 + 字符双字组合做 OR 查询
         words = [w for w in re.findall(r"[\u4e00-\u9fff]{2,}|[a-zA-Z0-9]+", query)][:8]
         for w in list(words):
@@ -229,7 +244,8 @@ class Storage:
         if not words:
             return []
         match = " OR ".join(f'"{w}"' for w in words)
-        fsql, fparams = self._filters(business_category, contract_subtype, knowledge_type, approved_only)
+        fsql, fparams = self._filters(business_category, contract_subtype, knowledge_type,
+                                      approved_only, tenant_id=tenant_id)
         extra = ""
         params = list(fparams)
         if clause_number:
@@ -241,6 +257,7 @@ class Storage:
                 "e.chunk_id, e.business_category, e.contract_subtype FROM clauses_fts f "
                 "JOIN clauses c ON c.rowid=f.rowid "
                 "JOIN embeddings e ON e.clause_id=c.clause_id "
+                "JOIN documents ON documents.document_id=c.document_id "
                 "WHERE clauses_fts MATCH ?" + fsql + extra + " LIMIT ?",
                 [match] + params + [limit]).fetchall()
         except sqlite3.OperationalError:
@@ -255,11 +272,13 @@ class Storage:
         return out
 
     def _vector_search(self, query, limit, business_category, contract_subtype,
-                       knowledge_type, approved_only) -> list[dict]:
+                       knowledge_type, approved_only, tenant_id=None) -> list[dict]:
         fsql, fparams = self._filters(business_category, contract_subtype, knowledge_type,
-                                      approved_only, alias="embeddings")
+                                      approved_only, alias="embeddings", tenant_id=tenant_id)
         rows = self.conn.execute(
-            "SELECT * FROM embeddings WHERE 1=1" + fsql, fparams).fetchall()
+            "SELECT embeddings.*, ? AS clause_number FROM embeddings "
+            "JOIN documents ON documents.document_id=embeddings.document_id WHERE 1=1"
+            + fsql, [None] + fparams).fetchall()
         if not rows:
             return []
         qv = self.emb.embed([query])[0]

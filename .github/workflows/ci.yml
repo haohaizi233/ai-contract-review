@@ -1,0 +1,88 @@
+name: contract-kb-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-type:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install ruff mypy python-docx lxml pydantic numpy fastapi uvicorn python-multipart psycopg2-binary pglast
+      - name: Ruff lint
+        run: ruff check contract_kb tests --select=E,F,W --ignore=E501
+      - name: Ruff format check
+        run: ruff format --check contract_kb || true
+      - name: Mypy (核心模块)
+        run: mypy contract_kb --ignore-missing-imports --no-error-summary || true
+
+  test-synthetic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: |
+          pip install python-docx lxml pydantic numpy fastapi uvicorn python-multipart \
+                      pytest httpx psycopg2-binary pglast
+      - name: 安全门禁——禁止真实企业合同入库
+        env:
+          SENSITIVE_MARKERS: ${{ secrets.SENSITIVE_MARKERS }}
+        run: |
+          # 公开 CI 不允许依赖公司真实合同；扫描代码确保无真实企业标记
+          # 敏感标记清单由受信任的 Secrets 注入（不在仓库硬编码任何真实标记）
+          if [ -z "$SENSITIVE_MARKERS" ]; then
+            echo "SENSITIVE_MARKERS 未配置（跳过精确扫描，仅执行结构检查）"
+            if find contract_kb tests -name "*.docx" | grep -q .; then
+              echo "代码目录不得包含 DOCX 合同文件"; exit 1
+            fi
+            exit 0
+          fi
+          if grep -rnE "$SENSITIVE_MARKERS" contract_kb tests; then
+            echo "发现真实企业信息字面量，CI 阻断"; exit 1
+          fi
+      - name: 单元/集成/安全/API 测试（合成语料）
+        run: python -m pytest tests -q --junitxml=report.xml
+      - name: 知识库导入测试（合成语料）
+        run: |
+          python -m contract_kb.synthetic
+          CONTRACT_KB_TEMPLATE_DIR=tests/fixtures/synth_corpus python -m contract_kb.cli import
+      - name: SQL 迁移语法测试
+        run: python -m pytest tests/test_pg_migration.py -q
+      - name: 检索评估（合成基准）
+        run: python -m contract_kb.benchmark_retrieval
+      - name: 审核回归（黄金变异样本）
+        run: python -m pytest tests/test_review.py tests/test_format_diff.py -q
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-report
+          path: report.xml
+
+  # 私有企业模板回归：受控环境手动触发，严禁合同原文进入公开日志/构件
+  real-corpus-regression:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: self-hosted
+    environment: controlled
+    steps:
+      - uses: actions/checkout@v4
+      - name: 受控真实语料回归（日志脱敏）
+        env:
+          CONTRACT_KB_REAL_CORPUS: "1"
+          CONTRACT_KB_TEMPLATE_DIR: ${{ secrets.REAL_TEMPLATE_DIR }}
+        run: |
+          python -m pytest tests -m real_corpus -q --tb=no -x
+        # 注意：self-hosted runner 需在受控网络；输出仅退出码，不打印合同内容

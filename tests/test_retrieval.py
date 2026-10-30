@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """test_embedding_index / test_hybrid_retrieval / test_reranker / test_incremental_ingestion"""
-import json
 
 import numpy as np
 

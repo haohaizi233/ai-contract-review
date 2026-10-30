@@ -18,7 +18,14 @@ _tools/extracted/
 _tools/*.txt
 _tools/clause_library.json
 data/
-reports/
+reports/*
+# 脱敏报告白名单（不含合同原文，仅指标/清单/方案）
+!reports/contract-kb/
+reports/contract-kb/*
+!reports/contract-kb/final-acceptance.md
+!reports/contract-kb/security-review.md
+!reports/contract-kb/rag-retrieval-evaluation.md
+!reports/contract-kb/contract-review-evaluation.md
 # 测试语料（合成样本由 contract_kb.synthetic/golden 运行时生成；真实语料受控不入库）
 tests/fixtures/
 

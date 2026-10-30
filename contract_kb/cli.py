@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
 
 from . import config
 from .ingest import scan_and_import
@@ -40,7 +39,21 @@ def _do_import() -> dict:
         layer["documents"].append(d.to_dict())
     (config.DATA_DIR / "layer_a_raw.json").write_text(
         json.dumps(layer, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    # Phase 1.2：CLI 导入自身完成数据库持久化 + 检索索引构建（不依赖测试夹具）
+    from .storage import Storage
+    st = Storage(config.DB_PATH)
+    inserted = skipped = 0
+    for d in raw:
+        _, is_new = st.upsert_document(d.to_dict())
+        inserted += 1 if is_new else 0
+        skipped += 0 if is_new else 1
+    st.log_audit("cli", "import", str(config.TEMPLATE_DIR),
+                 f"inserted={inserted} idempotent_skipped={skipped}")
+    st.close()
+
     print(f"imported={len(result['imported'])} failures={len(result['failures'])}")
+    print(f"db_persisted={inserted} idempotent_skipped={skipped} index_built=true")
     for f in result["failures"]:
         print(f"  FAIL {f['file']}: {f['error']}")
     return result

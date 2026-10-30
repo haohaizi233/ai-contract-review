@@ -160,8 +160,8 @@ def _add_template(path: Path, title: str, subtitle: str, l1: str, l2: str,
     doc.add_paragraph(
         "4.4 乙方自收到甲方支付的全部费用后启动相关业务的办理（甲方支付的款项实际到达乙方指定账户之日为收到日），另有约定除外。")
     doc.add_paragraph(
-        f"4.5 乙方自收到甲方支付的全部费用后，为甲方出具服务费增值税专用发票（税率6%）并提供官费官方收据。"
-        f"注:本合同所列官费均为代收代付款项，不计入应税价款。")
+        "4.5 乙方自收到甲方支付的全部费用后，为甲方出具服务费增值税专用发票（税率6%）并提供官费官方收据。"
+        "注:本合同所列官费均为代收代付款项，不计入应税价款。")
 
     para("第五条 保密条款", bold=True, size=12)
     doc.add_paragraph(
@@ -177,8 +177,8 @@ def _add_template(path: Path, title: str, subtitle: str, l1: str, l2: str,
     doc.add_paragraph(
         "6.3 乙方因泄露或以其他方式侵犯甲方的商业秘密，给甲方造成损失的，乙方应按照甲方的实际经济损失进行赔偿。")
     doc.add_paragraph(
-        f"6.4 甲方违反本合同约定的，乙方有权要求甲方赔偿全部损失（损失包括但不限于律师费、保全费、"
-        f"调查取证费、公证费、差旅费等相关费用）。")
+        "6.4 甲方违反本合同约定的，乙方有权要求甲方赔偿全部损失（损失包括但不限于律师费、保全费、"
+        "调查取证费、公证费、差旅费等相关费用）。")
     para("第七条 争议解决", bold=True, size=12)
     doc.add_paragraph(
         "本合同履行过程中产生的一切争议，均应由双方友好协商解决；如协商不成，"
@@ -196,7 +196,7 @@ def _add_template(path: Path, title: str, subtitle: str, l1: str, l2: str,
     doc.add_paragraph("8.5 本合同一式两份，甲乙双方各执一份，具有同等法律效力。")
     sig = doc.add_paragraph(f"甲  方：____________  乙  方：{SYNTH_COMPANY_B}")
     sig.add_run("")
-    doc.add_paragraph(f"（签章）              （签章）")
+    doc.add_paragraph("（签章）              （签章）")
     doc.add_paragraph(f"代表人：              代表人：{SYNTH_REP}")
     doc.add_paragraph("日  期：              日  期：")
     # 页眉页脚

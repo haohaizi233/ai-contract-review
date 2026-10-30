@@ -6,9 +6,6 @@ DOCX 按 OOXML 纯 XML 解析，绝不触发宏或外部链接。
 """
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 import re
 import zipfile
 from dataclasses import dataclass, field, asdict
