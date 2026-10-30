@@ -17,9 +17,13 @@ def test_local_embedding_deterministic():
 
 def test_embedding_similarity_sane():
     emb = LocalHashEmbedding(256)
-    v = emb.embed(["争议解决 人民法院 提起诉讼",
-                   "争议解决 人民法院 诉讼",
-                   "商标注册 图样 类别 申请人"])
+    v = emb.embed(
+        [
+            "争议解决 人民法院 提起诉讼",
+            "争议解决 人民法院 诉讼",
+            "商标注册 图样 类别 申请人",
+        ]
+    )
     sim_related = float(v[0] @ v[1])
     sim_unrelated = float(v[0] @ v[2])
     assert sim_related > sim_unrelated
@@ -80,8 +84,11 @@ def test_rerank_improves_relevance(storage):
 
 def test_rerank_deterministic():
     from contract_kb.storage import Storage
-    hits = [{"chunk_id": "a", "text": "争议解决 人民法院 提起诉讼"},
-            {"chunk_id": "b", "text": "商标图样 类别 申请人名称"}]
+
+    hits = [
+        {"chunk_id": "a", "text": "争议解决 人民法院 提起诉讼"},
+        {"chunk_id": "b", "text": "商标图样 类别 申请人名称"},
+    ]
     out1 = Storage._rerank("争议解决 人民法院", [dict(h) for h in hits])
     out2 = Storage._rerank("争议解决 人民法院", [dict(h) for h in hits])
     assert [h["chunk_id"] for h in out1] == [h["chunk_id"] for h in out2]
@@ -110,7 +117,8 @@ def test_permission_filter_approved_only(storage):
         assert h.get("approved_status") in (None, "APPROVED") or True  # 过滤在 SQL 层
     # 语义校验：PENDING 知识不应出现在 approved_only 结果
     rows = storage.conn.execute(
-        "SELECT DISTINCT approved_status FROM embeddings").fetchall()
+        "SELECT DISTINCT approved_status FROM embeddings"
+    ).fetchall()
     statuses = {r["approved_status"] for r in rows}
     if statuses == {"PENDING_REVIEW"}:
         assert hits == [] or all(h.get("chunk_id") for h in hits)

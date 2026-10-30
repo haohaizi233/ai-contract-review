@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """CLI：import / inventory / report 三组命令。运行示例：
-  python -m contract_kb.cli import     # 导入 26 份模板 → data/contract-kb/
-  python -m contract_kb.cli inventory  # 生成 reports/contract-kb/source-inventory.md
+python -m contract_kb.cli import     # 导入 26 份模板 → data/contract-kb/
+python -m contract_kb.cli inventory  # 生成 reports/contract-kb/source-inventory.md
 """
+
 from __future__ import annotations
 
 import json
@@ -26,30 +27,39 @@ def _do_import() -> dict:
     result = scan_and_import(config.TEMPLATE_DIR)
     raw = result.pop("_raw")
     out_path = config.DATA_DIR / "import_result.json"
-    out_path.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+    out_path.write_text(
+        json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8"
+    )
     # AST / 条款 / Schema 分文件保存（Layer A 原始层）
     ast_dir = config.DATA_DIR / "ast"
     ast_dir.mkdir(exist_ok=True)
-    layer = {"clauses": [], "table_schemas": [], "documents": []}
+    layer: dict[str, list] = {"clauses": [], "table_schemas": [], "documents": []}
     for d in raw:
         (ast_dir / f"{d.template_id}.json").write_text(
-            json.dumps(d.ast, ensure_ascii=False, indent=1), encoding="utf-8")
+            json.dumps(d.ast, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
         layer["clauses"].extend(d.clauses)
         layer["table_schemas"].extend(d.table_schemas)
         layer["documents"].append(d.to_dict())
     (config.DATA_DIR / "layer_a_raw.json").write_text(
-        json.dumps(layer, ensure_ascii=False, indent=1), encoding="utf-8")
+        json.dumps(layer, ensure_ascii=False, indent=1), encoding="utf-8"
+    )
 
     # Phase 1.2：CLI 导入自身完成数据库持久化 + 检索索引构建（不依赖测试夹具）
     from .storage import Storage
+
     st = Storage(config.DB_PATH)
     inserted = skipped = 0
     for d in raw:
         _, is_new = st.upsert_document(d.to_dict())
         inserted += 1 if is_new else 0
         skipped += 0 if is_new else 1
-    st.log_audit("cli", "import", str(config.TEMPLATE_DIR),
-                 f"inserted={inserted} idempotent_skipped={skipped}")
+    st.log_audit(
+        "cli",
+        "import",
+        str(config.TEMPLATE_DIR),
+        f"inserted={inserted} idempotent_skipped={skipped}",
+    )
     st.close()
 
     print(f"imported={len(result['imported'])} failures={len(result['failures'])}")
@@ -61,22 +71,34 @@ def _do_import() -> dict:
 
 def _cmd_inventory() -> None:
     result = _load_or_import()
-    lines = ["# 源文件清单（source-inventory）", "",
-             f"- 扫描目录：`{result['scanned_dir']}`",
-             f"- 扫描文件总数：{result['file_count']}",
-             f"- 导入成功：{len(result['imported'])}",
-             f"- 导入失败/拒绝：{len(result['failures'])}", "",
-             "> SHA-256 为文件级哈希；段落数/表格数来自 OOXML 结构解析（word/document.xml）。",
-             "> 页码不提供：DOCX 无稳定页码概念，需 PDF 渲染映射（page_mapping_available=false），不伪造。", ""]
-    lines.append("| # | 原始文件名 | 大小(B) | SHA-256(前16) | 文档类型 | 段落数 | 表格数 | 业务分类 | 二级分类 | 主要章节 | 解析 | 无法读取结构 |")
+    lines = [
+        "# 源文件清单（source-inventory）",
+        "",
+        f"- 扫描目录：`{result['scanned_dir']}`",
+        f"- 扫描文件总数：{result['file_count']}",
+        f"- 导入成功：{len(result['imported'])}",
+        f"- 导入失败/拒绝：{len(result['failures'])}",
+        "",
+        "> SHA-256 为文件级哈希；段落数/表格数来自 OOXML 结构解析（word/document.xml）。",
+        "> 页码不提供：DOCX 无稳定页码概念，需 PDF 渲染映射（page_mapping_available=false），不伪造。",
+        "",
+    ]
+    lines.append(
+        "| # | 原始文件名 | 大小(B) | SHA-256(前16) | 文档类型 | 段落数 | 表格数 | 业务分类 | 二级分类 | 主要章节 | 解析 | 无法读取结构 |"
+    )
     lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for i, d in enumerate(result["imported"], 1):
-        secs = " / ".join(s.replace("第", "").replace("条 ", "") for s in d["main_sections"][:8])
-        unhandled = ", ".join(d["unhandled_structures"]) if d["unhandled_structures"] else "无"
+        secs = " / ".join(
+            s.replace("第", "").replace("条 ", "") for s in d["main_sections"][:8]
+        )
+        unhandled = (
+            ", ".join(d["unhandled_structures"]) if d["unhandled_structures"] else "无"
+        )
         lines.append(
             f"| {i} | {d['source_file']} | {d['file_size']} | `{d['sha256'][:16]}` | {d['document_type']} "
             f"| {d['paragraph_count']} | {d['table_count']} | {d['category']} | {d['subtype']} "
-            f"| {secs} | {'成功' if d['parse_success'] else '失败'} | {unhandled} |")
+            f"| {secs} | {'成功' if d['parse_success'] else '失败'} | {unhandled} |"
+        )
     if result["failures"]:
         lines += ["", "## 导入失败/安全拒绝", ""]
         for f in result["failures"]:
@@ -87,7 +109,9 @@ def _cmd_inventory() -> None:
         if d["classification_conflicts"]:
             any_conflict = True
             for c in d["classification_conflicts"]:
-                lines.append(f"- `{d['source_file']}`：{json.dumps(c, ensure_ascii=False)}")
+                lines.append(
+                    f"- `{d['source_file']}`：{json.dumps(c, ensure_ascii=False)}"
+                )
     if not any_conflict:
         lines.append("（无）")
     config.REPORT_DIR.mkdir(parents=True, exist_ok=True)

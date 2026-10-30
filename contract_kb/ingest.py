@@ -4,6 +4,7 @@
 安全校验（§14）：扩展名/MIME/文件大小/ZIP 结构与解压边界（若提供 ZIP）。
 DOCX 按 OOXML 纯 XML 解析，绝不触发宏或外部链接。
 """
+
 from __future__ import annotations
 
 import re
@@ -26,21 +27,34 @@ class SecurityCheckResult:
 def security_check_file(path: Path) -> SecurityCheckResult:
     res = SecurityCheckResult(passed=True)
     size = path.stat().st_size
-    res.checks.append({"check": "file_size", "value": size, "limit": 20 * 1024 * 1024,
-                       "passed": size <= 20 * 1024 * 1024})
+    res.checks.append(
+        {
+            "check": "file_size",
+            "value": size,
+            "limit": 20 * 1024 * 1024,
+            "passed": size <= 20 * 1024 * 1024,
+        }
+    )
     if size > 20 * 1024 * 1024:
         res.passed = False
         res.rejected_reason = "file_too_large"
         return res
-    res.checks.append({"check": "extension", "value": path.suffix.lower(),
-                       "passed": path.suffix.lower() == ".docx"})
+    res.checks.append(
+        {
+            "check": "extension",
+            "value": path.suffix.lower(),
+            "passed": path.suffix.lower() == ".docx",
+        }
+    )
     if path.suffix.lower() != ".docx":
         res.passed = False
         res.rejected_reason = "bad_extension"
         return res
     # MIME：以魔数校验（DOCX=PK\x03\x04）
     head = path.read_bytes()[:4]
-    res.checks.append({"check": "magic_bytes", "value": head.hex(), "passed": head == b"PK\x03\x04"})
+    res.checks.append(
+        {"check": "magic_bytes", "value": head.hex(), "passed": head == b"PK\x03\x04"}
+    )
     if head != b"PK\x03\x04":
         res.passed = False
         res.rejected_reason = "bad_magic"
@@ -49,15 +63,33 @@ def security_check_file(path: Path) -> SecurityCheckResult:
     try:
         with zipfile.ZipFile(path) as z:
             names = z.namelist()
-            res.checks.append({"check": "zip_entry_count", "value": len(names),
-                               "limit": 500, "passed": len(names) <= 500})
+            res.checks.append(
+                {
+                    "check": "zip_entry_count",
+                    "value": len(names),
+                    "limit": 500,
+                    "passed": len(names) <= 500,
+                }
+            )
             total_c = sum(i.compress_size for i in z.infolist()) or 1
             total_u = sum(i.file_size for i in z.infolist())
             ratio = total_u / total_c
-            res.checks.append({"check": "zip_compression_ratio", "value": round(ratio, 2),
-                               "limit": 200, "passed": ratio <= 200})
+            res.checks.append(
+                {
+                    "check": "zip_compression_ratio",
+                    "value": round(ratio, 2),
+                    "limit": 200,
+                    "passed": ratio <= 200,
+                }
+            )
             traversal = [n for n in names if n.startswith("/") or ".." in Path(n).parts]
-            res.checks.append({"check": "zip_path_traversal", "value": traversal, "passed": not traversal})
+            res.checks.append(
+                {
+                    "check": "zip_path_traversal",
+                    "value": traversal,
+                    "passed": not traversal,
+                }
+            )
             if len(names) > 500 or ratio > 200 or traversal:
                 res.passed = False
                 res.rejected_reason = "zip_boundary_violation"
@@ -89,8 +121,11 @@ def _matter_text(parsed: ParsedDocument) -> str:
 
 
 def _table_headers(parsed: ParsedDocument) -> list[str]:
-    return [n.text.strip() for n in parsed.nodes
-            if n.node_type == "table_cell" and n.row_index == 0 and n.text.strip()]
+    return [
+        n.text.strip()
+        for n in parsed.nodes
+        if n.node_type == "table_cell" and n.row_index == 0 and n.text.strip()
+    ]
 
 
 @dataclass
@@ -136,14 +171,25 @@ def import_template_file(path: Path) -> tuple[ImportedDoc | None, str | None]:
     full_text = "\n".join(n.text for n in parsed.nodes if n.node_type == "paragraph")
     matter = _matter_text(parsed)
     headers = _table_headers(parsed)
-    cls = classify(parsed.document_id, path.name, parsed.title, parsed.subtitle,
-                   matter, headers, full_text)
+    cls = classify(
+        parsed.document_id,
+        path.name,
+        parsed.title,
+        parsed.subtitle,
+        matter,
+        headers,
+        full_text,
+    )
     clauses = extract_clauses(parsed, parsed.document_id)
     schemas = extract_table_schemas(parsed, parsed.document_id)
 
     sections = []
     for n in parsed.nodes:
-        if n.node_type == "paragraph" and n.text.strip().startswith("第") and "条" in n.text[:6]:
+        if (
+            n.node_type == "paragraph"
+            and n.text.strip().startswith("第")
+            and "条" in n.text[:6]
+        ):
             t = n.text.strip()
             if re.match(r"^第[一二三四五六七八九十]+条", t) and t not in sections:
                 sections.append(t[:40])
@@ -192,7 +238,10 @@ def scan_and_import(template_dir: Path) -> dict:
     仅处理允许扩展名（.docx）；其他文件记录为 skipped 而非失败。
     """
     from . import config as _cfg
-    all_files = sorted(p for p in template_dir.iterdir() if p.is_file() and not p.name.startswith("~"))
+
+    all_files = sorted(
+        p for p in template_dir.iterdir() if p.is_file() and not p.name.startswith("~")
+    )
     files = [p for p in all_files if p.suffix.lower() in _cfg.ALLOWED_EXT]
     skipped = [p.name for p in all_files if p.suffix.lower() not in _cfg.ALLOWED_EXT]
     docs, failures = [], []

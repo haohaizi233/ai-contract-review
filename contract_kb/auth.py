@@ -8,6 +8,7 @@
 - tenant_id 强制过滤：所有查询绑定调用者租户，跨租户访问返回 403；
 - 输入长度/上传大小限制；错误不泄露内部细节；全部敏感操作写审计。
 """
+
 from __future__ import annotations
 
 import hmac
@@ -32,6 +33,9 @@ ROUTE_ROLES: dict[str, str] = {
     "POST /api/contract-kb/import": ROLE_ADMIN,
     "POST /api/contract-kb/rules": ROLE_ADMIN,
     "POST /api/contract-kb/rules/": ROLE_ADMIN,
+    "GET /api/contract-kb/format-standards": ROLE_VIEWER,
+    "POST /api/contract-kb/format-standards": ROLE_ADMIN,
+    "POST /api/contract-kb/format-standards/": ROLE_ADMIN,
     "POST /api/contract-review/tasks": ROLE_REVIEWER,
     "GET /api/contract-review/tasks/": ROLE_REVIEWER,
     "POST /api/contract-review/issues/": ROLE_REVIEWER,
@@ -47,12 +51,15 @@ MAX_COMPARE_LEN = 20000
 @dataclass
 class Principal:
     """经认证层解析出的调用者身份（不可由客户端伪造 actor/approver 字段）。"""
+
     user_id: str
     roles: list[str]
     tenant_id: str = "default"
 
     def has_role(self, required: str) -> bool:
-        return any(ROLE_RANK.get(r, 0) >= ROLE_RANK.get(required, 99) for r in self.roles)
+        return any(
+            ROLE_RANK.get(r, 0) >= ROLE_RANK.get(required, 99) for r in self.roles
+        )
 
 
 class TrustedHeaderAuth:
@@ -71,11 +78,15 @@ class TrustedHeaderAuth:
         roles_raw = request.headers.get("X-Roles", "").strip()
         tenant = request.headers.get("X-Tenant", "default").strip() or "default"
         if not user or not roles_raw:
-            raise HTTPException(401, "缺少认证信息（需受信任认证层注入 X-User/X-Roles）")
+            raise HTTPException(
+                401, "缺少认证信息（需受信任认证层注入 X-User/X-Roles）"
+            )
         if self.shared_key:
             sig = request.headers.get("X-Auth-Signature", "")
             msg = f"{user}|{roles_raw}|{tenant}".encode()
-            if not hmac.compare_digest(sig, hmac.new(self.shared_key.encode(), msg, "sha256").hexdigest()):
+            if not hmac.compare_digest(
+                sig, hmac.new(self.shared_key.encode(), msg, "sha256").hexdigest()
+            ):
                 raise HTTPException(401, "认证签名无效")
         else:
             client = request.client.host if request.client else None
@@ -95,7 +106,11 @@ def authorize(principal: Principal, route_key: str) -> None:
     required = None
     for k, v in ROUTE_ROLES.items():
         if route_key.startswith(k):
-            required = v if required is None else max(required, v, key=lambda r: ROLE_RANK.get(r, 0))
+            required = (
+                v
+                if required is None
+                else max(required, v, key=lambda r: ROLE_RANK.get(r, 0))
+            )
     if required is None:
         required = ROLE_ADMIN  # 未知路由默认最高权限
     if not principal.has_role(required):
@@ -107,7 +122,9 @@ def check_tenant(principal: Principal, resource_tenant: str) -> None:
         raise HTTPException(403, "跨租户访问被拒绝")
 
 
-def enforce_input_limits(query: str = "", custom: str = "", compare_texts: list[str] | None = None):
+def enforce_input_limits(
+    query: str = "", custom: str = "", compare_texts: list[str] | None = None
+):
     if query and len(query) > MAX_QUERY_LEN:
         raise HTTPException(413, "查询超长")
     if custom and len(custom) > MAX_CUSTOM_REQ_LEN:

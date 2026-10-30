@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-10-30T08:50:02Z",
+  "note": "脱敏证据：仅哈希/长度/计数/状态，不含合同原文与密钥",
+  "runs": [
+    {
+      "run_kind": "controlled_http_replay",
+      "verified_scope": "OpenAICompatProvider 真实 HTTP 全链路（本地回放模型，非真实大模型）",
+      "endpoint": "127.0.0.1:<ephemeral>/v1（本地回放）",
+      "model": "local-replay-model",
+      "api_key": "REDACTED",
+      "prompt_chars": 167,
+      "system_chars": 486,
+      "contract_sha256": "f5fc9553b4cc0e7bf0bb651f55f0c0a990b65c53372ca50e2f84e16f4fc15d48",
+      "contract_chars": 20,
+      "status": "CHECKED",
+      "failure": null,
+      "findings_count": 1,
+      "custom_requirement_count": 1,
+      "reference_verification": "通过（original_text 逐字核验）"
+    }
+  ]
+}

@@ -4,17 +4,21 @@
 - 迁移 SQL 语法校验：pglast（PostgreSQL 解析器）在无 PG 实例环境下真实解析 SQL；
 - 行为测试：配置 CONTRACT_KB_TEST_PG_DSN 后启用（独立测试库），否则 skip 并如实标注。
 """
+
 import os
 import re
 from pathlib import Path
 
 import pytest
 
-MIGRATION = Path(__file__).resolve().parent.parent / "migrations" / "001_init_pgvector.sql"
+MIGRATION = (
+    Path(__file__).resolve().parent.parent / "migrations" / "001_init_pgvector.sql"
+)
 PG_DSN = os.environ.get("CONTRACT_KB_TEST_PG_DSN", "")
 
 
 # ---------------- 迁移 SQL 静态校验（真实解析） ----------------
+
 
 def test_migration_file_exists():
     assert MIGRATION.exists()
@@ -41,11 +45,13 @@ def test_migration_parses_with_pglast():
 def test_migration_vector_dim_matches_embedding():
     """向量维度必须与默认 Embedding 维度一致。"""
     from contract_kb import config
+
     text = MIGRATION.read_text(encoding="utf-8")
     m = re.search(r"vec vector\((\d+)\)", text)
     assert m, "缺少 vec 列定义"
-    assert int(m.group(1)) == config.EMBEDDING_DIM, \
+    assert int(m.group(1)) == config.EMBEDDING_DIM, (
         f"向量维度 {m.group(1)} != EMBEDDING_DIM {config.EMBEDDING_DIM}"
+    )
 
 
 def test_migration_has_tenant_isolation():
@@ -62,7 +68,9 @@ def test_migration_rule_versioning():
 
 # ---------------- PG 行为测试（需独立测试库 DSN） ----------------
 
-pytestmark_pg = pytest.mark.skipif(not PG_DSN, reason="CONTRACT_KB_TEST_PG_DSN 未配置（无 PG 实例，行为未验证）")
+pytestmark_pg = pytest.mark.skipif(
+    not PG_DSN, reason="CONTRACT_KB_TEST_PG_DSN 未配置（无 PG 实例，行为未验证）"
+)
 
 
 @pytest.fixture(scope="module")
@@ -70,7 +78,17 @@ def pg_storage():
     if not PG_DSN:
         pytest.skip("CONTRACT_KB_TEST_PG_DSN 未配置（无 PG 实例，行为未验证）")
     from contract_kb.storage_pg import PgVectorStorage
+
     st = PgVectorStorage(PG_DSN)
+    # 幂等预清理固定 ID/固定哈希样例（保证跨运行可重复执行，不改变用例断言）
+    for did in ("pg_test_doc_1", "pg_test_doc_2"):
+        st.delete_document(did)
+    with st.conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM documents WHERE source_hash IN (%s, %s)", ("a" * 64, "b" * 64)
+        )
+    st.conn.commit()
+    st.rebuild_index()
     yield st
     st.close()
 
@@ -78,21 +96,37 @@ def pg_storage():
 @pytest.fixture(scope="module")
 def sample_doc():
     return {
-        "template_id": "pg_test_doc_1", "source_file": "synth.docx",
-        "sha256": "a" * 64, "template_version": "v1", "category": "PATENT",
-        "subtype": "PATENT_ANNUAL_FEE", "document_type": "contract_template",
+        "template_id": "pg_test_doc_1",
+        "source_file": "synth.docx",
+        "sha256": "a" * 64,
+        "template_version": "v1",
+        "category": "PATENT",
+        "subtype": "PATENT_ANNUAL_FEE",
+        "document_type": "contract_template",
         "clause_count": 2,
         "clauses": [
-            {"clause_id": "pc1", "clause_number": "4.1", "clause_category": "FEE_AND_PAYMENT",
-             "clause_subcategory": None,
-             "original_text": "甲方向乙方支付费用总额为人民币 壹仟圆整（¥1,000 元）。",
-             "normalized_summary": "[FEE] 金额=1000", "is_company_standard": True,
-             "approval_status": "PENDING_REVIEW", "source_node_ids": ["n1"]},
-            {"clause_id": "pc2", "clause_number": "6.2", "clause_category": "LIABILITY",
-             "clause_subcategory": "LIQUIDATED_DAMAGES",
-             "original_text": "逾期支付的甲方应按逾期付款金额日率3‰向乙方支付违约金。",
-             "normalized_summary": "[LIAB] 比率=3‰", "is_company_standard": True,
-             "approval_status": "PENDING_REVIEW", "source_node_ids": ["n2"]},
+            {
+                "clause_id": "pc1",
+                "clause_number": "4.1",
+                "clause_category": "FEE_AND_PAYMENT",
+                "clause_subcategory": None,
+                "original_text": "甲方向乙方支付费用总额为人民币 壹仟圆整（¥1,000 元）。",
+                "normalized_summary": "[FEE] 金额=1000",
+                "is_company_standard": True,
+                "approval_status": "PENDING_REVIEW",
+                "source_node_ids": ["n1"],
+            },
+            {
+                "clause_id": "pc2",
+                "clause_number": "6.2",
+                "clause_category": "LIABILITY",
+                "clause_subcategory": "LIQUIDATED_DAMAGES",
+                "original_text": "逾期支付的甲方应按逾期付款金额日率3‰向乙方支付违约金。",
+                "normalized_summary": "[LIAB] 比率=3‰",
+                "is_company_standard": True,
+                "approval_status": "PENDING_REVIEW",
+                "source_node_ids": ["n2"],
+            },
         ],
     }
 
@@ -133,6 +167,7 @@ def test_pg_vector_dimension(pg_storage):
     if row:
         import json
         from contract_kb import config
+
         assert len(json.loads(row[0])) == config.EMBEDDING_DIM
 
 
@@ -152,13 +187,25 @@ def test_pg_delete_cascade(pg_storage):
 
 # ---------------- SQLite vs PostgreSQL 行为对比（无 PG 时输出对比框架） ----------------
 
+
 def test_sqlite_pg_interface_parity():
     """两实现必须暴露同一核心方法集（接口一致性，不要求 PG 在线）。"""
     from contract_kb.storage import Storage
     from contract_kb.storage_pg import PgVectorStorage
-    required = ["upsert_document", "search", "rebuild_index", "delete_document",
-                "rollback_to_version", "save_rule", "approve_rule", "get_rules",
-                "list_documents", "log_audit", "feedback_issue"]
+
+    required = [
+        "upsert_document",
+        "search",
+        "rebuild_index",
+        "delete_document",
+        "rollback_to_version",
+        "save_rule",
+        "approve_rule",
+        "get_rules",
+        "list_documents",
+        "log_audit",
+        "feedback_issue",
+    ]
     for m in required:
         assert hasattr(Storage, m), f"SQLite 缺 {m}"
         assert hasattr(PgVectorStorage, m), f"PgVector 缺 {m}"

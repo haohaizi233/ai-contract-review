@@ -2,6 +2,9 @@
 
 基于 26 份真实 DOCX 合同模板构建的可追溯知识库 + 混合检索 RAG + 确定性规则审核引擎。
 
+> 验收状态以 `reports/contract-kb/final-acceptance.md` 为准（严格区分：已实现 / 已通过 Mock /
+> 已通过真实模型 / 已通过 PostgreSQL / 未验证）。
+
 ## 快速启动
 
 ```powershell
@@ -14,7 +17,7 @@ python -m contract_kb.cli import
 # 3. 生成知识蒸馏产物（taxonomy / 条款差异矩阵 / 字段 Schema / 规则候选）
 python -m contract_kb.distill
 
-# 4. 运行测试（72 项，含真实模板解析与 14 个变异样本审核回归）
+# 4. 运行测试（200 项：解析/分类/条款/规则/检索/审核/租户隔离/LLM 链路/Embedding/格式标准/安全/API）
 python -m pytest tests -q
 
 # 5. 运行评估（RAG Recall@K / MRR / 引用正确性 + 审核命中率/误报/漏报）
@@ -25,6 +28,21 @@ uvicorn contract_kb.api:app --host 127.0.0.1 --port 8000
 ```
 
 模板源目录默认为工作区 `参考/`（可用环境变量 `CONTRACT_KB_TEMPLATE_DIR` 覆盖），全部路径相对项目根，无写死绝对路径。
+
+## 关键配置（授权后启用）
+
+| 环境变量 | 说明 |
+|---|---|
+| `CONTRACT_KB_LLM` | `none`（默认，语义审核标 NOT_CHECKED）/ `mock`（测试）/ `openai_compat`（授权端点，缺配置时 **fail-closed 报错**） |
+| `CONTRACT_KB_LLM_BASE_URL` / `_API_KEY` / `_MODEL` | 授权 LLM 端点三元组（未授权禁止外发合同内容） |
+| `CONTRACT_KB_EMBEDDING` | `local_hash`（默认离线）/ `st:<model>`（SentenceTransformer 真实语义向量）/ `cloud:<provider>`（需授权） |
+| `CONTRACT_KB_TEST_PG_DSN` | 指向真实 PostgreSQL + pgvector 测试库时启用 PG 行为测试 |
+| `CONTRACT_KB_REAL_CORPUS=1` | 受控环境真实语料回归（默认 skip，公开环境严禁启用） |
+| `CONTRACT_KB_REAL_LLM_BASE_URL` / `_API_KEY` / `_MODEL` | 受控真实模型 E2E（`@pytest.mark.real_model`） |
+
+更换 Embedding 模型/维度后必须 `storage.rebuild_index()`（索引版本化留痕；直接混用会
+`EmbeddingConfigMismatch` fail-closed）。公司格式标准经 `format_standards` 表配置/审批/版本化，
+**未审批的示例标准只作差异提示，不产生正式企业违规结论**（API：`/api/contract-kb/format-standards`）。
 
 ## 目录结构
 
@@ -62,8 +80,11 @@ AI 生成的归一化摘要均带 `summary_method` 标记（deterministic_rule_v
 ## 数据库说明（如实标注）
 
 - 本地/测试：**SQLite**（FTS5 全文 + numpy 向量），全部测试真实执行；
-- 生产：**PostgreSQL + pgvector**，迁移脚本 `migrations/001_init_pgvector.sql` 已交付，因本环境无 PG 实例**未验证**；
-- 同一 `Storage` 接口可替换 PgVector 实现。
+- 生产：**PostgreSQL + pgvector**，迁移脚本 `migrations/001_init_pgvector.sql` + `002_embedding_meta_task_tenant_format_std.sql`；
+  行为（迁移/导入/检索/回滚/维度校验/租户）**已在真实 PostgreSQL + pgvector 实例上验证**
+  （本地 PG 18 + pgvector 0.8.7；CI `test-pg` job 使用 pgvector/pgvector:pg16 服务容器）；
+  向量检索为 **SQL 相似度排序 + LIMIT**（`ORDER BY vec <=> %s::vector LIMIT n`），不全量载入内存；
+- 同一 `Storage` 接口可替换 PgVector 实现；Embedding 维度/提供方变更必须 `rebuild_index()`（版本化）。
 
 ## 回滚说明
 
@@ -85,4 +106,11 @@ AI 生成的归一化摘要均带 `summary_method` 标记（deterministic_rule_v
 
 ## 测试与验收
 
-`reports/contract-kb/final-acceptance.md` 记录验收门禁逐项结果、测试命令与退出码。
+`reports/contract-kb/final-acceptance.md` 为本轮验收报告：验证状态矩阵（已实现 / 已通过 Mock /
+已通过真实模型 / 已通过 PostgreSQL / 未验证）、逐项修复对照、测试结果、差异文件与剩余阻塞问题。
+LLM 受控 E2E 的脱敏运行证据见 `reports/contract-kb/llm-e2e-evidence.json`（不含合同原文/密钥/完整端点）。
+
+CI（`.github/workflows/ci.yml`）：`lint-and-type`（Ruff lint/format + mypy，无 `|| true`）、
+`security-gate`（敏感扫描 **fail-closed**：配置缺失/工具失败即阻断）、`test-synthetic`（全量 pytest + 迁移 + 基准）、
+`test-pg`（真实 PostgreSQL + pgvector 服务容器集成测试）、`real-corpus-regression`
+（`workflow_dispatch` + self-hosted + environment: controlled，日志脱敏）。

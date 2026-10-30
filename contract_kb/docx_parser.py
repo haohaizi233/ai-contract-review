@@ -8,6 +8,7 @@
 - 不伪造页码：page_number 恒为 null，页码映射需独立 PDF 渲染，标记 page_mapping_available=false；
 - 无法可靠解析的结构（文本框/批注/修订/嵌入对象）不丢弃，以节点形式记录并标记状态。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -41,11 +42,11 @@ def sha256_file(path) -> str:
 class ASTNode:
     document_id: str
     node_id: str
-    node_type: str                 # paragraph | table | table_cell | header | footer | textbox | drawing | revision | comment_marker
+    node_type: str  # paragraph | table | table_cell | header | footer | textbox | drawing | revision | comment_marker
     order: int
     text: str = ""
-    section: Optional[str] = None          # 所属“第X条”标题
-    clause_number: Optional[str] = None    # x.y 子条款号
+    section: Optional[str] = None  # 所属“第X条”标题
+    clause_number: Optional[str] = None  # x.y 子条款号
     table_index: Optional[int] = None
     row_index: Optional[int] = None
     column_index: Optional[int] = None
@@ -81,9 +82,9 @@ class ParsedDocument:
     textboxes_present: bool = False
     checkbox_count: int = 0
     blank_placeholder_count: int = 0
-    contract_number_hint: Optional[str] = None   # “合同编号:” 后的填写位
+    contract_number_hint: Optional[str] = None  # “合同编号:” 后的填写位
     parse_warnings: list = field(default_factory=list)
-    page_mapping_available: bool = False         # 无 PDF 渲染不提供页码
+    page_mapping_available: bool = False  # 无 PDF 渲染不提供页码
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -149,7 +150,7 @@ def _cell_info(tc_el, row_idx: int, col_cursor: int) -> tuple[dict, int]:
             grid_span = int(gs.get(f"{{{W}}}val", "1"))
         vm = tcpr.find("w:vMerge", NS)
         if vm is not None:
-            vmerge = vm.get(f"{{{W}}}val", "continue")   # restart | continue
+            vmerge = vm.get(f"{{{W}}}val", "continue")  # restart | continue
     texts = []
     for p in tc_el.findall("w:p", NS):
         texts.append(_para_text(p))
@@ -166,11 +167,16 @@ def _cell_info(tc_el, row_idx: int, col_cursor: int) -> tuple[dict, int]:
 def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
     """解析 DOCX 为有序 AST。任何不支持/不可靠结构都记录状态而不是静默丢弃。"""
     import os
+
     path = str(path)
     file_hash = sha256_file(path)
     doc_id = document_id or file_hash[:16]
-    doc = ParsedDocument(document_id=doc_id, source_path=os.path.basename(path),
-                         source_hash=file_hash, file_size=os.path.getsize(path))
+    doc = ParsedDocument(
+        document_id=doc_id,
+        source_path=os.path.basename(path),
+        source_hash=file_hash,
+        file_size=os.path.getsize(path),
+    )
 
     with zipfile.ZipFile(path) as z:
         names = z.namelist()
@@ -191,8 +197,12 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
 
         for bi, child in enumerate(body):
             tag = etree.QName(child).localname
-            locator_base = {"body_child_index": bi, "xml_tag": f"w:body/w:{tag}",
-                            "package_part": "word/document.xml", "page_number": None}
+            locator_base = {
+                "body_child_index": bi,
+                "xml_tag": f"w:body/w:{tag}",
+                "package_part": "word/document.xml",
+                "page_number": None,
+            }
             if tag == "p":
                 text = _para_text(child)
                 m_art = ARTICLE_RE.match(text.strip())
@@ -200,8 +210,12 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
                 if m_art:
                     current_section = f"{m_art.group(1)} {m_art.group(2)}".strip()
                 node = ASTNode(
-                    document_id=doc_id, node_id=f"{doc_id}:p{para_count}", node_type="paragraph",
-                    order=0, text=text, section=current_section,
+                    document_id=doc_id,
+                    node_id=f"{doc_id}:p{para_count}",
+                    node_type="paragraph",
+                    order=0,
+                    text=text,
+                    section=current_section,
                     clause_number=(m_num.group(1) if m_num else None),
                     style=_para_style(child),
                     source_locator={**locator_base, "paragraph_index": para_count},
@@ -223,8 +237,12 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
                 rows = child.findall("w:tr", NS)
                 dims = {"table_index": table_count, "rows": len(rows), "cols": 0}
                 tbl_node = ASTNode(
-                    document_id=doc_id, node_id=f"{doc_id}:tbl{table_count}", node_type="table",
-                    order=0, text="", section=current_section,
+                    document_id=doc_id,
+                    node_id=f"{doc_id}:tbl{table_count}",
+                    node_type="table",
+                    order=0,
+                    text="",
+                    section=current_section,
                     table_index=table_count,
                     source_locator={**locator_base, "table_index": table_count},
                     flags={"row_count": len(rows)},
@@ -238,13 +256,25 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
                         cell_node = ASTNode(
                             document_id=doc_id,
                             node_id=f"{doc_id}:tbl{table_count}r{ri}c{col_cursor}",
-                            node_type="table_cell", order=0,
-                            text=info["text"], section=current_section,
-                            table_index=table_count, row_index=ri, column_index=col_cursor,
-                            style={}, parent_node_id=tbl_node.node_id,
-                            source_locator={**locator_base, "table_index": table_count,
-                                            "row_index": ri, "column_index": col_cursor},
-                            flags={"grid_span": info["grid_span"], "v_merge": info["v_merge"]},
+                            node_type="table_cell",
+                            order=0,
+                            text=info["text"],
+                            section=current_section,
+                            table_index=table_count,
+                            row_index=ri,
+                            column_index=col_cursor,
+                            style={},
+                            parent_node_id=tbl_node.node_id,
+                            source_locator={
+                                **locator_base,
+                                "table_index": table_count,
+                                "row_index": ri,
+                                "column_index": col_cursor,
+                            },
+                            flags={
+                                "grid_span": info["grid_span"],
+                                "v_merge": info["v_merge"],
+                            },
                         )
                         add(cell_node)
                         col_cursor += span
@@ -257,21 +287,37 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
                 for p in child.iter(f"{{{W}}}p"):
                     text = _para_text(p)
                     if text.strip():
-                        add(ASTNode(document_id=doc_id, node_id=f"{doc_id}:sdt{order}",
-                                    node_type="paragraph", order=0, text=text,
-                                    section=current_section,
-                                    source_locator={**locator_base, "inside_sdt": True},
-                                    extraction_status="success_with_sdt_wrapper"))
+                        add(
+                            ASTNode(
+                                document_id=doc_id,
+                                node_id=f"{doc_id}:sdt{order}",
+                                node_type="paragraph",
+                                order=0,
+                                text=text,
+                                section=current_section,
+                                source_locator={**locator_base, "inside_sdt": True},
+                                extraction_status="success_with_sdt_wrapper",
+                            )
+                        )
             elif tag == "sectPr":
                 pass
             else:
                 # 其他未知结构：记录而不丢弃
                 txt = "".join(t.text or "" for t in child.iter(f"{{{W}}}t"))
-                add(ASTNode(document_id=doc_id, node_id=f"{doc_id}:unk{order}",
-                            node_type="unknown_block", order=0, text=txt,
-                            source_locator=locator_base,
-                            extraction_status="structure_recorded_not_fully_parsed"))
-                doc.parse_warnings.append(f"body child #{bi} tag={tag} 记录为 unknown_block")
+                add(
+                    ASTNode(
+                        document_id=doc_id,
+                        node_id=f"{doc_id}:unk{order}",
+                        node_type="unknown_block",
+                        order=0,
+                        text=txt,
+                        source_locator=locator_base,
+                        extraction_status="structure_recorded_not_fully_parsed",
+                    )
+                )
+                doc.parse_warnings.append(
+                    f"body child #{bi} tag={tag} 记录为 unknown_block"
+                )
 
         doc.paragraph_count = para_count
         doc.table_count = table_count
@@ -295,7 +341,10 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
         doc.has_images = any(n.startswith("word/media/") for n in names)
         doc.has_embedded_objects = any(n.startswith("word/embeddings/") for n in names)
         doc.comments_present = "word/comments.xml" in names
-        doc.revisions_present = bool(root.find(".//w:ins", NS) is not None or root.find(".//w:del", NS) is not None)
+        doc.revisions_present = bool(
+            root.find(".//w:ins", NS) is not None
+            or root.find(".//w:del", NS) is not None
+        )
         doc.textboxes_present = bool(root.find(".//w:txbxContent", NS) is not None)
         if doc.has_images:
             doc.parse_warnings.append("含图片/嵌入图形：文本层不覆盖图片内容")
@@ -307,7 +356,9 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
             doc.parse_warnings.append("含文本框：文本框内容未纳入主条款流")
 
         # 标题 / 副标题（取前两个非空段落）
-        non_empty = [n for n in doc.nodes if n.node_type == "paragraph" and n.text.strip()]
+        non_empty = [
+            n for n in doc.nodes if n.node_type == "paragraph" and n.text.strip()
+        ]
         if non_empty:
             doc.title = non_empty[0].text.strip()
         if len(non_empty) > 1 and not ARTICLE_RE.match(non_empty[1].text.strip()):

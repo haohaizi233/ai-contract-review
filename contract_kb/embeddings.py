@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Embedding 抽象层：默认本地离线实现（不外发数据），云服务需显式配置与授权。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -65,13 +66,26 @@ class CloudEmbedding(EmbeddingProvider):
         if not self._configured:
             raise RuntimeError(
                 f"云 Embedding 服务商 {self._provider} 未配置/未授权。"
-                "依据数据治理要求，禁止在未授权情况下向外部服务发送合同文本。")
+                "依据数据治理要求，禁止在未授权情况下向外部服务发送合同文本。"
+            )
         raise NotImplementedError("需按企业授权的云服务商 SDK 实现")
 
 
-def get_embedding_provider() -> EmbeddingProvider:
+def get_embedding_provider(spec: str | None = None) -> EmbeddingProvider:
+    """按配置选择 Embedding 提供方（默认工厂）。
+
+    spec（CONTRACT_KB_EMBEDDING）：
+    - local_hash / 空 → LocalHashEmbedding（离线基线）；
+    - st:<model> → SentenceTransformerEmbedding（真实语义向量，如 st:BAAI/bge-m3）；
+    - cloud:<provider> → CloudEmbedding（需显式授权，未授权拒绝外发）。
+    """
     from . import config
-    spec = config.EMBEDDING_PROVIDER
+
+    spec = (spec or config.EMBEDDING_PROVIDER).strip()
+    if spec.startswith("st:"):
+        from .embeddings_real import SentenceTransformerEmbedding
+
+        return SentenceTransformerEmbedding(spec.split(":", 1)[1])
     if spec.startswith("cloud:"):
         return CloudEmbedding(spec.split(":", 1)[1])
     return LocalHashEmbedding(config.EMBEDDING_DIM)

@@ -10,6 +10,7 @@
 - 结果经 Pydantic 严格校验；超时/JSON 解析失败/上下文过长/拒答 → 明确失败状态，
   不伪造结论；不确定 → NEEDS_MANUAL_REVIEW；未执行 → NOT_CHECKED。
 """
+
 from __future__ import annotations
 
 import json
@@ -32,19 +33,20 @@ class LLMFailure(str, Enum):
 
 class LLMFinding(BaseModel):
     """LLM 审核发现（严格 Schema）。"""
+
     finding_id: str = Field(min_length=1)
     category: str
     severity: str = Field(pattern="^(HIGH|MEDIUM|LOW|INFO)$")
     title: str
     description: str
-    original_text: str = ""               # 引用的合同原文片段（必须能在文档中找到）
+    original_text: str = ""  # 引用的合同原文片段（必须能在文档中找到）
     suggestion: str = ""
     confidence: float | None = Field(default=None, ge=0, le=1)
     requires_human_review: bool = True
 
 
 class LLMReviewResult(BaseModel):
-    status: str = "CHECKED"               # CHECKED | NOT_CHECKED | NEEDS_MANUAL_REVIEW | FAILED
+    status: str = "CHECKED"  # CHECKED | NOT_CHECKED | NEEDS_MANUAL_REVIEW | FAILED
     failure: str | None = None
     findings: list[LLMFinding] = Field(default_factory=list)
     custom_requirement_results: list[dict] = Field(default_factory=list)
@@ -75,18 +77,32 @@ DATA_OPEN = "\n<<<CONTRACT_DATA_UNTRUSTED>>>\n"
 DATA_CLOSE = "\n<<<END_CONTRACT_DATA>>>\n"
 
 
-def build_prompt(contract_text: str, standard_context: list[dict],
-                 custom_requirements: list[str], max_chars: int = 24000) -> str:
-    std = "\n".join(f"- [{c.get('clause_category','')}] {c.get('text','')[:200]}"
-                    for c in standard_context[:12])
-    custom = "\n".join(f"{i+1}. {r}" for i, r in enumerate(custom_requirements)) or "（无）"
+def build_prompt(
+    contract_text: str,
+    standard_context: list[dict],
+    custom_requirements: list[str],
+    max_chars: int = 24000,
+) -> str:
+    std = "\n".join(
+        f"- [{c.get('clause_category', '')}] {c.get('text', '')[:200]}"
+        for c in standard_context[:12]
+    )
+    custom = (
+        "\n".join(f"{i + 1}. {r}" for i, r in enumerate(custom_requirements))
+        or "（无）"
+    )
     # 防注入：数据区内出现的定界符一律转义，确保无法逃逸出数据区
-    safe_text = (contract_text[:max_chars]
-                 .replace(DATA_CLOSE, "[定界符已转义]").replace(DATA_OPEN, "[定界符已转义]"))
-    body = (f"## 企业标准条款（参考）\n{std}\n\n"
-            f"## 用户自定义审核要求\n{custom}\n\n"
-            f"## 待审合同（不可信数据）\n{DATA_OPEN}{safe_text}{DATA_CLOSE}\n"
-            f"请输出 JSON。")
+    safe_text = (
+        contract_text[:max_chars]
+        .replace(DATA_CLOSE, "[定界符已转义]")
+        .replace(DATA_OPEN, "[定界符已转义]")
+    )
+    body = (
+        f"## 企业标准条款（参考）\n{std}\n\n"
+        f"## 用户自定义审核要求\n{custom}\n\n"
+        f"## 待审合同（不可信数据）\n{DATA_OPEN}{safe_text}{DATA_CLOSE}\n"
+        f"请输出 JSON。"
+    )
     return body
 
 
@@ -100,6 +116,7 @@ class LLMProvider(ABC):
 
 class MockLLMProvider(LLMProvider):
     """测试用确定性 LLM（不外发数据）：对注入/矛盾等场景产出可控结果。"""
+
     name = "mock"
 
     def __init__(self, canned: dict | None = None):
@@ -114,8 +131,14 @@ class MockLLMProvider(LLMProvider):
             return {"text": "这不是JSON", "model": "mock", "usage": {}}
         if self.canned.get("mode") == "timeout":
             raise TimeoutError("mock timeout")
-        result = self.canned.get("result", {"findings": [], "custom_requirement_results": []})
-        return {"text": json.dumps(result, ensure_ascii=False), "model": "mock", "usage": {"tokens": 0}}
+        result = self.canned.get(
+            "result", {"findings": [], "custom_requirement_results": []}
+        )
+        return {
+            "text": json.dumps(result, ensure_ascii=False),
+            "model": "mock",
+            "usage": {"tokens": 0},
+        }
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -123,6 +146,7 @@ class OpenAICompatProvider(LLMProvider):
 
     未配置 base_url/api_key 时构造失败——防止未授权外发合同内容。
     """
+
     name = "openai_compat"
 
     def __init__(self, base_url: str, api_key: str, model: str):
@@ -134,43 +158,64 @@ class OpenAICompatProvider(LLMProvider):
 
     def complete(self, system: str, user: str, timeout: float = 60.0) -> dict:
         import urllib.request
+
         req = urllib.request.Request(
             f"{self.base_url}/chat/completions",
-            data=json.dumps({
-                "model": self.model,
-                "messages": [{"role": "system", "content": system},
-                             {"role": "user", "content": user}],
-                "temperature": 0,
-                "response_format": {"type": "json_object"},
-            }).encode(),
-            headers={"Content-Type": "application/json",
-                     "Authorization": f"Bearer {self.api_key}"})
+            data=json.dumps(
+                {
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    "temperature": 0,
+                    "response_format": {"type": "json_object"},
+                }
+            ).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+        )
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 body = json.loads(resp.read())
         except TimeoutError as e:
             raise TimeoutError("LLM 调用超时") from e
         text = body["choices"][0]["message"]["content"]
-        return {"text": text, "model": body.get("model", self.model),
-                "usage": body.get("usage", {})}
+        return {
+            "text": text,
+            "model": body.get("model", self.model),
+            "usage": body.get("usage", {}),
+        }
 
 
 class LLMSemanticReviewer:
     """语义审核编排：构造 prompt → 调用 LLM → 解析校验 → 引用核验 → 结果归一。"""
 
-    def __init__(self, provider: LLMProvider | None = None, max_prompt_chars: int = 24000):
+    def __init__(
+        self, provider: LLMProvider | None = None, max_prompt_chars: int = 24000
+    ):
         self.provider = provider
         self.max_prompt_chars = max_prompt_chars
 
-    def review(self, contract_text: str, standard_context: list[dict],
-               custom_requirements: list[str]) -> LLMReviewResult:
+    def review(
+        self,
+        contract_text: str,
+        standard_context: list[dict],
+        custom_requirements: list[str],
+    ) -> LLMReviewResult:
         if self.provider is None:
-            return LLMReviewResult(status="NOT_CHECKED", failure=LLMFailure.NOT_CONFIGURED.value,
-                                   model="")
+            return LLMReviewResult(
+                status="NOT_CHECKED", failure=LLMFailure.NOT_CONFIGURED.value, model=""
+            )
         if len(contract_text) > self.max_prompt_chars * 2:
-            return LLMReviewResult(status="FAILED", failure=LLMFailure.CONTEXT_TOO_LONG.value)
-        prompt = build_prompt(contract_text, standard_context, custom_requirements,
-                              self.max_prompt_chars)
+            return LLMReviewResult(
+                status="FAILED", failure=LLMFailure.CONTEXT_TOO_LONG.value
+            )
+        prompt = build_prompt(
+            contract_text, standard_context, custom_requirements, self.max_prompt_chars
+        )
         try:
             out = self.provider.complete(PROMPT_SYSTEM, prompt)
         except TimeoutError:
@@ -179,21 +224,39 @@ class LLMSemanticReviewer:
             return LLMReviewResult(status="FAILED", failure=LLMFailure.UNKNOWN.value)
 
         text = out.get("text", "")
-        if re.search(r"不能|无法|拒绝|cannot|unable", text[:60], re.I) and "{" not in text:
-            return LLMReviewResult(status="FAILED", failure=LLMFailure.REFUSED.value,
-                                   model=out.get("model", ""))
+        if (
+            re.search(r"不能|无法|拒绝|cannot|unable", text[:60], re.I)
+            and "{" not in text
+        ):
+            return LLMReviewResult(
+                status="FAILED",
+                failure=LLMFailure.REFUSED.value,
+                model=out.get("model", ""),
+            )
         try:
             data = json.loads(_extract_json(text))
         except (json.JSONDecodeError, ValueError):
-            return LLMReviewResult(status="FAILED", failure=LLMFailure.PARSE_ERROR.value,
-                                   model=out.get("model", ""))
+            return LLMReviewResult(
+                status="FAILED",
+                failure=LLMFailure.PARSE_ERROR.value,
+                model=out.get("model", ""),
+            )
         try:
-            result = LLMReviewResult.model_validate({
-                "status": "CHECKED", "failure": None, **data,
-                "model": out.get("model", ""), "raw_usage": out.get("usage", {})})
+            result = LLMReviewResult.model_validate(
+                {
+                    "status": "CHECKED",
+                    "failure": None,
+                    **data,
+                    "model": out.get("model", ""),
+                    "raw_usage": out.get("usage", {}),
+                }
+            )
         except ValidationError:
-            return LLMReviewResult(status="FAILED", failure=LLMFailure.PARSE_ERROR.value,
-                                   model=out.get("model", ""))
+            return LLMReviewResult(
+                status="FAILED",
+                failure=LLMFailure.PARSE_ERROR.value,
+                model=out.get("model", ""),
+            )
 
         # 引用核验：original_text 必须真实出现在合同中，否则剔除并标记
         verified = []
@@ -208,7 +271,10 @@ class LLMSemanticReviewer:
         if ref_mismatch:
             result.failure = LLMFailure.REFERENCE_MISMATCH.value
             result.status = "NEEDS_MANUAL_REVIEW"
-        if any(f.requires_human_review for f in verified) and result.status == "CHECKED":
+        if (
+            any(f.requires_human_review for f in verified)
+            and result.status == "CHECKED"
+        ):
             # 存在不确定项时整体降级标注
             pass
         return result
@@ -217,3 +283,55 @@ class LLMSemanticReviewer:
 def _extract_json(text: str) -> str:
     m = re.search(r"\{.*\}", text, re.S)
     return m.group(0) if m else text
+
+
+# ---------------- Provider 初始化链路（启动时按授权配置注入，不允许静默 None） ----------------
+
+
+class LLMConfigError(LLMNotConfigured):
+    """LLM 授权配置不完整/非法（fail-closed：直接抛错，不降级为 None）。"""
+
+
+def get_llm_provider(
+    spec: str | None = None, env: dict | None = None
+) -> LLMProvider | None:
+    """按授权配置初始化 LLM Provider（环境变量读取于调用时，便于测试与热配置）。
+
+    spec（CONTRACT_KB_LLM）：
+    - "none"/空 → 返回 None（调用方如实标 NOT_CHECKED）；
+    - "mock" → MockLLMProvider（仅限测试授权环境）；
+    - "openai_compat" → OpenAICompatProvider（企业授权本地/云端点），
+      需 CONTRACT_KB_LLM_BASE_URL / CONTRACT_KB_LLM_API_KEY / CONTRACT_KB_LLM_MODEL；
+      任一缺失抛 LLMConfigError——已声明授权模型时禁止静默回退为 None（防止
+      "正常配置下默认 None" 导致语义审核被无声跳过）。
+    """
+    import os
+
+    e = env if env is not None else os.environ
+    spec = (
+        (spec if spec is not None else e.get("CONTRACT_KB_LLM", "none")).strip().lower()
+    )
+    if spec in ("", "none"):
+        return None
+    if spec == "mock":
+        return MockLLMProvider()
+    if spec in ("openai_compat", "openai"):
+        base_url = e.get("CONTRACT_KB_LLM_BASE_URL", "").strip()
+        api_key = e.get("CONTRACT_KB_LLM_API_KEY", "").strip()
+        model = e.get("CONTRACT_KB_LLM_MODEL", "").strip()
+        missing = [
+            k
+            for k, v in (
+                ("CONTRACT_KB_LLM_BASE_URL", base_url),
+                ("CONTRACT_KB_LLM_API_KEY", api_key),
+                ("CONTRACT_KB_LLM_MODEL", model),
+            )
+            if not v
+        ]
+        if missing:
+            raise LLMConfigError(
+                f"已配置授权 LLM=openai_compat 但缺少 {missing}；"
+                "fail-closed 直接报错，不允许静默回退为 None（避免语义审核被无声跳过）"
+            )
+        return OpenAICompatProvider(base_url=base_url, api_key=api_key, model=model)
+    raise LLMConfigError(f"未知 LLM 配置：{spec!r}（可选 none | mock | openai_compat）")

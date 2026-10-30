@@ -5,11 +5,18 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_real_corpus:
+        description: "受控环境：触发真实语料回归（仅 self-hosted + environment: controlled）"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
+  # 质量门禁：无 || true，任何失败都如实反映为 CI 失败
   lint-and-type:
     runs-on: ubuntu-latest
     steps:
@@ -18,13 +25,64 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install deps
-        run: pip install ruff mypy python-docx lxml pydantic numpy fastapi uvicorn python-multipart psycopg2-binary pglast
+        run: pip install ruff mypy python-docx lxml pydantic numpy fastapi uvicorn python-multipart psycopg2-binary pglast pytest httpx
       - name: Ruff lint
         run: ruff check contract_kb tests --select=E,F,W --ignore=E501
       - name: Ruff format check
-        run: ruff format --check contract_kb || true
-      - name: Mypy (核心模块)
-        run: mypy contract_kb --ignore-missing-imports --no-error-summary || true
+        run: ruff format --check contract_kb tests
+      - name: Mypy（核心模块）
+        run: mypy contract_kb --ignore-missing-imports --no-error-summary
+
+  # 敏感扫描 fail-closed：扫描无法执行（配置缺失/工具失败）一律阻断，绝不静默跳过
+  security-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 结构性检查（无配置依赖，始终执行）
+        run: |
+          set -euo pipefail
+          # 代码/测试目录不得包含 DOCX（合成语料由测试运行时生成且不入库）
+          if find contract_kb tests -name "*.docx" -not -path "tests/fixtures/*" | grep -q .; then
+            echo "::error::代码目录不得包含 DOCX 合同文件"; exit 1
+          fi
+          # 受控数据（企业合同原件/派生产物）不得入库
+          for p in "参考" "_tools" "data"; do
+            if git ls-files "$p" | grep -q .; then
+              echo "::error::受控数据目录不得入库：$p"; exit 1
+            fi
+          done
+          if git ls-files "*.docx" | grep -q .; then
+            echo "::error::仓库不得包含任何 DOCX 合同文件"; exit 1
+          fi
+          # 真实语料用例必须带受控标记（默认跳过）
+          if ! grep -rq "real_corpus" tests/conftest.py; then
+            echo "::error::缺少真实语料受控标记机制"; exit 1
+          fi
+          echo "结构性检查通过"
+      - name: 精确敏感标记扫描（fail-closed）
+        env:
+          SENSITIVE_MARKERS: ${{ secrets.SENSITIVE_MARKERS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SENSITIVE_MARKERS:-}" ]; then
+            echo "::error::SENSITIVE_MARKERS 未配置：敏感扫描无法执行，按 fail-closed 阻断。" \
+                 "请仓库管理员配置受控清单：gh secret set SENSITIVE_MARKERS --body '<正则，| 分隔>'"
+            exit 1
+          fi
+          set +e
+          out=$(grep -rnE "$SENSITIVE_MARKERS" contract_kb tests docs README.md reports 2>&1)
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::发现真实企业信息字面量，CI 阻断（命中内容不输出全文）"
+            echo "$out" | cut -d: -f1 | sort -u | head -20
+            exit 1
+          fi
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::敏感扫描工具执行失败（fail-closed）：$out"
+            exit 1
+          fi
+          echo "敏感扫描通过（零命中）"
 
   test-synthetic:
     runs-on: ubuntu-latest
@@ -37,22 +95,6 @@ jobs:
         run: |
           pip install python-docx lxml pydantic numpy fastapi uvicorn python-multipart \
                       pytest httpx psycopg2-binary pglast
-      - name: 安全门禁——禁止真实企业合同入库
-        env:
-          SENSITIVE_MARKERS: ${{ secrets.SENSITIVE_MARKERS }}
-        run: |
-          # 公开 CI 不允许依赖公司真实合同；扫描代码确保无真实企业标记
-          # 敏感标记清单由受信任的 Secrets 注入（不在仓库硬编码任何真实标记）
-          if [ -z "$SENSITIVE_MARKERS" ]; then
-            echo "SENSITIVE_MARKERS 未配置（跳过精确扫描，仅执行结构检查）"
-            if find contract_kb tests -name "*.docx" | grep -q .; then
-              echo "代码目录不得包含 DOCX 合同文件"; exit 1
-            fi
-            exit 0
-          fi
-          if grep -rnE "$SENSITIVE_MARKERS" contract_kb tests; then
-            echo "发现真实企业信息字面量，CI 阻断"; exit 1
-          fi
       - name: 单元/集成/安全/API 测试（合成语料）
         run: python -m pytest tests -q --junitxml=report.xml
       - name: 知识库导入测试（合成语料）
@@ -60,11 +102,11 @@ jobs:
           python -m contract_kb.synthetic
           CONTRACT_KB_TEMPLATE_DIR=tests/fixtures/synth_corpus python -m contract_kb.cli import
       - name: SQL 迁移语法测试
-        run: python -m pytest tests/test_pg_migration.py -q
+        run: python -m pytest tests/test_pg_migration.py tests/test_pg_storage.py -q
       - name: 检索评估（合成基准）
         run: python -m contract_kb.benchmark_retrieval
       - name: 审核回归（黄金变异样本）
-        run: python -m pytest tests/test_review.py tests/test_format_diff.py -q
+        run: python -m pytest tests/test_review.py tests/test_format_diff.py tests/test_compare_semantics.py -q
       - name: 上传测试报告
         if: always()
         uses: actions/upload-artifact@v4
@@ -72,9 +114,45 @@ jobs:
           name: junit-report
           path: report.xml
 
+  # 数据库集成测试：真实 PostgreSQL + pgvector 服务容器（迁移/导入/检索/回滚/维度/租户）
+  test-pg:
+    runs-on: ubuntu-latest
+    services:
+      pg:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: contract_kb_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install python-docx lxml pydantic numpy psycopg2-binary pglast pytest
+      - name: PostgreSQL + pgvector 行为测试（真实实例）
+        env:
+          CONTRACT_KB_TEST_PG_DSN: postgresql://postgres:postgres@127.0.0.1:5432/contract_kb_test
+        run: |
+          python -m pytest tests/test_pg_storage.py tests/test_pg_migration.py -q --junitxml=report-pg.xml
+      - name: 上传 PG 测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-report-pg
+          path: report-pg.xml
+
   # 私有企业模板回归：受控环境手动触发，严禁合同原文进入公开日志/构件
   real-corpus-regression:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.run_real_corpus
     runs-on: self-hosted
     environment: controlled
     steps:

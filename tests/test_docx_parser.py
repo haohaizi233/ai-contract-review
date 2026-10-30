@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """test_docx_parser / test_table_parser / test_source_traceability（合成语料）"""
+
 import re
 
 import pytest
@@ -86,7 +87,9 @@ def test_unhandled_structures_recorded_not_dropped(parsed_docs):
     """无法可靠解析的结构必须记录状态。"""
     for name, doc in parsed_docs.items():
         if doc.has_images:
-            assert any("图片" in w or "images" in w.lower() for w in doc.parse_warnings), name
+            assert any(
+                "图片" in w or "images" in w.lower() for w in doc.parse_warnings
+            ), name
 
 
 def test_contract_number_hint_captured(parsed_docs):
@@ -135,11 +138,16 @@ def test_order_table_interleaving(parsed_docs):
 
 # ---------------- 真实语料授权回归（默认跳过） ----------------
 
+
 @pytest.mark.real_corpus
 def test_real_corpus_26_templates(real_corpus_dir):
     from contract_kb.docx_parser import parse_docx
-    files = [f for f in real_corpus_dir.iterdir()
-             if f.suffix.lower() == ".docx" and not f.name.startswith("~")]
+
+    files = [
+        f
+        for f in real_corpus_dir.iterdir()
+        if f.suffix.lower() == ".docx" and not f.name.startswith("~")
+    ]
     assert len(files) == 26
     for f in files:
         doc = parse_docx(f)
@@ -150,7 +158,11 @@ def test_real_corpus_26_templates(real_corpus_dir):
 @pytest.mark.real_corpus
 def test_real_corpus_unique_hashes(real_corpus_dir):
     from contract_kb.docx_parser import sha256_file
-    files = [f for f in real_corpus_dir.iterdir()
-             if f.suffix.lower() == ".docx" and not f.name.startswith("~")]
+
+    files = [
+        f
+        for f in real_corpus_dir.iterdir()
+        if f.suffix.lower() == ".docx" and not f.name.startswith("~")
+    ]
     hashes = [sha256_file(f) for f in files]
     assert len(set(hashes)) == 26

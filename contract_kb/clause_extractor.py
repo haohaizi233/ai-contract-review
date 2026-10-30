@@ -6,6 +6,7 @@
 - 企业惯例与法律要求分离：is_company_standard 表示"企业模板惯例"，绝不表述为法律强制；
 - 未获法务审批：approval_status 默认 PENDING_REVIEW。
 """
+
 from __future__ import annotations
 
 import re
@@ -49,8 +50,12 @@ SUBCATEGORY_RULES = [
     ("TERMINATION_POINT", ["终止于", "之日起终止", "有效期至"]),
 ]
 
-MONEY_RE = re.compile(r"(?:人民币|RMB|¥)\s*([\d,]+(?:\.\d+)?)\s*(?:圆整|元)?|(\d[\d,]*(?:\.\d+)?)\s*元")
-MONEY_PLACEHOLDER_RE = re.compile(r"人民币\s*[壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万]*\s*圆整[（(]¥?\s*[元）)]|人民币\s{2,}圆整")
+MONEY_RE = re.compile(
+    r"(?:人民币|RMB|¥)\s*([\d,]+(?:\.\d+)?)\s*(?:圆整|元)?|(\d[\d,]*(?:\.\d+)?)\s*元"
+)
+MONEY_PLACEHOLDER_RE = re.compile(
+    r"人民币\s*[壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万]*\s*圆整[（(]¥?\s*[元）)]|人民币\s{2,}圆整"
+)
 RATE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*‰|(\d+(?:\.\d+)?)\s*%")
 DAYS_RE = re.compile(r"(\d+|[一二三四五六七八九十]+)\s*个?工作日")
 BANK_ACCT_RE = re.compile(r"\d{10,}")
@@ -73,8 +78,8 @@ class ClauseRecord:
     exceptions: list = field(default_factory=list)
     source_node_ids: list = field(default_factory=list)
     source_locator: dict = field(default_factory=dict)
-    is_company_standard: bool = False      # 企业模板惯例（非法律强制）
-    legal_requirement: bool = False        # 仅当条文援引法律义务时为 True
+    is_company_standard: bool = False  # 企业模板惯例（非法律强制）
+    legal_requirement: bool = False  # 仅当条文援引法律义务时为 True
     approval_status: str = "PENDING_REVIEW"
     extraction_confidence: float = 1.0
 
@@ -103,7 +108,9 @@ def _extract_entities(text: str) -> list[dict]:
         val = m.group(1) or m.group(2)
         ents.append({"type": "MONEY", "value": val, "raw": m.group(0)})
     for m in MONEY_PLACEHOLDER_RE.finditer(text):
-        ents.append({"type": "MONEY_PLACEHOLDER", "value": None, "raw": m.group(0)[:40]})
+        ents.append(
+            {"type": "MONEY_PLACEHOLDER", "value": None, "raw": m.group(0)[:40]}
+        )
     for m in RATE_RE.finditer(text):
         val = (m.group(1) or m.group(2)) + ("‰" if m.group(1) else "%")
         ents.append({"type": "RATE", "value": val, "raw": m.group(0)})
@@ -118,8 +125,13 @@ def _extract_entities(text: str) -> list[dict]:
 
 def _extract_conditions(text: str) -> list[str]:
     conds = []
-    for pat in [r"自[^，。；]{2,30}起", r"如[^，。；]{2,40}[，,]", r"若[^，。；]{2,40}[，,]",
-                r"在[^，。；]{2,30}后", r"收到[^，。；]{2,30}后"]:
+    for pat in [
+        r"自[^，。；]{2,30}起",
+        r"如[^，。；]{2,40}[，,]",
+        r"若[^，。；]{2,40}[，,]",
+        r"在[^，。；]{2,30}后",
+        r"收到[^，。；]{2,30}后",
+    ]:
         for m in re.finditer(pat, text):
             conds.append(m.group(0))
     return conds[:8]
@@ -127,8 +139,14 @@ def _extract_conditions(text: str) -> list[str]:
 
 def _extract_exceptions(text: str) -> list[str]:
     excs = []
-    for pat in [r"但[^，。；]{2,60}", r"除[^，。；]{2,40}外", r"另有约定除外",
-                r"不包括[^，。；]{2,50}", r"不含[^，。；]{2,50}", r"除外[。；]"]:
+    for pat in [
+        r"但[^，。；]{2,60}",
+        r"除[^，。；]{2,40}外",
+        r"另有约定除外",
+        r"不包括[^，。；]{2,50}",
+        r"不含[^，。；]{2,50}",
+        r"除外[。；]",
+    ]:
         for m in re.finditer(pat, text):
             excs.append(m.group(0))
     return excs[:8]
@@ -146,7 +164,9 @@ def _normalize_summary(text: str, cat: str, sub: str | None) -> tuple[str, str]:
         slots.append("期限=" + "/".join(days[:3]) + "个工作日")
     rate = RATE_RE.search(t)
     if rate:
-        slots.append("比率=" + (rate.group(1) or rate.group(2)) + ("‰" if rate.group(1) else "%"))
+        slots.append(
+            "比率=" + (rate.group(1) or rate.group(2)) + ("‰" if rate.group(1) else "%")
+        )
     head = t[:48] + ("…" if len(t) > 48 else "")
     summary = f"[{cat}" + (f"/{sub}" if sub else "") + f"] {head}"
     if slots:
@@ -169,15 +189,25 @@ def extract_clauses(parsed_doc, template_id: str) -> list[ClauseRecord]:
         if text:
             cat, sub = _categorize(article_title, text)
             summary, method = _normalize_summary(text, cat, sub)
-            cid = hashlib.sha1(f"{template_id}:{article_title}:{buffer_num}:{text[:80]}".encode()).hexdigest()[:12]
+            cid = hashlib.sha1(
+                f"{template_id}:{article_title}:{buffer_num}:{text[:80]}".encode()
+            ).hexdigest()[:12]
             law_cited = bool(LAW_RE.search(text))
             rec = ClauseRecord(
-                clause_id=cid, template_id=template_id, clause_number=buffer_num,
-                article_title=article_title, clause_category=cat, clause_subcategory=sub,
-                original_text=text, normalized_summary=summary, summary_method=method,
-                entities=_extract_entities(text), conditions=_extract_conditions(text),
+                clause_id=cid,
+                template_id=template_id,
+                clause_number=buffer_num,
+                article_title=article_title,
+                clause_category=cat,
+                clause_subcategory=sub,
+                original_text=text,
+                normalized_summary=summary,
+                summary_method=method,
+                entities=_extract_entities(text),
+                conditions=_extract_conditions(text),
                 exceptions=_extract_exceptions(text),
-                source_node_ids=list(buffer_nodes), source_locator=buffer_loc,
+                source_node_ids=list(buffer_nodes),
+                source_locator=buffer_loc,
                 is_company_standard=True,
                 legal_requirement=law_cited and ("应当" in text or "必须" in text),
                 extraction_confidence=0.95 if buffer_num else 0.85,
@@ -215,15 +245,29 @@ def extract_clauses(parsed_doc, template_id: str) -> list[ClauseRecord]:
                     if cat0 == "OTHER":
                         cat0 = "FRONT_MATTER"
                     summary0, method0 = _normalize_summary(text, cat0, sub0)
-                    cid0 = hashlib.sha1(f"{template_id}:front:{text[:80]}".encode()).hexdigest()[:12]
-                    records.append(ClauseRecord(
-                        clause_id=cid0, template_id=template_id, clause_number=None,
-                        article_title=None, clause_category=cat0, clause_subcategory=sub0,
-                        original_text=text, normalized_summary=summary0, summary_method=method0,
-                        entities=_extract_entities(text), conditions=_extract_conditions(text),
-                        exceptions=_extract_exceptions(text),
-                        source_node_ids=[node.node_id], source_locator=node.source_locator,
-                        is_company_standard=True, extraction_confidence=0.8))
+                    cid0 = hashlib.sha1(
+                        f"{template_id}:front:{text[:80]}".encode()
+                    ).hexdigest()[:12]
+                    records.append(
+                        ClauseRecord(
+                            clause_id=cid0,
+                            template_id=template_id,
+                            clause_number=None,
+                            article_title=None,
+                            clause_category=cat0,
+                            clause_subcategory=sub0,
+                            original_text=text,
+                            normalized_summary=summary0,
+                            summary_method=method0,
+                            entities=_extract_entities(text),
+                            conditions=_extract_conditions(text),
+                            exceptions=_extract_exceptions(text),
+                            source_node_ids=[node.node_id],
+                            source_locator=node.source_locator,
+                            is_company_standard=True,
+                            extraction_confidence=0.8,
+                        )
+                    )
         elif node.node_type == "table_cell":
             # 表格内长文本（如费用备注、超权费规则）也是合同内容，抽为条款
             text = (node.text or "").strip()
@@ -233,15 +277,29 @@ def extract_clauses(parsed_doc, template_id: str) -> list[ClauseRecord]:
             if cat0 == "OTHER":
                 cat0 = "TABLE_NOTE"
             summary0, method0 = _normalize_summary(text, cat0, sub0)
-            cid0 = hashlib.sha1(f"{template_id}:cell:{node.node_id}:{text[:60]}".encode()).hexdigest()[:12]
-            records.append(ClauseRecord(
-                clause_id=cid0, template_id=template_id, clause_number=node.clause_number,
-                article_title=node.section, clause_category=cat0, clause_subcategory=sub0,
-                original_text=text, normalized_summary=summary0, summary_method=method0,
-                entities=_extract_entities(text), conditions=_extract_conditions(text),
-                exceptions=_extract_exceptions(text),
-                source_node_ids=[node.node_id], source_locator=node.source_locator,
-                is_company_standard=True, extraction_confidence=0.8))
+            cid0 = hashlib.sha1(
+                f"{template_id}:cell:{node.node_id}:{text[:60]}".encode()
+            ).hexdigest()[:12]
+            records.append(
+                ClauseRecord(
+                    clause_id=cid0,
+                    template_id=template_id,
+                    clause_number=node.clause_number,
+                    article_title=node.section,
+                    clause_category=cat0,
+                    clause_subcategory=sub0,
+                    original_text=text,
+                    normalized_summary=summary0,
+                    summary_method=method0,
+                    entities=_extract_entities(text),
+                    conditions=_extract_conditions(text),
+                    exceptions=_extract_exceptions(text),
+                    source_node_ids=[node.node_id],
+                    source_locator=node.source_locator,
+                    is_company_standard=True,
+                    extraction_confidence=0.8,
+                )
+            )
     flush()
     return records
 
@@ -251,29 +309,47 @@ def extract_table_schemas(parsed_doc, template_id: str) -> list[dict]:
     schemas = []
     for dim in parsed_doc.table_dims:
         ti = dim["table_index"]
-        cells = [n for n in parsed_doc.nodes
-                 if n.node_type == "table_cell" and n.table_index == ti]
-        header_cells = sorted([c for c in cells if c.row_index == 0], key=lambda c: c.column_index)
+        cells = [
+            n
+            for n in parsed_doc.nodes
+            if n.node_type == "table_cell" and n.table_index == ti
+        ]
+        header_cells = sorted(
+            [c for c in cells if c.row_index == 0], key=lambda c: c.column_index
+        )
         headers = [c.text.strip() for c in header_cells]
-        sample_cells = sorted([c for c in cells if c.row_index == 1], key=lambda c: c.column_index)
+        sample_cells = sorted(
+            [c for c in cells if c.row_index == 1], key=lambda c: c.column_index
+        )
         samples = [c.text.strip() for c in sample_cells]
         fields = []
         for ci, h in enumerate(headers):
             if not h:
                 continue
             sample = samples[ci] if ci < len(samples) else ""
-            fields.append({
-                "field_key": f"tbl{ti}_col{ci}",
-                "field_name": h,
-                "data_type": "string",
-                "required_candidate": True,
-                "required_approved": None,
-                "sample_value": sample,
-                "source_node_ids": [header_cells[ci].node_id] if ci < len(header_cells) else [],
-                "validation_rules": [],
-                "semantic_description": f"表格{ti}第{ci}列业务字段",
-            })
-        schemas.append({"template_id": template_id, "table_index": ti,
-                        "row_count": dim["rows"], "col_count": dim["cols"],
-                        "headers": headers, "fields": fields})
+            fields.append(
+                {
+                    "field_key": f"tbl{ti}_col{ci}",
+                    "field_name": h,
+                    "data_type": "string",
+                    "required_candidate": True,
+                    "required_approved": None,
+                    "sample_value": sample,
+                    "source_node_ids": [header_cells[ci].node_id]
+                    if ci < len(header_cells)
+                    else [],
+                    "validation_rules": [],
+                    "semantic_description": f"表格{ti}第{ci}列业务字段",
+                }
+            )
+        schemas.append(
+            {
+                "template_id": template_id,
+                "table_index": ti,
+                "row_count": dim["rows"],
+                "col_count": dim["cols"],
+                "headers": headers,
+                "fields": fields,
+            }
+        )
     return schemas

@@ -3,6 +3,7 @@
 
 用于审核功能测试（test_review_pipeline / test_regression），不替代真实模板解析测试。
 """
+
 from __future__ import annotations
 
 import json
@@ -34,34 +35,110 @@ BASE = {
 }
 
 MUTANTS = [
-    ("mut_01_missing_contract_no", "删除合同编号", ["FIELD_REQUIRED", "CONTRACT_NUMBER_BACKFILL"],
-     lambda t: {**t, "contract_no": ""}),
-    ("mut_02_party_name_change", "修改主体名称与附件不一致", ["PARTY_ATTACHMENT_CONSISTENCY", "PARTY_MISMATCH"],
-     lambda t: {**t, "party_a": "深圳市某某科技有限公司", "matter_extra": "（甲方：广州另一家公司）"}),
-    ("mut_03_service_fee_change", "修改服务费与合计不符", ["AMOUNT_MISMATCH"],
-     lambda t: {**t, "fee_clause": t["fee_clause"].replace("壹万", "贰万").replace("10,000", "20,000")}),
-    ("mut_04_official_fee_change", "修改官费", ["AMOUNT_MISMATCH"],
-     lambda t: {**t, "fee_total": t["fee_total"].replace("壹万", "玖仟").replace("10,000", "9,000")}),
-    ("mut_05_payment_deadline", "修改付款期限", ["CLAUSE_VARIATION", "PAYMENT_DEADLINE"],
-     lambda t: {**t, "payment": t["payment"].replace("三个工作日", "三十个工作日")}),
-    ("mut_06_missing_confidentiality", "删除保密条款", ["CLAUSE_MISSING", "CLAUSE_REQUIRED_CONFIDENTIALITY"],
-     lambda t: {**t, "confidentiality": ""}),
-    ("mut_07_dispute_change", "修改争议解决管辖", ["CLAUSE_VARIATION", "DISPUTE_JURISDICTION_STANDARD"],
-     lambda t: {**t, "dispute": t["dispute"].replace("深圳市南山区人民法院", "乙方所在地有管辖权的人民法院")}),
-    ("mut_08_amount_case_mismatch", "大小写金额不一致", ["AMOUNT_MISMATCH", "AMOUNT_CASE_CONSISTENCY"],
-     lambda t: {**t, "fee_clause": t["fee_clause"].replace("壹万", "贰万")}),  # 大写贰万 vs 小写10,000
-    ("mut_09_patent_no_change", "修改专利号", ["FIELD_FORMAT", "IDENTIFIER_FORMAT_CHECK"],
-     lambda t: {**t, "patent_no": "专利号：XXXX-INVALID"}),
-    ("mut_10_contradictory_clause", "添加互相矛盾条款", ["SEMANTIC_RISK", "MANUAL_REVIEW"],
-     lambda t: {**t, "payment_extra": "4.6 甲方无需支付任何费用，本合同为无偿服务。"}),
-    ("mut_11_late_fee_change", "修改违约金比率", ["CLAUSE_VARIATION", "LATE_FEE_RATE"],
-     lambda t: {**t, "liability": t["liability"].replace("3‰", "1‰")}),
-    ("mut_12_missing_liability", "删除违约责任", ["CLAUSE_MISSING", "CLAUSE_REQUIRED_LIABILITY"],
-     lambda t: {**t, "liability": ""}),
-    ("mut_13_invoice_variant", "发票条款未明示税率", ["INVOICE_TERM_VARIANT", "INVOICE_TYPE_CONSISTENCY"],
-     lambda t: {**t, "invoice": "4.5 乙方自收到甲方支付的全部费用后，为甲方出具相应发票。"}),
-    ("mut_14_no_issue_baseline", "无错误基准合同", ["__NONE__"],
-     lambda t: t),
+    (
+        "mut_01_missing_contract_no",
+        "删除合同编号",
+        ["FIELD_REQUIRED", "CONTRACT_NUMBER_BACKFILL"],
+        lambda t: {**t, "contract_no": ""},
+    ),
+    (
+        "mut_02_party_name_change",
+        "修改主体名称与附件不一致",
+        ["PARTY_ATTACHMENT_CONSISTENCY", "PARTY_MISMATCH"],
+        lambda t: {
+            **t,
+            "party_a": "深圳市某某科技有限公司",
+            "matter_extra": "（甲方：广州另一家公司）",
+        },
+    ),
+    (
+        "mut_03_service_fee_change",
+        "修改服务费与合计不符",
+        ["AMOUNT_MISMATCH"],
+        lambda t: {
+            **t,
+            "fee_clause": t["fee_clause"]
+            .replace("壹万", "贰万")
+            .replace("10,000", "20,000"),
+        },
+    ),
+    (
+        "mut_04_official_fee_change",
+        "修改官费",
+        ["AMOUNT_MISMATCH"],
+        lambda t: {
+            **t,
+            "fee_total": t["fee_total"]
+            .replace("壹万", "玖仟")
+            .replace("10,000", "9,000"),
+        },
+    ),
+    (
+        "mut_05_payment_deadline",
+        "修改付款期限",
+        ["CLAUSE_VARIATION", "PAYMENT_DEADLINE"],
+        lambda t: {**t, "payment": t["payment"].replace("三个工作日", "三十个工作日")},
+    ),
+    (
+        "mut_06_missing_confidentiality",
+        "删除保密条款",
+        ["CLAUSE_MISSING", "CLAUSE_REQUIRED_CONFIDENTIALITY"],
+        lambda t: {**t, "confidentiality": ""},
+    ),
+    (
+        "mut_07_dispute_change",
+        "修改争议解决管辖",
+        ["CLAUSE_VARIATION", "DISPUTE_JURISDICTION_STANDARD"],
+        lambda t: {
+            **t,
+            "dispute": t["dispute"].replace(
+                "深圳市南山区人民法院", "乙方所在地有管辖权的人民法院"
+            ),
+        },
+    ),
+    (
+        "mut_08_amount_case_mismatch",
+        "大小写金额不一致",
+        ["AMOUNT_MISMATCH", "AMOUNT_CASE_CONSISTENCY"],
+        lambda t: {**t, "fee_clause": t["fee_clause"].replace("壹万", "贰万")},
+    ),  # 大写贰万 vs 小写10,000
+    (
+        "mut_09_patent_no_change",
+        "修改专利号",
+        ["FIELD_FORMAT", "IDENTIFIER_FORMAT_CHECK"],
+        lambda t: {**t, "patent_no": "专利号：XXXX-INVALID"},
+    ),
+    (
+        "mut_10_contradictory_clause",
+        "添加互相矛盾条款",
+        ["SEMANTIC_RISK", "MANUAL_REVIEW"],
+        lambda t: {
+            **t,
+            "payment_extra": "4.6 甲方无需支付任何费用，本合同为无偿服务。",
+        },
+    ),
+    (
+        "mut_11_late_fee_change",
+        "修改违约金比率",
+        ["CLAUSE_VARIATION", "LATE_FEE_RATE"],
+        lambda t: {**t, "liability": t["liability"].replace("3‰", "1‰")},
+    ),
+    (
+        "mut_12_missing_liability",
+        "删除违约责任",
+        ["CLAUSE_MISSING", "CLAUSE_REQUIRED_LIABILITY"],
+        lambda t: {**t, "liability": ""},
+    ),
+    (
+        "mut_13_invoice_variant",
+        "发票条款未明示税率",
+        ["INVOICE_TERM_VARIANT", "INVOICE_TYPE_CONSISTENCY"],
+        lambda t: {
+            **t,
+            "invoice": "4.5 乙方自收到甲方支付的全部费用后，为甲方出具相应发票。",
+        },
+    ),
+    ("mut_14_no_issue_baseline", "无错误基准合同", ["__NONE__"], lambda t: t),
 ]
 
 
@@ -81,7 +158,9 @@ def _build_docx(t: dict, out_path: Path):
     doc.add_paragraph(f"专利名称：年费代缴 {t['patent_no']}")
     # 费用表
     ft = doc.add_table(rows=3, cols=4)
-    for i, h in enumerate(["费用项目", "代收代付官费（元/件）", "含税服务费（元/件）", "数量"]):
+    for i, h in enumerate(
+        ["费用项目", "代收代付官费（元/件）", "含税服务费（元/件）", "数量"]
+    ):
         ft.rows[0].cells[i].text = h
     for i, v in enumerate(["年费代缴", "600", "150", "1"]):
         ft.rows[1].cells[i].text = v
@@ -113,11 +192,18 @@ def generate_all(out_dir: Path | None = None) -> list[dict]:
         t = mutator(dict(BASE))
         path = out_dir / f"{name}.docx"
         _build_docx(t, path)
-        manifest.append({"sample_id": name, "file": path.name, "description": desc,
-                         "expected_issue_categories": expected,
-                         "expect_no_issue": expected == ["__NONE__"]})
+        manifest.append(
+            {
+                "sample_id": name,
+                "file": path.name,
+                "description": desc,
+                "expected_issue_categories": expected,
+                "expect_no_issue": expected == ["__NONE__"],
+            }
+        )
     (out_dir / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+        json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8"
+    )
     return manifest
 
 

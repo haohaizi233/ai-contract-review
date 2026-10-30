@@ -6,6 +6,7 @@
       CONTRACT_KB_REAL_CORPUS=1  且 CONTRACT_KB_TEMPLATE_DIR 指向受控真实模板目录
   真实用例统一打 @pytest.mark.real_corpus，未授权时自动 skip。
 """
+
 import os
 import sys
 from pathlib import Path
@@ -21,7 +22,12 @@ REAL_CORPUS_ENABLED = os.environ.get("CONTRACT_KB_REAL_CORPUS") == "1"
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "real_corpus: 需授权真实模板语料的回归用例（默认跳过）")
+    config.addinivalue_line(
+        "markers", "real_corpus: 需授权真实模板语料的回归用例（默认跳过）"
+    )
+    config.addinivalue_line(
+        "markers", "real_model: 需授权真实 LLM 端点的受控 E2E（默认跳过）"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -34,6 +40,7 @@ def workspace_ready():
 def corpus_dir(workspace_ready) -> Path:
     """测试语料目录：默认合成语料。"""
     from contract_kb.synthetic import generate_corpus
+
     d = ROOT / "tests" / "fixtures" / "synth_corpus"
     generate_corpus(d)
     return d
@@ -43,6 +50,7 @@ def corpus_dir(workspace_ready) -> Path:
 def import_result(workspace_ready, corpus_dir, tmp_path_factory):
     """导入合成语料到独立测试数据库（不触碰 data/ 生产库）。"""
     from contract_kb.ingest import scan_and_import
+
     result = scan_and_import(corpus_dir)
     result.pop("_raw", None)
     return result
@@ -52,6 +60,7 @@ def import_result(workspace_ready, corpus_dir, tmp_path_factory):
 def layer_a(workspace_ready, corpus_dir, import_result):
     """合成语料的条款/Schema 层。"""
     from contract_kb.ingest import scan_and_import
+
     result = scan_and_import(corpus_dir)
     layer = {"clauses": [], "table_schemas": [], "documents": []}
     for d in result.get("_raw", []):
@@ -67,6 +76,7 @@ def layer_a(workspace_ready, corpus_dir, import_result):
 def parsed_docs(workspace_ready, corpus_dir):
     """AST 文档集合（合成语料）。"""
     from contract_kb.docx_parser import parse_docx
+
     docs = {}
     for f in sorted(corpus_dir.glob("*.docx")):
         if not f.name.startswith("~"):
@@ -79,6 +89,7 @@ def storage(workspace_ready, corpus_dir, tmp_path_factory):
     """独立测试存储（临时 SQLite，session 级）。"""
     from contract_kb.storage import Storage
     from contract_kb.ingest import scan_and_import
+
     db = tmp_path_factory.mktemp("db") / "test_contract_kb.db"
     st = Storage(db)
     result = scan_and_import(corpus_dir)
@@ -91,12 +102,14 @@ def storage(workspace_ready, corpus_dir, tmp_path_factory):
 @pytest.fixture(scope="session")
 def golden_samples(workspace_ready):
     from contract_kb.golden import generate_all
+
     out = ROOT / "tests" / "fixtures" / "golden"
     manifest = generate_all(out)
     return {"dir": out, "items": manifest}
 
 
 # ---------------- 真实语料（授权回归） ----------------
+
 
 @pytest.fixture(scope="session")
 def real_corpus_dir():

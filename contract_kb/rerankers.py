@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Reranker 抽象层（Phase 2）：baseline 确定性 reranker + Cross-Encoder 可插拔。"""
+
 from __future__ import annotations
 
 import re
@@ -23,12 +24,12 @@ class LexicalReranker(Reranker):
 
     def rerank(self, query: str, hits: list[dict]) -> list[dict]:
         qn = _CLEAN_RE.sub("", query).lower()
-        qgrams = {qn[i:i + 2] for i in range(len(qn) - 1)} or {qn}
+        qgrams = {qn[i : i + 2] for i in range(len(qn) - 1)} or {qn}
         qnums = set(re.findall(r"\d+(?:\.\d+)?", query))
         scored = []
         for h in hits:
             tn = _CLEAN_RE.sub("", h["text"]).lower()
-            tgrams = {tn[i:i + 2] for i in range(len(tn) - 1)} or {tn}
+            tgrams = {tn[i : i + 2] for i in range(len(tn) - 1)} or {tn}
             cov = len(qgrams & tgrams) / max(1, len(qgrams))
             tnums = set(re.findall(r"\d+(?:\.\d+)?", h["text"]))
             item = dict(h)
@@ -43,13 +44,16 @@ class CrossEncoderReranker(Reranker):
     未安装 sentence-transformers 或未配置模型时构造失败，调用方回退 baseline。
     """
 
-    def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3", max_length: int = 512):
+    def __init__(
+        self, model_name: str = "BAAI/bge-reranker-v2-m3", max_length: int = 512
+    ):
         try:
             from sentence_transformers import CrossEncoder
         except ImportError as e:
             raise RuntimeError(
                 "sentence-transformers 未安装；Cross-Encoder reranker 不可用，"
-                "请 pip install sentence-transformers 并配置授权模型") from e
+                "请 pip install sentence-transformers 并配置授权模型"
+            ) from e
         self.model = CrossEncoder(model_name, max_length=max_length)
         self.name = f"cross_encoder:{model_name}"
 
@@ -68,5 +72,5 @@ def get_reranker(name: str = "lexical") -> Reranker:
         try:
             return CrossEncoderReranker(model)
         except RuntimeError:
-            return LexicalReranker()   # 降级并由调用方报告
+            return LexicalReranker()  # 降级并由调用方报告
     return LexicalReranker()
