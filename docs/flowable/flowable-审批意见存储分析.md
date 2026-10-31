@@ -24,7 +24,7 @@ create table ACT_HI_COMMENT (
     USER_ID_       nvarchar(255),             -- 审批人/评论人
     TASK_ID_       nvarchar(64),              -- 关联任务（审批环节）→ ACT_HI_TASKINST.ID_
     PROC_INST_ID_  nvarchar(64),              -- 关联流程实例 → ACT_HI_PROCINST.ID_
-    ACTION_        nvarchar(255),             -- 动作标记（add_comment / Complete 等，随调用方式不同）
+    ACTION_        nvarchar(255),             -- 动作标记（可空，由上层/UI 写入，勿据此判断审批结果）
     MESSAGE_       nvarchar(4000),            -- ★ 意见正文（≤4000 字符）
     FULL_MSG_      varbinary(max),            -- ★ 意见全文（超长/大对象时启用）
     primary key (ID_)
@@ -40,7 +40,7 @@ create table ACT_HI_COMMENT (
 | 什么时候批 | `TIME_` |
 | 哪个审批环节 | `TASK_ID_`（联 `ACT_HI_TASKINST` 可得环节名称 `NAME_`） |
 | 哪个流程实例 | `PROC_INST_ID_` |
-| 什么动作 | `ACTION_`（配合 `TYPE_` 区分普通评论与完成动作备注） |
+| 什么动作 | `ACTION_`（可空，勿作为审批结论依据） |
 
 写入 API：`TaskService.addComment(taskId, processInstanceId, message)`（实体
 `CommentEntityImpl`，字段与上表一一对应，见 `refs/CommentEntityImpl.java` 快照）。
@@ -75,8 +75,21 @@ Flowable UI（flowable-task）在"完成任务并备注"时同样调用该 API�
 | 意见里带的附件 | ACT_HI_ATTACHMENT | 按 `TASK_ID_`/`PROC_INST_ID_` 关联 |
 | 审批人/时间/环节 | ACT_HI_TASKINST | `ASSIGNEE_`、`START_TIME_`、`END_TIME_`、`NAME_` |
 | 通过/驳回结论 | ACT_HI_VARINST / ACT_RU_VARIABLE | 变量名随二开定义，先查 `NAME_` 列表 |
-| 操作时间线（谁点了什么） | ACT_HI_TSK_LOG | `TYPE_`=事件类型、`DATA_`=备注、`TIME_STAMP_` |
+| 操作时间线（谁点了什么） | ACT_HI_TSK_LOG | `TYPE_`=事件类型（枚举见下）、`DATA_`=备注、`TIME_STAMP_` |
 | 运行中未批完的任务 | ACT_RU_TASK | 流程结束会清空，别在这里找历史意见 |
+
+`ACT_HI_TSK_LOG.TYPE_` 的取值（源码 `HistoricTaskLogEntryType` 枚举）：
+`USER_TASK_CREATED` / `USER_TASK_COMPLETED` / `USER_TASK_ASSIGNEE_CHANGED` / `USER_TASK_OWNER_CHANGED` /
+`USER_TASK_PRIORITY_CHANGED` / `USER_TASK_DUEDATE_CHANGED` / `USER_TASK_NAME_CHANGED` /
+`USER_TASK_SUSPENSIONSTATE_CHANGED` / `USER_TASK_IDENTITY_LINK_ADDED` / `USER_TASK_IDENTITY_LINK_REMOVED`。
+
+两点审计注意：
+
+- `ACT_HI_COMMENT.ACTION_` 不是必填字段，核心 `addComment` API 不强制写入（可为空），
+  部分 UI/二开会自定义动作串；**判断"是否审批通过"别依赖 ACTION_**，以 `ACT_HI_TASKINST.END_TIME_` +
+  流程走向/结论变量为准；
+- **删除任务/流程实例会级联物理删除评论**（`TaskHelper` 中 `deleteCommentsByTaskId`），
+  做合规审计时意见要另行归档，不能假设 ACT_HI_COMMENT 永久留存。
 
 ## 4. 常用排查 SQL（SQL Server）
 
@@ -123,3 +136,5 @@ ORDER BY t.END_TIME_;
 | `flowable-history-tables.md` | documentation.flowable.com | 历史表清单（页面为图片版字段图） |
 | `nutflow-flowable-tables.md` | docs.nutflow.vip | 中文表结构对照（含"ACT_HI_COMMENT=审批意见"结论） |
 | `CommentEntityImpl.java` | flowable-engine 仓库（GitHub） | 评论实体字段与表列的映射依据 |
+| `HistoricTaskLogEntryType.java` | flowable-engine 仓库（GitHub） | ACT_HI_TSK_LOG 事件类型枚举（TYPE_ 取值） |
+| `TaskHelper.java` | flowable-engine 仓库（GitHub） | 任务完成/删除逻辑（含评论级联删除行为） |
