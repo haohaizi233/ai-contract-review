@@ -31,6 +31,7 @@ import html as html_mod
 import os
 import queue
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -615,6 +616,108 @@ def patch_md(md_path: Path, block: str) -> str:
     return action
 
 
+class StateDB:
+    """SQLite WAL 状态账本：跨进程幂等 + 断点续传。
+
+    - register()     登记全部案号为 pending（INSERT OR IGNORE，可重复调用）
+    - seed_done()    已含回填标记块的 md 预置为 done，保留历史成果不重跑
+    - claim()        原子抢占：pending/failed/stalled/超时 running → running，
+                     抢到才处理，保证同一案号同一时刻只被一个 worker 处理
+    - finish()       落终态（done / nomark / failed）
+    - reset_stale()  把超时 running 还原为 stalled，供守护进程续跑中断任务
+    """
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self._local = threading.local()
+        c = self._conn()
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS cases("
+            "stem TEXT PRIMARY KEY,"
+            "status TEXT NOT NULL DEFAULT 'pending',"
+            "attempts INTEGER NOT NULL DEFAULT 0,"
+            "detail TEXT NOT NULL DEFAULT '',"
+            "updated_at REAL NOT NULL DEFAULT 0)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status)")
+        c.commit()
+
+    def _conn(self):
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = sqlite3.connect(self.path, timeout=60)
+            c.execute("PRAGMA journal_mode=WAL")
+            c.execute("PRAGMA synchronous=NORMAL")
+            c.execute("PRAGMA busy_timeout=60000")
+            self._local.conn = c
+        return c
+
+    def register(self, stems):
+        c = self._conn()
+        now = time.time()
+        c.executemany(
+            "INSERT OR IGNORE INTO cases(stem, status, updated_at) VALUES(?, 'pending', ?)",
+            [(s, now) for s in stems])
+        c.commit()
+
+    def seed_done(self, md_files, marker):
+        c = self._conn()
+        now = time.time()
+        rows_ = []
+        mb = marker.encode("utf-8")
+
+        def has_marker(p: Path) -> bool:
+            try:
+                with open(p, "rb") as fh:
+                    return mb in fh.read(8192)
+            except Exception:
+                return False
+
+        with ThreadPoolExecutor(max_workers=16) as ex:
+            for p, ok in zip(md_files, ex.map(has_marker, md_files)):
+                if ok:
+                    rows_.append((now, p.stem))
+        c.executemany(
+            "UPDATE cases SET status='done', detail='seeded:marker', updated_at=? "
+            "WHERE stem=? AND status='pending' AND attempts=0", rows_)
+        c.commit()
+        return len(rows_)
+
+    def claim(self, stem, stale_seconds, max_attempts):
+        c = self._conn()
+        now = time.time()
+        cur = c.execute(
+            "UPDATE cases SET status='running', attempts=attempts+1, updated_at=? "
+            "WHERE stem=? AND attempts<? AND (status IN ('pending','failed','stalled') "
+            "OR (status='running' AND updated_at<?))",
+            (now, stem, max_attempts, now - stale_seconds))
+        c.commit()
+        return cur.rowcount == 1
+
+    def finish(self, stem, status, detail=""):
+        c = self._conn()
+        c.execute("UPDATE cases SET status=?, detail=?, updated_at=? WHERE stem=?",
+                  (status, str(detail)[:300], time.time(), stem))
+        c.commit()
+
+    def reset_stale(self, stale_seconds):
+        c = self._conn()
+        now = time.time()
+        cur = c.execute(
+            "UPDATE cases SET status='stalled', updated_at=? "
+            "WHERE status='running' AND updated_at<?",
+            (now, now - stale_seconds))
+        c.commit()
+        return cur.rowcount
+
+    def counts(self, max_attempts=3):
+        c = self._conn()
+        by_status = dict(c.execute("SELECT status, COUNT(*) FROM cases GROUP BY status").fetchall())
+        row = c.execute(
+            "SELECT COUNT(*) FROM cases WHERE status IN ('pending','stalled','running') "
+            "OR (status='failed' AND attempts<?)", (max_attempts,)).fetchone()
+        return by_status, int(row[0])
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default=os.environ.get("DB_HOST", ""))
@@ -634,6 +737,13 @@ def main(argv=None) -> int:
     ap.add_argument("--shard-index", type=int, default=0,
                     help="分片序号（从 0 开始）；多进程并发时各进程处理互不重叠的子集")
     ap.add_argument("--shard-count", type=int, default=1, help="分片总数")
+    ap.add_argument("--state-db", default=None,
+                    help="SQLite WAL 状态账本路径（默认 <out>/_form_attach_state.sqlite3）")
+    ap.add_argument("--no-state-db", action="store_true", help="禁用状态账本（不保证跨进程幂等）")
+    ap.add_argument("--max-attempts", type=int, default=3, help="单案号最大处理尝试次数")
+    ap.add_argument("--stale-seconds", type=int, default=1800,
+                    help="running 超过该秒数视为中断，允许被重新抢占")
+    ap.add_argument("--no-seed", action="store_true", help="不把已有回填标记块的 md 预置为 done")
     args = ap.parse_args(argv)
 
     if not (args.host and args.user and args.password):
@@ -670,6 +780,16 @@ def main(argv=None) -> int:
         md_files = md_files[:args.limit]
     print("待回填 md：%d 个" % len(md_files), flush=True)
 
+    state = None
+    if not args.no_state_db:
+        state = StateDB(Path(args.state_db) if args.state_db else out_dir / "_form_attach_state.sqlite3")
+        state.reset_stale(args.stale_seconds)
+        state.register([p.stem for p in md_files])
+        if not args.no_seed:
+            n_seeded = state.seed_done(md_files, MARK_BEGIN)
+            if n_seeded:
+                print("账本预置 done（已有回填标记块）：%d" % n_seeded, flush=True)
+
     pool = ConnPool(args, max(2, args.workers))
     t0 = time.time()
     stats_lock = threading.Lock()
@@ -685,11 +805,18 @@ def main(argv=None) -> int:
         stem = md_path.stem
         try:
             if args.skip_existing:
-                head = md_path.read_text(encoding="utf-8")[:4000]
+                with open(md_path, "rb") as fh:
+                    head = fh.read(8192).decode("utf-8", "replace")
                 if MARK_BEGIN in head:
                     with stats_lock:
                         totals["skipped"] += 1
+                    if state is not None:
+                        state.finish(stem, "done", "skip-existing")
                     return
+            if state is not None and not state.claim(stem, args.stale_seconds, args.max_attempts):
+                with stats_lock:
+                    totals["skipped"] += 1
+                return
             with pool.acquire() as conn:
                 cur = conn.cursor()
                 r = rows(cur, "SELECT requestid, requestmark, workflowid FROM workflow_requestbase WHERE requestmark=%s" % esc(stem))
@@ -698,12 +825,16 @@ def main(argv=None) -> int:
                 if not r:
                     with stats_lock:
                         totals["no_mark"] += 1
+                    if state is not None:
+                        state.finish(stem, "nomark", "no requestmark")
                         err_rows.append([stem, "lookup", "数据库无对应 requestmark"])
                     return
                 req = r[0]
                 mark = req["requestmark"] or stem
                 block, st = render_case(cur, mark, req, out_dir, fetcher)
                 action = patch_md(md_path, block)
+                if state is not None:
+                    state.finish(stem, "done", action)
                 with stats_lock:
                     totals["done"] += 1
                     totals[action] = totals.get(action, 0) + 1
@@ -714,6 +845,11 @@ def main(argv=None) -> int:
         except Exception as e:
             with stats_lock:
                 err_rows.append([stem, "work", repr(e)[:300]])
+            if state is not None:
+                try:
+                    state.finish(stem, "failed", repr(e)[:300])
+                except Exception:
+                    pass
             try:
                 conn.rollback()  # noqa
             except Exception:
