@@ -631,6 +631,9 @@ def main(argv=None) -> int:
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--skip-existing", action="store_true", help="跳过已有回填标记的 md（断点续跑）")
     ap.add_argument("--no-download", action="store_true", help="附件只出远端链接，不下载")
+    ap.add_argument("--shard-index", type=int, default=0,
+                    help="分片序号（从 0 开始）；多进程并发时各进程处理互不重叠的子集")
+    ap.add_argument("--shard-count", type=int, default=1, help="分片总数")
     args = ap.parse_args(argv)
 
     if not (args.host and args.user and args.password):
@@ -658,6 +661,11 @@ def main(argv=None) -> int:
         want = set(args.requestmark)
         md_files = [p for p in md_files if p.stem in want]
     md_files.sort()
+    if args.shard_count > 1:
+        if not (0 <= args.shard_index < args.shard_count):
+            print("shard-index 必须在 [0, shard-count) 内", file=sys.stderr)
+            return 2
+        md_files = md_files[args.shard_index::args.shard_count]
     if args.limit:
         md_files = md_files[:args.limit]
     print("待回填 md：%d 个" % len(md_files), flush=True)
@@ -667,8 +675,9 @@ def main(argv=None) -> int:
     stats_lock = threading.Lock()
     totals = {"done": 0, "replaced": 0, "inserted": 0, "skipped": 0, "no_mark": 0,
               "fields": 0, "attach_total": 0, "attach_ok": 0, "attach_fail": 0, "detail_rows": 0}
-    err_path = out_dir / "_form_attach_errors.csv"
-    rep_path = out_dir / "_form_attach_report.csv"
+    shard_tag = ("_s%d" % args.shard_index) if args.shard_count > 1 else ""
+    err_path = out_dir / ("_form_attach_errors%s.csv" % shard_tag)
+    rep_path = out_dir / ("_form_attach_report%s.csv" % shard_tag)
     err_rows: list[list] = []
     rep_rows: list[list] = []
 
