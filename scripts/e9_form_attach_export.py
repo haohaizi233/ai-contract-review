@@ -120,6 +120,12 @@ def clean_html(s) -> str:
     return "\n".join(ln for ln in lines if ln != "")
 
 
+def looks_like_html_error(data: bytes) -> bool:
+    """FileDownload 鉴权失败/异常时返回 HTML 页面而非文件，识别之避免伪装落盘。"""
+    s = data.lstrip()[:200].lower()
+    return s.startswith(b"<!doctype") or s.startswith(b"<html") or s.startswith(b"<head")
+
+
 def fs_name(s: str) -> str:
     return INVALID_FS_CHARS.sub("_", s).strip() or "_"
 
@@ -345,7 +351,6 @@ class AttachFetcher:
 
     def remote_url(self, fileid) -> str:
         return self.oa_base + "/weaver/weaver.file.FileDownload?fileid=" + str(fileid)
-
     def fetch(self, mark_dir_name: str, fileid, orig_name: str, size_hint) -> dict:
         """返回 {ok, relpath, name, size, url}；relpath 为 md 相对路径。"""
         url = self.remote_url(fileid)
@@ -357,10 +362,14 @@ class AttachFetcher:
             return {"ok": True, "relpath": None, "name": orig_name or fname,
                     "size": size_hint, "url": url, "remote_only": True}
         if target.exists() and target.stat().st_size > 0:
-            with self._lock:
-                self.skipped += 1
-            return {"ok": True, "relpath": rel, "name": orig_name or fname,
-                    "size": target.stat().st_size, "url": url, "remote_only": False}
+            with open(target, "rb") as fh:
+                head = fh.read(300)
+            if not looks_like_html_error(head):
+                with self._lock:
+                    self.skipped += 1
+                return {"ok": True, "relpath": rel, "name": orig_name or fname,
+                        "size": target.stat().st_size, "url": url, "remote_only": False}
+            target.unlink()  # 历史遗留的 HTML 错误页伪装文件，删掉重新下载
         data = b""
         for attempt in range(3):
             try:
@@ -377,7 +386,7 @@ class AttachFetcher:
             if len(data) >= 32:
                 break
             time.sleep(1.0 * (attempt + 1))
-        if len(data) >= 32:
+        if len(data) >= 32 and not looks_like_html_error(data):
             target.parent.mkdir(parents=True, exist_ok=True)
             tmp = target.with_suffix(target.suffix + ".part")
             tmp.write_bytes(data)
@@ -389,7 +398,8 @@ class AttachFetcher:
         with self._lock:
             self.failed += 1
         return {"ok": False, "relpath": None, "name": orig_name or fname,
-                "size": size_hint, "url": url, "remote_only": False}
+                "size": size_hint, "url": url, "remote_only": False,
+                "error": "html-error-page" if (len(data) >= 32 and looks_like_html_error(data)) else "empty"}
 
 
 # ---------------- 表单渲染 ----------------
