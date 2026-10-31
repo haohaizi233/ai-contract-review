@@ -1,4 +1,4 @@
-# Flowable Database Schema | Flowable Enterprise Documentation
+﻿# Flowable Database Schema | Flowable Enterprise Documentation
 
 The Flowable engines tables follow a common naming pattern\. Each pattern for each engine is described in detail below\.
 

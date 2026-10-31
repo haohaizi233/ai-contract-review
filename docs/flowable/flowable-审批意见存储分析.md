@@ -133,7 +133,8 @@ ORDER BY t.END_TIME_;
 | `db-scripts/flowable.engine.postgres.all.create.sql` | 官方 db-scripts 2026.1 | PostgreSQL 版 |
 | `flowable.h2.create.history.sql` / `flowable.h2.create.engine.sql` | flowable-engine 仓库（GitHub） | H2 精简版建表 |
 | `flowable-db-schema-overview.md` | documentation.flowable.com | 官方数据库表体系说明（GE/RU/HI/RE、FLW_ 系列） |
-| `flowable-history-tables.md` | documentation.flowable.com | 历史表清单（页面为图片版字段图） |
+| `flowable-history-tables.md` | documentation.flowable.com | 历史表清单（**字段结构图为图片**） |
+| `images/act_hi_*.png`（11 张） | documentation.flowable.com | 各历史表字段结构图（含 `act_hi_comment.png` 意见表），已本地化引用 |
 | `nutflow-flowable-tables.md` | docs.nutflow.vip | 中文表结构对照（含"ACT_HI_COMMENT=审批意见"结论） |
 | `CommentEntityImpl.java` | flowable-engine 仓库（GitHub） | 评论实体字段与表列的映射依据 |
 | `HistoricTaskLogEntryType.java` | flowable-engine 仓库（GitHub） | ACT_HI_TSK_LOG 事件类型枚举（TYPE_ 取值） |
