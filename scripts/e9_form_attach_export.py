@@ -709,6 +709,21 @@ class StateDB:
         c.commit()
         return cur.rowcount
 
+    def reset_running(self, stems=None):
+        """把 running 还原为 stalled：守护进程启动/重启 worker 时这些任务已无归属。"""
+        c = self._conn()
+        now = time.time()
+        before = c.total_changes
+        if stems is None:
+            c.execute("UPDATE cases SET status='stalled', updated_at=? WHERE status='running'",
+                      (now,))
+        else:
+            c.executemany(
+                "UPDATE cases SET status='stalled', updated_at=? WHERE stem=? AND status='running'",
+                [(now, s) for s in stems])
+        c.commit()
+        return c.total_changes - before
+
     def counts(self, max_attempts=3):
         c = self._conn()
         by_status = dict(c.execute("SELECT status, COUNT(*) FROM cases GROUP BY status").fetchall())

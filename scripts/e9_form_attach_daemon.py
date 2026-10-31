@@ -48,17 +48,17 @@ def main(argv=None) -> int:
     state_db = Path(args.state_db) if args.state_db else out_dir / "_form_attach_state.sqlite3"
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from e9_form_attach_export import StateDB  # noqa: E402
+    from e9_form_attach_export import MARK_BEGIN, StateDB  # noqa: E402
 
     state = StateDB(state_db)
-    n_stale = state.reset_stale(args.stale_seconds)
-    if n_stale:
-        print("[daemon] 还原中断条目 stalled=%d" % n_stale, flush=True)
+    md_all = sorted(p for p in out_dir.rglob("*.md") if not p.name.startswith("_"))
+    shard_stems = [[p.stem for p in md_all[i::args.procs]] for i in range(args.procs)]
+    n_reset = state.reset_running()
+    if n_reset:
+        print("[daemon] 启动接管：running -> stalled %d 条（上次中断任务可续跑）" % n_reset, flush=True)
     if not args.no_seed:
-        md_files = [p for p in out_dir.rglob("*.md") if not p.name.startswith("_")]
-        state.register([p.stem for p in md_files])
-        from e9_form_attach_export import MARK_BEGIN  # noqa: E402
-        n_seeded = state.seed_done(md_files, MARK_BEGIN)
+        state.register([p.stem for p in md_all])
+        n_seeded = state.seed_done(md_all, MARK_BEGIN)
         print("[daemon] 账本预置 done（已有回填标记块）：%d" % n_seeded, flush=True)
 
     py = sys.executable
@@ -109,7 +109,9 @@ def main(argv=None) -> int:
                 if remaining > 0 and restarts[i] < args.max_restarts:
                     print("[daemon] shard %d 退出(rc=%s)，自动重启（第 %d 次）"
                           % (i, rc, restarts[i] + 1), flush=True)
-                    state.reset_stale(args.stale_seconds)
+                    n_r = state.reset_running(shard_stems[i])
+                    if n_r:
+                        print("[daemon] shard %d 回收孤儿任务 %d 条" % (i, n_r), flush=True)
                     spawn(i)
                     restarts[i] += 1
                 elif remaining > 0:
