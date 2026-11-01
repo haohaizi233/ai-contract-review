@@ -71,9 +71,13 @@ downloadFile: function (url, method, params) {
 - `fetch('/weaver/weaver.file.FileDownload?fileid=290754')` → 200 + `text/html`，235B 登录跳转脚本；
 - 登录页字段：登录名/手机号码 + 登录密码 + **验证码**（人工登录不可省略）。
 
-## 5. 待登录后补全/验证
+## 5. 鉴权结论（2026-11-01 实测，详见 `docs/ops/e9-附件下载权限与假文件诊断.md`）
 
-- [ ] 人工登录后验证 `document.cookie`/`localStorage.access_token` 的实际形态；
-- [ ] 若 `access_token` 可用于 FileDownload，即可免 Cookie 批量下载；
-- [ ] 登录后按上述 `download` 逻辑（GET FileDownload?fileid=N）批量并发落盘附件；
-- [ ] 抓取登录后才加载的 workflow/form 模块 bundle，补充表单附件下载的 URL 构造细节。
+- [x] 登录后验证 Cookie 形态：`ecology_JSessionid`/`JSESSIONID`/`loginidweaver` 等 6 个字段，
+      均 HttpOnly（`extloginid` 除外），JS 读不到；用 `scripts/e9_cookie_cdp.py --port 9222` 经 CDP 取；
+- [x] `localStorage.access_token` 在本部署中**不存在**，免 Cookie 通道不可用；
+- [x] 纯 GET FileDownload?fileid=N + Cookie 对**无权限文件**返回 21181B
+      "对不起，您暂时没有权限！"整页（区别于未登录的 235B 登录跳转页），已拒绝入库；
+- [x] authStr 签名 URL 取不到：流程详情页对当前账号直接"网页出现异常"（无查看权限）；
+- [ ] 换有权限账号（或给 3426 授权）后重跑：`e9_attach_repair.py --apply --reset-ledger`
+      清假文件+账本重置，再跑守护进程续传重下。
