@@ -558,7 +558,14 @@ def render_case(cur, mark: str, req: dict, out_dir: Path, fetcher: AttachFetcher
             f = META.pick_field(info, col, "text", val)
             if not f or f["fieldhtmltype"] != "6":
                 continue
-            for fid in re.findall(r"\d+", str(val)):
+            s = str(val).strip()
+            # 附件字段的值应为逗号分隔的 imagefileid（如 "123,456"）。
+            # 非此形态的值（夹杂文件名/文本）整值跳过：否则 re.findall 会把
+            # 文本里的数字误当 fileid，产生错误关联（历史 bug 来源之一）。
+            if not re.match(r"^\d+(\s*,\s*\d+)*$", s):
+                stats["attach_value_skipped"] = stats.get("attach_value_skipped", 0) + 1
+                continue
+            for fid in re.findall(r"\d+", s):
                 yield f["label"], int(fid)
 
     att_items = []
