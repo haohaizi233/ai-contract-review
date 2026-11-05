@@ -43,9 +43,12 @@ config/company_profile.local.json
 Thumbs.db
 .DS_Store
 
-# 本地排查/运行日志临时文件（含案号明细，仅留本机）
+# 鏈湴鎺掓煡/杩愯鏃ュ織涓存椂鏂囦欢锛堝惈妗堝彿鏄庣粏锛屼粎鐣欐湰鏈猴級
 /_*.txt
 /_*.log
 /_*.py
 /_test_fix/
 
+# IDE & Tooling
+.idea/
+.workbuddy/
