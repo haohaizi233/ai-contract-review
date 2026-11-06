@@ -240,6 +240,22 @@ def generate_html(data_obj):
   <title>AI合同分类与78套标准模板 · 五级知识图谱与决策树</title>
   <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
   <style>
+    :root {{
+      --background: #f8fafc;
+      --card: #ffffff;
+      --foreground: #0f172a;
+      --muted-foreground: #64748b;
+      --border: #e2e8f0;
+    }}
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --background: #0f172a;
+        --card: #1e293b;
+        --foreground: #f8fafc;
+        --muted-foreground: #94a3b8;
+        --border: #334155;
+      }}
+    }}
     * {{ box-sizing: border-box; }}
     .no-scrollbar::-webkit-scrollbar {{ display: none; }}
     .no-scrollbar {{ -ms-overflow-style: none; scrollbar-width: none; }}
