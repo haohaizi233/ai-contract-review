@@ -159,6 +159,16 @@ def test_external_login_logo_is_not_oa_auth_failure(tmp_path):
     assert not store.auth_failed.is_set()
 
 
+def test_wrong_sized_attachment_is_not_counted_as_valid(tmp_path):
+    from tender_case_quality import OldResources
+    store = OldResources(tmp_path, tmp_path / 'out', 'http://oa.test')
+    f = tmp_path / 'short.bin'; f.write_bytes(b'no rights')
+    url = 'http://oa.test/weaver/weaver.file.FileDownload?fileid=99'
+    store.index[url] = {'path': str(f)}
+    store.file_sizes[url] = 1000
+    assert store.lookup(url, image=False)[0] is None
+
+
 if __name__ == '__main__':
     import tempfile
     test_process_sources_do_not_duplicate_instance()
@@ -176,4 +186,5 @@ if __name__ == '__main__':
         test_mapped_requests_are_loaded_before_cache_coverage(Path(tmp))
         test_external_fileid_cannot_reuse_oa_image(Path(tmp))
         test_external_login_logo_is_not_oa_auth_failure(Path(tmp))
-    print('14 quality regression tests passed')
+        test_wrong_sized_attachment_is_not_counted_as_valid(Path(tmp))
+    print('15 quality regression tests passed')

@@ -355,7 +355,7 @@ class Ctx:
     pass
 
 
-def load_mysql(db, prog, apply_filter, limit):
+def load_mysql(db, prog, apply_filter, limit, min_year=2024):
     ctx = Ctx()
     ctx.cols = Cols(db)
     prog.detail(0, "用户 / 部门")
@@ -369,6 +369,18 @@ def load_mysql(db, prog, apply_filter, limit):
         applies = db.q(sql + " ORDER BY id", list(apply_filter))
     else:
         applies = db.q(sql + " ORDER BY id")
+    if min_year:
+        filtered = []
+        for a in applies:
+            sdate = a.get("signing_date")
+            yr = sdate.year if sdate else None
+            if not yr:
+                m = re.search(r"20(\d{2})", a.get("contract_no") or "")
+                if m:
+                    yr = int("20" + m.group(1))
+            if yr is None or yr >= min_year:
+                filtered.append(a)
+        applies = filtered
     if limit:
         applies = pick_sample(applies, limit)
     ctx.applies = applies
@@ -699,6 +711,9 @@ def resolve_file(ctx, oa, a, fid):
         elif local:
             r["local"] = os.path.join(OLD_ATTACH, local)
             r["status"] = "旧库附件已落盘"
+            if r['size'].isdigit() and int(r['size']) and os.path.getsize(r['local']) != int(r['size']):
+                r['status'] += '·大小不符'
+                r['gap'] = '旧附件实际大小与旧库记录不一致；保留本地文件供核验'
         elif meta:
             r["status"] = "旧库附件未落盘"
             r["gap"] = "旧 E9 附件尚未获取：" + error
@@ -1451,6 +1466,8 @@ def main():
     ap = argparse.ArgumentParser(description="新库三件套 → 每案一份 Markdown")
     ap.add_argument("--limit", type=int, default=0, help="小批样本数量（按形态分层抽样）")
     ap.add_argument("--apply-id", action="append", default=[], help="只导出指定申请 ID（可多次）")
+    ap.add_argument('--scope-index', help='按现有索引中的申请ID精确限定重建范围，仍输出正式索引')
+    ap.add_argument("--min-year", type=int, default=2024, help="最小年份（默认 2024，过滤 2024 以前的数据；传 0 表示不过滤）")
     ap.add_argument("--workers", type=int, default=32, help="补抓并发")
     ap.add_argument("--no-fetch", action="store_true", help="不补抓附件/图片")
     ap.add_argument("--retry-404", action="store_true", help="对 fullsync 已判 404 的文件也重试")
@@ -1477,7 +1494,17 @@ def main():
     try:
         prog.step(0, "running")
         db = MySQL(env)
-        ctx = load_mysql(db, prog, args.apply_id, args.limit)
+        scope_ids = args.apply_id
+        if args.scope_index:
+            if args.apply_id or args.limit:
+                raise ValueError('--scope-index 不与 --apply-id/--limit 混用')
+            with open(args.scope_index, encoding='utf-8-sig', newline='') as scope:
+                scope_ids = list(dict.fromkeys(row['申请ID'] for row in csv.DictReader(scope)))
+            if not scope_ids or not all(x.isdigit() for x in scope_ids):
+                raise ValueError('范围索引为空或申请ID无效')
+        ctx = load_mysql(db, prog, scope_ids, args.limit, 0 if args.scope_index else args.min_year)
+        if args.scope_index and {sval(a['id']) for a in ctx.applies} != set(scope_ids):
+            raise ValueError('范围索引中的部分申请不存在或已删除，停止以免静默丢案')
         ctx.old_resources = OldResources(ROOT, OUT, OA_BASE)
         ctx.fetch_result = {}
         prog.step(0, "done")
@@ -1489,6 +1516,7 @@ def main():
         else:
             prog.step(1, "running")
             oa = load_oa(env, ctx, prog, args.refresh_oa)
+            ctx.old_resources.file_sizes = {OA_BASE + '/weaver/weaver.file.FileDownload?fileid=' + str(fid): int(r.get('filesize') or 0) for fid, r in oa['images'].items()}
             prog.step(1, "done")
             print("[oa] %s" % prog.steps[1]["detail"], flush=True)
 

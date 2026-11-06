@@ -91,6 +91,12 @@ def image_sources(body):
     return [m.group(2) for m in re.finditer(r'''<img\b[^>]*?\bsrc\s*=\s*(["'])(.*?)\1''', body, re.I | re.S)] + re.findall(r'!\[[^\]]*\]\(([^)\s]+)\)', body)
 
 
+def resource_error(message):
+    if 'cannot identify image file' in message:
+        return '源站响应不是有效图片，未保存；可能为错误页或无权访问'
+    return message
+
+
 class OldResources:
     def __init__(self, root, out, oa_base):
         self.root, self.out, self.base = Path(root), Path(out), oa_base
@@ -108,6 +114,7 @@ class OldResources:
         self.auth_failed = threading.Event()
         self.network_failures = {}
         self.network_lock = threading.Lock()
+        self.file_sizes = {}
 
     def absolute(self, url):
         return urllib.parse.urljoin(self.base + '/', html.unescape(url))
@@ -116,15 +123,19 @@ class OldResources:
         url = self.absolute(url)
         fid = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get('fileid', [''])[0]
         parsed, origin = urllib.parse.urlsplit(url), urllib.parse.urlsplit(self.base)
+        expected = self.file_sizes.get(url)
         if (parsed.scheme, parsed.netloc) == (origin.scheme, origin.netloc) and parsed.path.lower() == '/weaver/weaver.file.filedownload' and fid and re.fullmatch(r'[a-zA-Z0-9]+', fid):
             candidate = self.root / 'data/e9-opinion-export/images' / (fid + '.png')
-            if (valid_image(candidate) if image else valid_file(candidate)):
+            if (valid_image(candidate) if image else valid_file(candidate)) and (image or not expected or candidate.stat().st_size == expected):
                 return str(candidate), ''
         r = self.index.get(url, {})
         p = r.get('path')
+        expected = self.file_sizes.get(url)
+        if p and not image and expected and Path(p).exists() and Path(p).stat().st_size != expected:
+            return None, '文件大小与旧库元数据不符，未计入有效附件'
         if p and (valid_image(p) if image else valid_file(p)):
             return p, ''
-        return None, r.get('error', '尚未获取')
+        return None, resource_error(r.get('error', '尚未获取'))
 
     def fetch(self, job):
         url, image = job
@@ -180,6 +191,9 @@ class OldResources:
             else:
                 if not data or prefix.lstrip().startswith((b'<html', b'<!doctype html', b'<script')):
                     raise ValueError('旧 OA 返回空内容或 HTML 错误页，未保存为附件')
+                expected = self.file_sizes.get(url)
+                if expected and len(data) != expected:
+                    raise ValueError('文件大小与旧库元数据不符：实际 %d / 数据库 %d，未保存' % (len(data), expected))
                 extension = 'bin'
             p = self.dir / (hashlib.sha256(url.encode()).hexdigest() + '.' + extension)
             temp = str(p) + '.part'
@@ -187,7 +201,7 @@ class OldResources:
             os.replace(temp, p)
             return url, {'path': str(p), 'session': self.session}, 'ok'
         except Exception as error:
-            message = str(error)
+            message = resource_error(str(error))
             if any(x in message.lower() for x in ('timed out', 'timeout', '10060', '10061', 'name resolution', 'getaddrinfo', '超过60秒')):
                 with self.network_lock:
                     hostname = urllib.parse.urlsplit(url).netloc
