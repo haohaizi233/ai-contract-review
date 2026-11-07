@@ -83,6 +83,9 @@ RAG_GOLDEN = [
     ),
 ]
 
+# 明确命名版本：30条广泛业务评估查询集
+EVALUATE_30_BROAD_BUSINESS: list[tuple[str, str, list[str]]] = RAG_GOLDEN
+
 K_LIST = [1, 3, 5, 8]
 
 LABEL_ALIASES: dict[str, set[str]] = {

@@ -28,7 +28,8 @@ reports/contract-kb/*
 !reports/contract-kb/contract-review-evaluation.md
 !reports/contract-kb/llm-e2e-evidence.json
 # 测试语料（合成样本由 contract_kb.synthetic/golden 运行时生成；真实语料受控不入库）
-tests/fixtures/
+tests/fixtures/*
+!tests/fixtures/evaluation_synthetic/
 
 # 运行时上传的待审合同
 data/contract-kb/upload/

@@ -153,6 +153,9 @@ GOLDEN_QUERIES: list[GoldenQuery] = [
     ),
 ]
 
+# 明确命名版本：15条困难负样本基准查询集
+BENCHMARK_15_HARD_NEGATIVE: list[GoldenQuery] = GOLDEN_QUERIES
+
 
 @dataclass
 class GoldenDoc:

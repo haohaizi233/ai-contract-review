@@ -1,0 +1,36 @@
+{
+  "manifest": {
+    "dataset_id": "eval_synthetic_v1",
+    "dataset_version": "1.0.0",
+    "provenance_tier": "SYNTHETIC",
+    "split": "test",
+    "qrels_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "authorization_reference": "INTERNAL_SYNTHETIC_REGRESSION"
+  },
+  "queries": [
+    {
+      "qid": "SYN_Q01",
+      "query": "逾期付款违约金比例",
+      "qrels": {
+        "doc1_clause1": 2,
+        "doc1_clause2": 1,
+        "doc2_clause5": 2
+      }
+    },
+    {
+      "qid": "SYN_Q02",
+      "query": "争议管辖法院条款",
+      "qrels": {
+        "doc3_clause8": 2
+      }
+    },
+    {
+      "qid": "SYN_Q03",
+      "query": "保密义务与违约责任",
+      "qrels": {
+        "doc4_clause3": 2,
+        "doc4_clause4": 1
+      }
+    }
+  ]
+}
