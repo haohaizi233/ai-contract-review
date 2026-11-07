@@ -3,6 +3,7 @@
 
 安全校验（§14）：扩展名/MIME/文件大小/ZIP 结构与解压边界（若提供 ZIP）。
 DOCX 按 OOXML 纯 XML 解析，绝不触发宏或外部链接。
+支持全量 78 套标准模板子文件夹递归扫描，并将 template_id 绑定为标准模板编号 (MB...)。
 """
 
 from __future__ import annotations
@@ -159,12 +160,14 @@ class ImportedDoc:
 
 
 def import_template_file(path: Path) -> tuple[ImportedDoc | None, str | None]:
-    """导入单个模板文件。返回 (记录, 错误原因)。"""
+    """导入单个模板文件。优先从文件名中提取标准模板编号 (MB...)。"""
     sec = security_check_file(path)
     if not sec.passed:
         return None, sec.rejected_reason
     try:
-        parsed = parse_docx(path)
+        tcode_m = re.search(r"MB\d{11}", path.name)
+        doc_id = tcode_m.group(0) if tcode_m else None
+        parsed = parse_docx(path, document_id=doc_id)
     except Exception as e:  # 解析失败不静默丢弃
         return None, f"parse_error: {type(e).__name__}: {e}"
 
@@ -212,7 +215,7 @@ def import_template_file(path: Path) -> tuple[ImportedDoc | None, str | None]:
         source_file=path.name,
         file_size=parsed.file_size,
         sha256=parsed.source_hash,
-        document_type="contract_template",
+        document_type="contract_template" if "合同编号制度" not in path.name else "governance_doc",
         paragraph_count=parsed.paragraph_count,
         table_count=parsed.table_count,
         category=cls.category,
@@ -233,14 +236,12 @@ def import_template_file(path: Path) -> tuple[ImportedDoc | None, str | None]:
 
 
 def scan_and_import(template_dir: Path) -> dict:
-    """扫描目录（兼容直接目录或 ZIP 落盘目录），返回导入结果包。
-
-    仅处理允许扩展名（.docx）；其他文件记录为 skipped 而非失败。
-    """
+    """递归扫描目录（支持子分类目录或直接目录），返回导入结果包。"""
     from . import config as _cfg
 
+    # 递归扫描所有 .docx 文件，忽略以 ~ 开头的 Word 临时锁文件
     all_files = sorted(
-        p for p in template_dir.iterdir() if p.is_file() and not p.name.startswith("~")
+        p for p in template_dir.rglob("*.docx") if p.is_file() and not p.name.startswith("~")
     )
     files = [p for p in all_files if p.suffix.lower() in _cfg.ALLOWED_EXT]
     skipped = [p.name for p in all_files if p.suffix.lower() not in _cfg.ALLOWED_EXT]
