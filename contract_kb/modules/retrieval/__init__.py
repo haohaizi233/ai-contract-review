@@ -9,11 +9,21 @@ from .governance import (
     KnowledgeSourceType,
     KnowledgeTrustDescriptor,
 )
+from .hierarchy import (
+    ChunkGranularity,
+    ClauseNode,
+    HierarchicalKnowledgeTree,
+)
 from .query_planner import (
     ContractAwareQueryPlanner,
     NumericConstraint,
     QueryPlanningBudget,
     RetrievalIntent,
+)
+from .relations import (
+    LegalRelation,
+    LegalRelationExtractor,
+    LegalRelationType,
 )
 from .reranker import (
     HttpCrossEncoderReranker,
@@ -24,16 +34,22 @@ from .reranker import (
 from .service import GovernedRetrievalBundle, GovernedRetrievalService
 
 __all__ = [
+    "ChunkGranularity",
     "CitationVerificationSummary",
     "CitationVerifier",
+    "ClauseNode",
     "ContractAwareQueryPlanner",
     "GovernedRetrievalBundle",
     "GovernedRetrievalService",
+    "HierarchicalKnowledgeTree",
     "HttpCrossEncoderReranker",
     "KnowledgeGovernancePolicy",
     "KnowledgeLifecycleStatus",
     "KnowledgeSourceType",
     "KnowledgeTrustDescriptor",
+    "LegalRelation",
+    "LegalRelationExtractor",
+    "LegalRelationType",
     "LexicalCoverageReranker",
     "NumericConstraint",
     "QueryPlanningBudget",
