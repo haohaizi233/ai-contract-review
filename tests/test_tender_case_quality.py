@@ -145,6 +145,9 @@ def test_transient_error_cache_is_retryable(tmp_path):
 
 
 def test_mapped_requests_are_loaded_before_cache_coverage(tmp_path):
+    import pytest
+
+    pytest.importorskip("pytds")
     import pickle
     from types import SimpleNamespace
     from unittest.mock import patch
