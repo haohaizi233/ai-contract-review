@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
 import uuid
 from pathlib import Path
@@ -24,6 +25,8 @@ from ..security.idempotency import (
     compute_request_fingerprint,
 )
 from ...modules.rules import RuleRegistry
+from .checkpoints import CheckpointStore, ExecutionCheckpoint
+from .contracts import ExecutionManifest
 from .deadline import CancelToken, ExecutionDeadline
 from .stages import (
     ClassifyStage,
@@ -58,6 +61,7 @@ class ReviewPipeline:
     ):
         self.storage = storage
         self.registry = registry or RuleRegistry(include_defaults=True)
+        self.checkpoint_store = CheckpointStore(self.storage)
         self.stages: list[ReviewStage] = stages or [
             ReceiveStage(llm_status_fn=llm_status_fn),
             ValidateStage(),
@@ -108,6 +112,17 @@ class ReviewPipeline:
     def _execute_single_stage(
         self, stage: ReviewStage, ctx: PipelineContext, attempt: int
     ) -> ReviewResult | None:
+        if stage.stage_name in ctx.resume_completed_stages:
+            if stage.stage_name == "Parse" and ctx.parsed_record is None:
+                stage.execute(ctx)
+            elif stage.stage_name == "Classify" and not ctx.category:
+                stage.execute(ctx)
+            elif stage.stage_name == "SelectTemplate" and ctx.matched_template is None:
+                stage.execute(ctx)
+            elif stage.stage_name == "ExtractFields" and not ctx.extracted_fields:
+                stage.execute(ctx)
+            return None
+
         deadline = ctx.get_deadline()
         cancel_token = ctx.get_cancel_token()
 
@@ -154,6 +169,20 @@ class ReviewPipeline:
             started_at=t0_wall,
         )
 
+        manifest_h = getattr(ctx, "manifest_hash", "default")
+        in_hash = hashlib.sha256(f"{ctx.task_id}:{stage.stage_name}".encode("utf-8")).hexdigest()[:16]
+        if ctx.task_id:
+            self.checkpoint_store.save_checkpoint(
+                ExecutionCheckpoint(
+                    task_id=ctx.task_id,
+                    stage_name=stage.stage_name,
+                    stage_order=stage.stage_order,
+                    input_hash=in_hash,
+                    manifest_hash=manifest_h,
+                    status="RUNNING",
+                )
+            )
+
         try:
             detail = stage.execute(ctx)
             stage_rec.task_id = ctx.task_id
@@ -165,6 +194,18 @@ class ReviewPipeline:
             stage_rec.detail = detail or {}
             ctx.stage_records.append(stage_rec)
             self._persist_stage(ctx, stage_rec)
+            if ctx.task_id:
+                self.checkpoint_store.save_checkpoint(
+                    ExecutionCheckpoint(
+                        task_id=ctx.task_id,
+                        stage_name=stage.stage_name,
+                        stage_order=stage.stage_order,
+                        input_hash=in_hash,
+                        manifest_hash=manifest_h,
+                        output_snapshot=detail or {},
+                        status="COMPLETED",
+                    )
+                )
 
             if cancel_token.is_cancelled() or self._check_cancelled(ctx):
                 self._record_terminal_task(ctx, "CANCELLED", "cancelled_during_stage_execution")
@@ -274,6 +315,26 @@ class ReviewPipeline:
         deadline = ExecutionDeadline(timeout_seconds=float(timeout_seconds), started_monotonic=start_mono)
         cancel_token = CancelToken(check_fn=lambda: bool(cancel_requested))
 
+        f_hash = ""
+        if path_obj.exists():
+            try:
+                f_hash = hashlib.sha256(path_obj.read_bytes()).hexdigest()
+            except OSError:
+                f_hash = "unreadable"
+
+        manifest = ExecutionManifest(
+            file_hash=f_hash,
+            tenant_id=effective_tenant,
+            rule_set_version=str(getattr(self.registry, "version", "builtin-v1")),
+        )
+        manifest_h = manifest.compute_manifest_fingerprint()
+
+        completed_stages: set[str] = set()
+        if resolved_task_id:
+            for cp in self.checkpoint_store.get_checkpoints(resolved_task_id):
+                if cp.status == "COMPLETED" and cp.manifest_hash == manifest_h:
+                    completed_stages.add(cp.stage_name)
+
         ctx = PipelineContext(
             docx_path=Path(docx_path),
             mode=mode,
@@ -288,7 +349,9 @@ class ReviewPipeline:
             cancel_requested=bool(cancel_requested),
             deadline=deadline,
             cancel_token=cancel_token,
+            resume_completed_stages=completed_stages,
         )
+        setattr(ctx, "manifest_hash", manifest_h)
 
         for stage in self.stages:
             attempt = prior_attempts.get(stage.stage_name, 0) + 1
