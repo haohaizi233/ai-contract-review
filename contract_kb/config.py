@@ -47,7 +47,7 @@ EMBEDDING_DIM = int(os.environ.get("CONTRACT_KB_EMBEDDING_DIM", "256"))
 # LLM 与外部模型出境控制：未显式配置时审核引擎降级为确定性审查并标 NOT_CHECKED
 LLM_PROVIDER = os.environ.get("CONTRACT_KB_LLM", "none")
 ALLOW_EXTERNAL_LLM = os.environ.get(
-    "CONTRACT_KB_ALLOW_EXTERNAL_LLM", "true"
+    "CONTRACT_KB_ALLOW_EXTERNAL_LLM", "false"
 ).strip().lower() in ("1", "true", "yes")
 
 # 认证与重放窗口配置

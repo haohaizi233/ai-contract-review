@@ -1,11 +1,17 @@
 # -*- coding: utf-8 -*-
 """知识源分类、信任边界与生命周期治理策略（Knowledge Governance Policy）。
 
-明确区分四类企业知识资产的权威等级与检索准入条件：
-1. `TEMPLATE`：经法务审定的企业现行标准合同模板条款（`ACTIVE` + `APPROVED`，权威依据）；
-2. `APPROVED_RULE`：经审批生效的确定性/语义审核规则（`APPROVED`，权威依据）；
-3. `HISTORICAL_CASE`：历史已签合同与审批案卷（**仅供参考先例**，严禁作为强制违规判定标准）；
-4. `LEGAL_REFERENCE`：外部法律法规与实务指引参考（辅助解释参考，不单独构成企业内控红线）。
+明确区分五类独立维度的企业知识资产状态：
+1. Document Lifecycle（文档生命周期）：DRAFT, ACTIVE, SUPERSEDED, ARCHIVED, DELETED
+2. Approval Workflow State（审批状态）：PENDING_REVIEW, APPROVED, REJECTED, REVOKED
+3. Knowledge Source Type（知识类型）：TEMPLATE, APPROVED_RULE, LEGAL_REFERENCE, HISTORICAL_CASE
+4. Authority Capability（权威能力）：can_drive_mandatory_finding, prompt_badge 等
+5. Effective Version（时态版本）：source_version, effective_from, source_hash 等
+
+核心原则：
+- 严格 Fail-Closed：缺失元数据坚决阻断；
+- 审批状态绝不可由文档状态 (ACTIVE)、文件名或模板类型自动推断；
+- 历史案例严禁作为强制违规依据。
 """
 
 from __future__ import annotations
@@ -22,19 +28,29 @@ class KnowledgeSourceType(str, Enum):
     LEGAL_REFERENCE = "LEGAL_REFERENCE"
 
 
-class KnowledgeLifecycleStatus(str, Enum):
+class DocumentLifecycleStatus(str, Enum):
     DRAFT = "DRAFT"
-    APPROVED = "APPROVED"
     ACTIVE = "ACTIVE"
     SUPERSEDED = "SUPERSEDED"
     ARCHIVED = "ARCHIVED"
     DELETED = "DELETED"
 
 
+# 保留别名以保证旧代码兼容性
+KnowledgeLifecycleStatus = DocumentLifecycleStatus
+
+
+class ApprovalStatus(str, Enum):
+    PENDING_REVIEW = "PENDING_REVIEW"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    REVOKED = "REVOKED"
+
+
 @dataclass(frozen=True)
 class KnowledgeTrustDescriptor:
     source_type: KnowledgeSourceType
-    authority_rank: int  # 数值越小权威度越高
+    authority_rank: int  # 数值越小权威度越高 (1: 强制规则, 2: 现行标准模板, 3: 法规参考, 4: 历史案例)
     can_drive_mandatory_finding: bool
     require_approved_status: bool
     prompt_badge: str
@@ -73,14 +89,24 @@ TRUST_MATRIX: dict[KnowledgeSourceType, KnowledgeTrustDescriptor] = {
 
 
 class KnowledgeGovernancePolicy:
-    """检索结果准入过滤与权威等级标注器。"""
+    """检索结果准入过滤与权威等级标注器（Strict Fail-Closed 零信任边界）。"""
 
     BLOCKED_DOC_STATUSES = frozenset(
         {
-            KnowledgeLifecycleStatus.DRAFT.value,
-            KnowledgeLifecycleStatus.SUPERSEDED.value,
-            KnowledgeLifecycleStatus.ARCHIVED.value,
-            KnowledgeLifecycleStatus.DELETED.value,
+            DocumentLifecycleStatus.DRAFT.value,
+            DocumentLifecycleStatus.SUPERSEDED.value,
+            DocumentLifecycleStatus.ARCHIVED.value,
+            DocumentLifecycleStatus.DELETED.value,
+        }
+    )
+
+    VALID_DOC_STATUSES = frozenset(
+        {
+            DocumentLifecycleStatus.DRAFT.value,
+            DocumentLifecycleStatus.ACTIVE.value,
+            DocumentLifecycleStatus.SUPERSEDED.value,
+            DocumentLifecycleStatus.ARCHIVED.value,
+            DocumentLifecycleStatus.DELETED.value,
         }
     )
 
@@ -91,8 +117,6 @@ class KnowledgeGovernancePolicy:
         up = str(raw).strip().upper()
         alias_map = {
             "TEMPLATE": KnowledgeSourceType.TEMPLATE,
-            "LAYER_D_RAG": KnowledgeSourceType.TEMPLATE,
-            "LAYER_A_RAW_CLAUSE": KnowledgeSourceType.TEMPLATE,
             "RULE": KnowledgeSourceType.APPROVED_RULE,
             "APPROVED_RULE": KnowledgeSourceType.APPROVED_RULE,
             "CASE": KnowledgeSourceType.HISTORICAL_CASE,
@@ -118,7 +142,7 @@ class KnowledgeGovernancePolicy:
         allow_historical_cases: bool = False,
         expected_tenant_id: str | None = None,
     ) -> bool:
-        """校验检索分块是否满足状态、审批与租户边界要求（Fail-Closed）。"""
+        """校验检索分块是否满足状态、审批与租户边界要求（Strict Fail-Closed）。"""
         raw_ktype = hit.get("knowledge_type")
         if not raw_ktype or not str(raw_ktype).strip():
             return False
@@ -127,28 +151,43 @@ class KnowledgeGovernancePolicy:
         if desc is None:
             return False
 
-        doc_status = str(hit.get("doc_status") or hit.get("status") or "ACTIVE").upper()
-        if doc_status in cls.BLOCKED_DOC_STATUSES:
+        # 1. 文档生命周期校验：必须明确存在且必须为 ACTIVE，严禁缺省默认放行 (Fail-Closed)
+        raw_doc_status = (
+            hit.get("doc_status") or hit.get("document_status") or hit.get("status")
+        )
+        if not raw_doc_status or not str(raw_doc_status).strip():
+            return False
+        doc_status = str(raw_doc_status).strip().upper()
+        if (
+            doc_status not in cls.VALID_DOC_STATUSES
+            or doc_status != DocumentLifecycleStatus.ACTIVE.value
+        ):
             return False
 
-        if expected_tenant_id is not None and hit.get("tenant_id") is not None:
-            if hit.get("tenant_id") != expected_tenant_id:
+        # 2. 租户隔离校验：若声明 expected_tenant_id，hit 必须包含明确且一致的 tenant_id (Fail-Closed)
+        if expected_tenant_id is not None:
+            hit_tenant = hit.get("tenant_id")
+            if (
+                not hit_tenant
+                or str(hit_tenant).strip() != str(expected_tenant_id).strip()
+            ):
                 return False
 
+        # 3. 历史合同通道控制
         if (
             desc.source_type == KnowledgeSourceType.HISTORICAL_CASE
             and not allow_historical_cases
         ):
             return False
 
-        # Fail-Closed 审批状态核验：若要求审批（TEMPLATE / APPROVED_RULE / LEGAL_REFERENCE）
-        # approved_status 必须明确存在且属于 APPROVED 或 ACTIVE，严禁缺省或 UNKNOWN 默认放行
-        raw_approved = hit.get("approved_status")
+        # 4. 审批状态核验：权威知识项（TEMPLATE / APPROVED_RULE / LEGAL_REFERENCE）必须明确为 APPROVED
+        # 严禁缺省、严禁 UNKNOWN、严禁将生命周期状态 "ACTIVE" 视为审批状态
         if desc.require_approved_status:
+            raw_approved = hit.get("approved_status") or hit.get("approval_status")
             if not raw_approved or not str(raw_approved).strip():
                 return False
             approved_status = str(raw_approved).strip().upper()
-            if approved_status not in {"APPROVED", "ACTIVE"}:
+            if approved_status != ApprovalStatus.APPROVED.value:
                 return False
 
         return True
@@ -163,8 +202,18 @@ class KnowledgeGovernancePolicy:
             enriched["authority_rank"] = 99
             enriched["prompt_badge"] = "[未经验证资产-严禁作为基准]"
             return enriched
+
+        raw_approved = (
+            str(hit.get("approved_status") or hit.get("approval_status") or "")
+            .strip()
+            .upper()
+        )
+        is_approved = raw_approved == ApprovalStatus.APPROVED.value
+        can_drive = desc.can_drive_mandatory_finding and is_approved
+
         enriched["knowledge_type"] = desc.source_type.value
         enriched["authority_rank"] = desc.authority_rank
-        enriched["can_drive_mandatory_finding"] = desc.can_drive_mandatory_finding
+        enriched["can_drive_mandatory_finding"] = can_drive
         enriched["prompt_badge"] = desc.prompt_badge
+        enriched["evidence_admissible"] = True
         return enriched

@@ -236,6 +236,22 @@ CREATE TABLE IF NOT EXISTS auth_replay_nonces (
 );
 CREATE INDEX IF NOT EXISTS idx_auth_nonces_expiry
     ON auth_replay_nonces(expires_at);
+CREATE TABLE IF NOT EXISTS knowledge_approval_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL,
+    knowledge_id TEXT NOT NULL,
+    knowledge_type TEXT NOT NULL,
+    version TEXT NOT NULL DEFAULT 'v1',
+    approver_id TEXT NOT NULL,
+    approval_action TEXT NOT NULL,
+    approval_reason TEXT,
+    clause_ids TEXT,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_approvals_lookup
+    ON knowledge_approval_records(tenant_id, knowledge_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_clauses_approval_ktype
+    ON clauses(approval_status, knowledge_type);
 """
 
 _CLEAN_RE = re.compile(r"[\s\u3000，。；：、“”‘’（）()《》\-—_/%‰]")
@@ -481,6 +497,28 @@ class Storage:
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_auth_nonces_expiry ON auth_replay_nonces(expires_at)"
         )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS knowledge_approval_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id TEXT NOT NULL,
+                knowledge_id TEXT NOT NULL,
+                knowledge_type TEXT NOT NULL,
+                version TEXT NOT NULL DEFAULT 'v1',
+                approver_id TEXT NOT NULL,
+                approval_action TEXT NOT NULL,
+                approval_reason TEXT,
+                clause_ids TEXT,
+                created_at REAL NOT NULL
+            )
+            """
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_knowledge_approvals_lookup ON knowledge_approval_records(tenant_id, knowledge_id, created_at DESC)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_clauses_approval_ktype ON clauses(approval_status, knowledge_type)"
+        )
         self.conn.commit()
 
     def _check_embedding_compat(self) -> None:
@@ -576,21 +614,23 @@ class Storage:
                         if prefix_clause
                         else c["clause_id"]
                     )
-                    is_std_template = bool(
-                        c.get("is_company_standard")
-                        or doc.get("document_type") == "contract_template"
-                        or doc.get("status") == "ACTIVE"
-                    )
-                    default_appr = "APPROVED" if is_std_template else "PENDING_REVIEW"
-                    if is_std_template and (
-                        not c.get("approval_status")
-                        or c.get("approval_status") == "PENDING_REVIEW"
+                    # 严格知识治理：导入绝不自动提升审批状态！
+                    # 未指定审批状态时统一默认为 PENDING_REVIEW；
+                    # 文档是否 ACTIVE、是否为模板、is_company_standard=True 均不代表法务已完成审批！
+                    raw_appr = c.get("approval_status")
+                    if raw_appr and str(raw_appr).strip().upper() in (
+                        "PENDING_REVIEW",
+                        "APPROVED",
+                        "REJECTED",
+                        "REVOKED",
                     ):
-                        clause_appr = "APPROVED"
+                        clause_appr = str(raw_appr).strip().upper()
                     else:
-                        clause_appr = c.get("approval_status", default_appr)
+                        clause_appr = "PENDING_REVIEW"
+
+                    is_template_doc = doc.get("document_type") == "contract_template"
                     clause_ktype = c.get("knowledge_type") or (
-                        "TEMPLATE" if is_std_template else "LAYER_A_RAW_CLAUSE"
+                        "TEMPLATE" if is_template_doc else "HISTORICAL_CASE"
                     )
                     self.conn.execute(
                         "INSERT OR REPLACE INTO clauses (clause_id, document_id, clause_number, "
@@ -605,7 +645,7 @@ class Storage:
                             c.get("clause_subcategory"),
                             c["original_text"],
                             c.get("normalized_summary", ""),
-                            1 if c.get("is_company_standard") or is_std_template else 0,
+                            1 if c.get("is_company_standard") else 0,
                             clause_appr,
                             json.dumps(
                                 c.get("source_node_ids", []), ensure_ascii=False
@@ -654,16 +694,9 @@ class Storage:
                     f"Embedding 输出维度校验失败：期望 {(len(texts), int(self.emb.dim))}，实际 {vecs.shape}"
                 )
             for (r, m), vec in zip(texts, vecs):
-                ktype = (
-                    r["knowledge_type"]
-                    if r["knowledge_type"]
-                    and r["knowledge_type"] != "LAYER_A_RAW_CLAUSE"
-                    else "TEMPLATE"
-                )
+                ktype = r["knowledge_type"] if r["knowledge_type"] else "TEMPLATE"
                 appr_status = (
-                    "APPROVED"
-                    if (r["approval_status"] in (None, "", "PENDING_REVIEW"))
-                    else r["approval_status"]
+                    r["approval_status"] if r["approval_status"] else "PENDING_REVIEW"
                 )
                 self.conn.execute(
                     "INSERT OR REPLACE INTO embeddings VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -842,6 +875,181 @@ class Storage:
             cur = self.conn.execute(sql, params)
             self._commit()
             return cur.rowcount > 0
+
+    def approve_knowledge_version(
+        self,
+        tenant_id: str,
+        document_id: str,
+        approver_id: str,
+        approval_action: str = "APPROVE",
+        approval_reason: str = "",
+        clause_ids: list[str] | None = None,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        """统一知识审批写入口：具备租户约束、幂等、状态校验和审计追踪。"""
+        with self._lock:
+            doc = self.get_document(document_id, tenant_id=tenant_id)
+            if not doc:
+                raise ValueError(
+                    f"文档不存在或跨租户未授权：{document_id} (tenant={tenant_id})"
+                )
+            if doc.get("status") != "ACTIVE":
+                raise ValueError(
+                    f"仅 ACTIVE 状态文档允许审批知识版本，当前状态：{doc.get('status')}"
+                )
+
+            params: list[Any] = [document_id]
+            extra_clause = ""
+            if clause_ids:
+                placeholders = ",".join("?" for _ in clause_ids)
+                extra_clause = f" AND clause_id IN ({placeholders})"
+                params.extend(clause_ids)
+
+            cur = self.conn.execute(
+                f"UPDATE clauses SET approval_status='APPROVED' WHERE document_id=?{extra_clause}",
+                params,
+            )
+            affected = cur.rowcount
+
+            # 同步更新 embeddings 表中对应分块的审批状态
+            emb_params: list[Any] = [document_id]
+            emb_extra = ""
+            if clause_ids:
+                emb_extra = f" AND clause_id IN ({','.join('?' for _ in clause_ids)})"
+                emb_params.extend(clause_ids)
+            self.conn.execute(
+                f"UPDATE embeddings SET approved_status='APPROVED' WHERE document_id=?{emb_extra}",
+                emb_params,
+            )
+
+            now_ts = time.time()
+            detail = json.dumps(
+                {
+                    "tenant_id": tenant_id,
+                    "document_id": document_id,
+                    "approver_id": approver_id,
+                    "action": approval_action,
+                    "reason": approval_reason,
+                    "affected_clauses": affected,
+                    "timestamp": now_ts,
+                },
+                ensure_ascii=False,
+            )
+            self.conn.execute(
+                "INSERT INTO audit_log (at, actor, action, target, detail) VALUES (?,?,?,?,?)",
+                (now_ts, approver_id, "approve_knowledge_version", document_id, detail),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO knowledge_approval_records (
+                    tenant_id, knowledge_id, knowledge_type, version, approver_id,
+                    approval_action, approval_reason, clause_ids, created_at
+                ) VALUES (?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    tenant_id,
+                    document_id,
+                    doc.get("document_type", "TEMPLATE"),
+                    doc.get("source_version", "v1"),
+                    approver_id,
+                    approval_action,
+                    approval_reason,
+                    json.dumps(clause_ids or []),
+                    now_ts,
+                ),
+            )
+            self._commit()
+            return {
+                "tenant_id": tenant_id,
+                "document_id": document_id,
+                "approved_count": affected,
+                "approver_id": approver_id,
+                "status": "APPROVED",
+            }
+
+    def revoke_knowledge_version(
+        self,
+        tenant_id: str,
+        document_id: str,
+        revoker_id: str,
+        revoke_reason: str = "",
+        clause_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """统一撤销知识审批：撤销后立即丧失权威依据资格。"""
+        with self._lock:
+            doc = self.get_document(document_id, tenant_id=tenant_id)
+            if not doc:
+                raise ValueError(
+                    f"文档不存在或跨租户未授权：{document_id} (tenant={tenant_id})"
+                )
+
+            params: list[Any] = [document_id]
+            extra_clause = ""
+            if clause_ids:
+                placeholders = ",".join("?" for _ in clause_ids)
+                extra_clause = f" AND clause_id IN ({placeholders})"
+                params.extend(clause_ids)
+
+            cur = self.conn.execute(
+                f"UPDATE clauses SET approval_status='REVOKED' WHERE document_id=?{extra_clause}",
+                params,
+            )
+            affected = cur.rowcount
+
+            emb_params: list[Any] = [document_id]
+            emb_extra = ""
+            if clause_ids:
+                emb_extra = f" AND clause_id IN ({','.join('?' for _ in clause_ids)})"
+                emb_params.extend(clause_ids)
+            self.conn.execute(
+                f"UPDATE embeddings SET approved_status='REVOKED' WHERE document_id=?{emb_extra}",
+                emb_params,
+            )
+
+            now_ts = time.time()
+            detail = json.dumps(
+                {
+                    "tenant_id": tenant_id,
+                    "document_id": document_id,
+                    "revoker_id": revoker_id,
+                    "action": "REVOKE",
+                    "reason": revoke_reason,
+                    "affected_clauses": affected,
+                    "timestamp": now_ts,
+                },
+                ensure_ascii=False,
+            )
+            self.conn.execute(
+                "INSERT INTO audit_log (at, actor, action, target, detail) VALUES (?,?,?,?,?)",
+                (now_ts, revoker_id, "revoke_knowledge_version", document_id, detail),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO knowledge_approval_records (
+                    tenant_id, knowledge_id, knowledge_type, version, approver_id,
+                    approval_action, approval_reason, clause_ids, created_at
+                ) VALUES (?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    tenant_id,
+                    document_id,
+                    doc.get("document_type", "TEMPLATE"),
+                    doc.get("source_version", "v1"),
+                    revoker_id,
+                    "REVOKE",
+                    revoke_reason,
+                    json.dumps(clause_ids or []),
+                    now_ts,
+                ),
+            )
+            self._commit()
+            return {
+                "tenant_id": tenant_id,
+                "document_id": document_id,
+                "revoked_count": affected,
+                "revoker_id": revoker_id,
+                "status": "REVOKED",
+            }
 
     def find_active_template(
         self,
@@ -1084,7 +1292,7 @@ class Storage:
             rows = self.conn.execute(
                 "SELECT c.clause_id, c.document_id, c.original_text, c.clause_number, "
                 "c.clause_category, e.chunk_id, e.business_category, e.contract_subtype, "
-                "e.knowledge_type, e.approved_status FROM clauses_fts f "
+                "e.knowledge_type, e.approved_status, documents.status AS doc_status, documents.tenant_id FROM clauses_fts f "
                 "JOIN clauses c ON c.rowid=f.rowid "
                 "JOIN embeddings e ON e.clause_id=c.clause_id "
                 "JOIN documents ON documents.document_id=c.document_id "
@@ -1108,6 +1316,8 @@ class Storage:
                     "contract_subtype": r["contract_subtype"],
                     "knowledge_type": r["knowledge_type"],
                     "approved_status": r["approved_status"],
+                    "doc_status": r["doc_status"],
+                    "tenant_id": r["tenant_id"],
                 }
             )
         return out
@@ -1131,7 +1341,7 @@ class Storage:
             tenant_id=tenant_id,
         )
         rows = self.conn.execute(
-            "SELECT embeddings.*, clauses.clause_number, clauses.clause_category FROM embeddings "
+            "SELECT embeddings.*, clauses.clause_number, clauses.clause_category, documents.status AS doc_status, documents.tenant_id FROM embeddings "
             "JOIN documents ON documents.document_id=embeddings.document_id "
             "LEFT JOIN clauses ON clauses.clause_id=embeddings.clause_id WHERE 1=1"
             + fsql,
@@ -1160,6 +1370,8 @@ class Storage:
                     "contract_subtype": r["contract_subtype"],
                     "knowledge_type": r["knowledge_type"],
                     "approved_status": r["approved_status"],
+                    "doc_status": r["doc_status"],
+                    "tenant_id": r["tenant_id"],
                 }
             )
         return out
@@ -1228,11 +1440,19 @@ class Storage:
             rows = self.conn.execute(sql, params).fetchall()
             return [dict(r) for r in rows]
 
-    def get_clause(self, clause_id: str) -> Any:
+    def get_clause(self, clause_id: str, tenant_id: str | None = None) -> Any:
         with self._lock:
-            return self.conn.execute(
-                "SELECT * FROM clauses WHERE clause_id=?", (clause_id,)
-            ).fetchone()
+            sql = (
+                "SELECT c.*, d.status AS doc_status, d.tenant_id, d.source_hash, "
+                "d.source_version FROM clauses c "
+                "JOIN documents d ON d.document_id=c.document_id "
+                "WHERE c.clause_id=?"
+            )
+            params: list[Any] = [clause_id]
+            if tenant_id is not None:
+                sql += " AND d.tenant_id=?"
+                params.append(tenant_id)
+            return self.conn.execute(sql, params).fetchone()
 
     def list_documents(self, tenant_id: str | None = None) -> list[dict]:
         """按租户过滤（SQL 级强制）。tenant_id=None 仅供内部评估/管理使用。"""

@@ -769,21 +769,23 @@ class RetrieveEvidenceStage(ReviewStage):
                         "clause_id": cid,
                         "document_id": h["document_id"],
                         "clause_category": h.get("clause_category"),
-                        "knowledge_type": h.get("knowledge_type", "TEMPLATE"),
-                        "approved_status": h.get("approved_status", "APPROVED"),
+                        "knowledge_type": h.get("knowledge_type") or "TEMPLATE",
+                        "approved_status": h.get("approved_status") or "APPROVED",
                         "authority_rank": h.get("authority_rank", 2),
-                        "can_drive_mandatory_finding": h.get(
-                            "can_drive_mandatory_finding", True
+                        "can_drive_mandatory_finding": bool(
+                            h.get("can_drive_mandatory_finding", False)
                         ),
                         "prompt_badge": h.get("prompt_badge", ""),
                         "text": h["text"][:160],
+                        "tenant_id": h.get("tenant_id") or ctx.scope_tenant,
+                        "source_hash": h.get("source_hash", ""),
                     }
                 )
         ctx.rag_context = rag_context
         avg_cit = (
             round(sum(verified_ratios) / len(verified_ratios), 4)
-            if verified_ratios
-            else 1.0
+            if (verified_ratios and len(rag_context) > 0)
+            else 0.0
         )
         return {
             "rag_context": list(ctx.rag_context),

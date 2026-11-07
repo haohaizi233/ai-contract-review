@@ -417,9 +417,7 @@ class PgVectorStorage:
             )
         with self.conn.cursor() as cur:
             for (cid, text, bc, st, sh, app_status, ktype), vec in zip(rows, vecs):
-                resolved_ktype = (
-                    ktype if ktype and ktype != "LAYER_A_RAW_CLAUSE" else "LAYER_D_RAG"
-                )
+                resolved_ktype = ktype if ktype else "TEMPLATE"
                 chunk_id = f"{document_id}:{cid}"
                 cur.execute(
                     "INSERT INTO embeddings (chunk_id, document_id, clause_id, business_category,"
@@ -590,6 +588,188 @@ class PgVectorStorage:
                 self._rollback()
                 raise
 
+    def approve_knowledge_version(
+        self,
+        tenant_id: str,
+        document_id: str,
+        approver_id: str,
+        approval_action: str = "APPROVE",
+        approval_reason: str = "",
+        clause_ids: list[str] | None = None,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        """统一知识审批写入口 (PostgreSQL)：具备租户隔离、乐观校验和审计留痕。"""
+        with self._lock:
+            try:
+                doc = self.get_document(document_id, tenant_id=tenant_id)
+                if not doc:
+                    raise ValueError(
+                        f"文档不存在或跨租户未授权：{document_id} (tenant={tenant_id})"
+                    )
+                if doc.get("status") != "ACTIVE":
+                    raise ValueError(
+                        f"仅 ACTIVE 状态文档允许审批知识版本，当前状态：{doc.get('status')}"
+                    )
+
+                with self.conn.cursor() as cur:
+                    params: list[Any] = [document_id]
+                    extra = ""
+                    if clause_ids:
+                        extra = " AND clause_id = ANY(%s)"
+                        params.append(clause_ids)
+                    cur.execute(
+                        f"UPDATE clauses SET approval_status='APPROVED' WHERE document_id=%s{extra}",
+                        params,
+                    )
+                    affected = cur.rowcount
+
+                    has_emb = self._has_embeddings_table()
+                    if has_emb:
+                        emb_params: list[Any] = [document_id]
+                        emb_extra = ""
+                        if clause_ids:
+                            emb_extra = " AND clause_id = ANY(%s)"
+                            emb_params.append(clause_ids)
+                        cur.execute(
+                            f"UPDATE embeddings SET approved_status='APPROVED' WHERE document_id=%s{emb_extra}",
+                            emb_params,
+                        )
+
+                    now_ts = time.time()
+                    detail = json.dumps(
+                        {
+                            "tenant_id": tenant_id,
+                            "document_id": document_id,
+                            "approver_id": approver_id,
+                            "action": approval_action,
+                            "reason": approval_reason,
+                            "affected_clauses": affected,
+                            "timestamp": now_ts,
+                        },
+                        ensure_ascii=False,
+                    )
+                    cur.execute(
+                        "INSERT INTO audit_log (actor, action, target, detail) VALUES (%s,%s,%s,%s)",
+                        (approver_id, "approve_knowledge_version", document_id, detail),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO knowledge_approval_records (
+                            tenant_id, knowledge_id, knowledge_type, version, approver_id,
+                            approval_action, approval_reason, clause_ids, created_at
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,now())
+                        """,
+                        (
+                            tenant_id,
+                            document_id,
+                            doc.get("document_type", "TEMPLATE"),
+                            doc.get("source_version", "v1"),
+                            approver_id,
+                            approval_action,
+                            approval_reason,
+                            json.dumps(clause_ids or []),
+                        ),
+                    )
+                self._commit()
+                return {
+                    "tenant_id": tenant_id,
+                    "document_id": document_id,
+                    "approved_count": affected,
+                    "approver_id": approver_id,
+                    "status": "APPROVED",
+                }
+            except Exception:
+                self._rollback()
+                raise
+
+    def revoke_knowledge_version(
+        self,
+        tenant_id: str,
+        document_id: str,
+        revoker_id: str,
+        revoke_reason: str = "",
+        clause_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """统一撤销知识审批 (PostgreSQL)：撤销后立即丧失权威依据资格。"""
+        with self._lock:
+            try:
+                doc = self.get_document(document_id, tenant_id=tenant_id)
+                if not doc:
+                    raise ValueError(
+                        f"文档不存在或跨租户未授权：{document_id} (tenant={tenant_id})"
+                    )
+
+                with self.conn.cursor() as cur:
+                    params: list[Any] = [document_id]
+                    extra = ""
+                    if clause_ids:
+                        extra = " AND clause_id = ANY(%s)"
+                        params.append(clause_ids)
+                    cur.execute(
+                        f"UPDATE clauses SET approval_status='REVOKED' WHERE document_id=%s{extra}",
+                        params,
+                    )
+                    affected = cur.rowcount
+
+                    has_emb = self._has_embeddings_table()
+                    if has_emb:
+                        emb_params: list[Any] = [document_id]
+                        emb_extra = ""
+                        if clause_ids:
+                            emb_extra = " AND clause_id = ANY(%s)"
+                            emb_params.append(clause_ids)
+                        cur.execute(
+                            f"UPDATE embeddings SET approved_status='REVOKED' WHERE document_id=%s{emb_extra}",
+                            emb_params,
+                        )
+
+                    now_ts = time.time()
+                    detail = json.dumps(
+                        {
+                            "tenant_id": tenant_id,
+                            "document_id": document_id,
+                            "revoker_id": revoker_id,
+                            "action": "REVOKE",
+                            "reason": revoke_reason,
+                            "affected_clauses": affected,
+                            "timestamp": now_ts,
+                        },
+                        ensure_ascii=False,
+                    )
+                    cur.execute(
+                        "INSERT INTO audit_log (actor, action, target, detail) VALUES (%s,%s,%s,%s)",
+                        (revoker_id, "revoke_knowledge_version", document_id, detail),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO knowledge_approval_records (
+                            tenant_id, knowledge_id, knowledge_type, version, approver_id,
+                            approval_action, approval_reason, clause_ids, created_at
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,now())
+                        """,
+                        (
+                            tenant_id,
+                            document_id,
+                            doc.get("document_type", "TEMPLATE"),
+                            doc.get("source_version", "v1"),
+                            revoker_id,
+                            "REVOKE",
+                            revoke_reason,
+                            json.dumps(clause_ids or []),
+                        ),
+                    )
+                self._commit()
+                return {
+                    "tenant_id": tenant_id,
+                    "document_id": document_id,
+                    "revoked_count": affected,
+                    "revoker_id": revoker_id,
+                    "status": "REVOKED",
+                }
+            except Exception:
+                self._rollback()
+                raise
+
     def find_active_template(
         self,
         contract_subtype: str | None = None,
@@ -700,10 +880,20 @@ class PgVectorStorage:
                     for r in rows
                 ]
 
-    def get_clause(self, clause_id: str) -> dict | None:
+    def get_clause(self, clause_id: str, tenant_id: str | None = None) -> dict | None:
         with self._lock:
+            sql = (
+                "SELECT c.*, d.status AS doc_status, d.tenant_id, d.source_hash, "
+                "d.source_version FROM clauses c "
+                "JOIN documents d ON d.document_id=c.document_id "
+                "WHERE c.clause_id=%s"
+            )
+            params: list[Any] = [clause_id]
+            if tenant_id is not None:
+                sql += " AND d.tenant_id=%s"
+                params.append(tenant_id)
             with self.conn.cursor() as cur:
-                cur.execute("SELECT * FROM clauses WHERE clause_id=%s", (clause_id,))
+                cur.execute(sql, params)
                 row = cur.fetchone()
                 cols = [d[0] for d in cur.description] if cur.description else []
             self._commit()
@@ -901,11 +1091,16 @@ class PgVectorStorage:
             if tenant_id is not None:
                 d_where += " AND d.tenant_id=%s"
                 d_params.append(tenant_id)
+            if knowledge_type:
+                d_where += " AND c.knowledge_type=%s"
+                d_params.append(knowledge_type)
+            if approved_only:
+                d_where += " AND c.approval_status='APPROVED'"
             with self.conn.cursor() as cur:
                 cur.execute(
                     "SELECT c.clause_id, c.document_id, c.original_text, c.clause_number,"
                     " c.clause_category, c.clause_id, d.business_category, d.contract_subtype,"
-                    " 'TEMPLATE', 'APPROVED' FROM clauses c "
+                    " c.knowledge_type, c.approval_status, d.status, d.tenant_id FROM clauses c "
                     "JOIN documents d ON d.document_id=c.document_id "
                     "WHERE to_tsvector('simple', coalesce(c.original_text,'')) @@ to_tsquery('simple', %s)"
                     + d_where
@@ -926,7 +1121,7 @@ class PgVectorStorage:
                 cur.execute(
                     "SELECT c.clause_id, c.document_id, c.original_text, c.clause_number,"
                     " c.clause_category, e.chunk_id, e.business_category, e.contract_subtype,"
-                    " e.knowledge_type, e.approved_status FROM clauses c "
+                    " e.knowledge_type, e.approved_status, d.status, d.tenant_id FROM clauses c "
                     "JOIN embeddings e ON e.clause_id=c.clause_id "
                     "JOIN documents d ON d.document_id=c.document_id "
                     "WHERE to_tsvector('simple', coalesce(c.original_text,'')) @@ to_tsquery('simple', %s)"
@@ -936,6 +1131,7 @@ class PgVectorStorage:
                     [match] + params + eparams + [limit],
                 )
                 rows = cur.fetchall()
+        channel_name = "fts" if use_embeddings_table else "fts_fallback"
         return [
             {
                 "chunk_id": r[5],
@@ -944,11 +1140,18 @@ class PgVectorStorage:
                 "text": r[2],
                 "clause_number": r[3],
                 "clause_category": r[4],
-                "channel": "fts",
+                "channel": channel_name,
                 "business_category": r[6],
                 "contract_subtype": r[7],
                 "knowledge_type": r[8],
                 "approved_status": r[9],
+                "doc_status": r[10],
+                "tenant_id": r[11],
+                **(
+                    {"degraded": True, "degradation_reason": "NO_EMBEDDINGS_TABLE"}
+                    if not use_embeddings_table
+                    else {}
+                ),
             }
             for r in rows
         ]
@@ -979,7 +1182,7 @@ class PgVectorStorage:
         sql = (
             "SELECT e.chunk_id, e.clause_id, e.document_id, e.text,"
             " 1-(e.vec <=> %s::vector) AS score, e.business_category, e.contract_subtype,"
-            " c.clause_number, c.clause_category, e.knowledge_type, e.approved_status "
+            " c.clause_number, c.clause_category, e.knowledge_type, e.approved_status, d.status, d.tenant_id "
             "FROM embeddings e "
             "JOIN documents d ON d.document_id=e.document_id "
             "LEFT JOIN clauses c ON c.clause_id=e.clause_id "
@@ -1001,6 +1204,8 @@ class PgVectorStorage:
                 "clause_category": r[8],
                 "knowledge_type": r[9],
                 "approved_status": r[10],
+                "doc_status": r[11],
+                "tenant_id": r[12],
                 "channel": "vector",
             }
             for r in rows

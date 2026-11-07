@@ -184,7 +184,7 @@ def import_template_file(path: Path) -> tuple[ImportedDoc | None, str | None]:
         headers,
         full_text,
     )
-    clauses = extract_clauses(parsed, parsed.document_id)
+    clauses = extract_clauses(parsed, parsed.document_id, is_company_standard=True)
     schemas = extract_table_schemas(parsed, parsed.document_id)
 
     sections = []

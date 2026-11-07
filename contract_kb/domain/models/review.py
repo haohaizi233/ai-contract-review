@@ -55,7 +55,7 @@ def deterministic_issue_id(
 
 @dataclass
 class EvidenceReference:
-    """原文证据与知识来源引用定位。"""
+    """原文证据与知识来源引用强类型定位对象。"""
 
     document_id: str
     node_ids: list[str] = field(default_factory=list)
@@ -65,6 +65,16 @@ class EvidenceReference:
     clause_id: str = ""
     exact_quote: str = ""
     char_offset_or_locator: str | None = None
+    tenant_id: str = ""
+    knowledge_source_type: str = "TEMPLATE"
+    document_version: str = "v1"
+    clause_version: str = "v1"
+    source_hash: str = ""
+    text_hash: str = ""
+    source_locator: dict[str, Any] = field(default_factory=dict)
+    approval_reference: str = ""
+    evidence_status: str = "VERIFIED"  # VERIFIED | UNVERIFIED | STALE_VERSION | REVOKED_SOURCE | CROSS_TENANT | MISSING_SOURCE | CONTENT_MISMATCH
+    verified_at: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,6 +86,16 @@ class EvidenceReference:
             "clause_id": self.clause_id,
             "exact_quote": self.exact_quote,
             "char_offset_or_locator": self.char_offset_or_locator,
+            "tenant_id": self.tenant_id,
+            "knowledge_source_type": self.knowledge_source_type,
+            "document_version": self.document_version,
+            "clause_version": self.clause_version,
+            "source_hash": self.source_hash,
+            "text_hash": self.text_hash,
+            "source_locator": dict(self.source_locator),
+            "approval_reference": self.approval_reference,
+            "evidence_status": self.evidence_status,
+            "verified_at": self.verified_at,
         }
 
     @classmethod
@@ -89,6 +109,16 @@ class EvidenceReference:
             clause_id=str(d.get("clause_id", "")),
             exact_quote=str(d.get("exact_quote", "")),
             char_offset_or_locator=d.get("char_offset_or_locator"),
+            tenant_id=str(d.get("tenant_id", "")),
+            knowledge_source_type=str(d.get("knowledge_source_type", "TEMPLATE")),
+            document_version=str(d.get("document_version", "v1")),
+            clause_version=str(d.get("clause_version", "v1")),
+            source_hash=str(d.get("source_hash", "")),
+            text_hash=str(d.get("text_hash", "")),
+            source_locator=dict(d.get("source_locator", {}) or {}),
+            approval_reference=str(d.get("approval_reference", "")),
+            evidence_status=str(d.get("evidence_status", "VERIFIED")),
+            verified_at=d.get("verified_at"),
         )
 
 
@@ -147,6 +177,22 @@ class Finding:
             CheckStatus.NEEDS_MANUAL_REVIEW.value,
         ) and self.severity in ("HIGH", "MEDIUM"):
             self.requires_human_review = True
+
+        # 4. Phase 11 知识权限门禁：can_drive_mandatory_finding=False 的知识不得驱动强制阻断结论
+        if self.severity in ("HIGH", "CRITICAL") and self.knowledge_references:
+            has_unauthorized_authority = any(
+                k.get("can_drive_mandatory_finding") is False
+                or k.get("evidence_status")
+                in ("UNVERIFIED", "REVOKED_SOURCE", "CROSS_TENANT")
+                for k in self.knowledge_references
+            )
+            if has_unauthorized_authority:
+                self.severity = "LOW"
+                self.requires_human_review = True
+                self.check_status = CheckStatus.NEEDS_MANUAL_REVIEW.value
+                self.description += (
+                    "（参考依据不具备企业强制基准效力，已降级并提示人工复核）"
+                )
 
         return self
 

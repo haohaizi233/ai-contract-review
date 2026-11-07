@@ -33,6 +33,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel
 
 from . import config
 from .application.security.idempotency import IdempotencyConflictError
@@ -343,11 +344,20 @@ def taxonomy(request: Request):
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+class KnowledgeApprovalReq(BaseModel):
+    approval_reason: str = ""
+    clause_ids: list[str] | None = None
+    expected_revision: int | None = None
+
+
 @shared_router.post("/contract-kb/search", tags=["knowledge-base"])
 def search(req: SearchReq, request: Request):
     p = _principal(request)
     enforce_input_limits(query=req.query + " " + (req.keyword or ""))
-    hits = get_storage().search(
+    from .modules.retrieval.service import GovernedRetrievalService
+
+    retrieval_svc = GovernedRetrievalService(get_storage())
+    hits = retrieval_svc.search_user_visible_knowledge(
         req.query,
         top_k=req.top_k,
         business_category=req.business_category,
@@ -356,9 +366,57 @@ def search(req: SearchReq, request: Request):
         keyword=req.keyword,
         rerank=req.rerank,
         tenant_id=p.tenant_id,
+        include_unapproved=False,
     )
     GLOBAL_METRICS.record_rag_query(hit_count=len(hits))
     return {"query": req.query, "count": len(hits), "results": hits}
+
+
+@shared_router.post(
+    "/contract-kb/documents/{document_id}/approve", tags=["knowledge-base"]
+)
+def approve_document_knowledge(
+    document_id: str, req: KnowledgeApprovalReq, request: Request
+):
+    p = _principal(request)
+    if not (p.has_role(ROLE_ADMIN) or p.has_role(ROLE_REVIEWER)):
+        raise HTTPException(status_code=403, detail="仅法务或管理员有权审批知识版本")
+    storage = get_storage()
+    try:
+        res = storage.approve_knowledge_version(
+            tenant_id=p.tenant_id,
+            document_id=document_id,
+            approver_id=p.user_id,
+            approval_reason=req.approval_reason,
+            clause_ids=req.clause_ids,
+            expected_revision=req.expected_revision,
+        )
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@shared_router.post(
+    "/contract-kb/documents/{document_id}/revoke", tags=["knowledge-base"]
+)
+def revoke_document_knowledge(
+    document_id: str, req: KnowledgeApprovalReq, request: Request
+):
+    p = _principal(request)
+    if not (p.has_role(ROLE_ADMIN) or p.has_role(ROLE_REVIEWER)):
+        raise HTTPException(status_code=403, detail="仅法务或管理员有权撤销知识版本")
+    storage = get_storage()
+    try:
+        res = storage.revoke_knowledge_version(
+            tenant_id=p.tenant_id,
+            document_id=document_id,
+            revoker_id=p.user_id,
+            revoke_reason=req.approval_reason,
+            clause_ids=req.clause_ids,
+        )
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @shared_router.post("/contract-kb/compare", tags=["knowledge-base"])

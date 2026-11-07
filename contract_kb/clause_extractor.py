@@ -82,6 +82,11 @@ class ClauseRecord:
     legal_requirement: bool = False  # 仅当条文援引法律义务时为 True
     approval_status: str = "PENDING_REVIEW"
     extraction_confidence: float = 1.0
+    raw_text: str = ""
+    display_text: str = ""
+    retrieval_text: str = ""
+    text_hash: str = ""
+    legacy_clause_id: str = ""
 
     def to_dict(self):
         return asdict(self)
@@ -174,7 +179,9 @@ def _normalize_summary(text: str, cat: str, sub: str | None) -> tuple[str, str]:
     return summary, "deterministic_rule_v1"
 
 
-def extract_clauses(parsed_doc, template_id: str) -> list[ClauseRecord]:
+def extract_clauses(
+    parsed_doc, template_id: str, is_company_standard: bool = False
+) -> list[ClauseRecord]:
     """从 ParsedDocument 抽取条款记录。段落流按 article / x.y 组装。"""
     records: list[ClauseRecord] = []
     article_title: str | None = None
@@ -185,10 +192,11 @@ def extract_clauses(parsed_doc, template_id: str) -> list[ClauseRecord]:
 
     def flush():
         nonlocal buffer, buffer_nodes, buffer_loc, buffer_num
-        text = "".join(buffer).strip()
+        text = "\n".join(b for b in buffer if b).strip()
         if text:
             cat, sub = _categorize(article_title, text)
             summary, method = _normalize_summary(text, cat, sub)
+            thash = hashlib.sha256(text.encode("utf-8")).hexdigest()
             cid = hashlib.sha1(
                 f"{template_id}:{article_title}:{buffer_num}:{text[:80]}".encode()
             ).hexdigest()[:12]
@@ -208,9 +216,14 @@ def extract_clauses(parsed_doc, template_id: str) -> list[ClauseRecord]:
                 exceptions=_extract_exceptions(text),
                 source_node_ids=list(buffer_nodes),
                 source_locator=buffer_loc,
-                is_company_standard=True,
+                is_company_standard=bool(is_company_standard),
                 legal_requirement=law_cited and ("应当" in text or "必须" in text),
                 extraction_confidence=0.95 if buffer_num else 0.85,
+                raw_text=text,
+                display_text=text,
+                retrieval_text=f"{article_title or ''} {text}".strip(),
+                text_hash=thash,
+                legacy_clause_id=cid,
             )
             records.append(rec)
         buffer, buffer_nodes, buffer_loc, buffer_num = [], [], {}, None
@@ -245,6 +258,7 @@ def extract_clauses(parsed_doc, template_id: str) -> list[ClauseRecord]:
                     if cat0 == "OTHER":
                         cat0 = "FRONT_MATTER"
                     summary0, method0 = _normalize_summary(text, cat0, sub0)
+                    thash0 = hashlib.sha256(text.encode("utf-8")).hexdigest()
                     cid0 = hashlib.sha1(
                         f"{template_id}:front:{text[:80]}".encode()
                     ).hexdigest()[:12]
@@ -264,8 +278,13 @@ def extract_clauses(parsed_doc, template_id: str) -> list[ClauseRecord]:
                             exceptions=_extract_exceptions(text),
                             source_node_ids=[node.node_id],
                             source_locator=node.source_locator,
-                            is_company_standard=True,
+                            is_company_standard=bool(is_company_standard),
                             extraction_confidence=0.8,
+                            raw_text=text,
+                            display_text=text,
+                            retrieval_text=text,
+                            text_hash=thash0,
+                            legacy_clause_id=cid0,
                         )
                     )
         elif node.node_type == "table_cell":

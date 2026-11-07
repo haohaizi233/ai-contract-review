@@ -119,14 +119,17 @@ class HttpCrossEncoderReranker:
         parsed = urlparse(endpoint_url)
         host = (parsed.hostname or "").lower()
         is_local = host in ("127.0.0.1", "localhost", "::1")
-        allow_ext = os.environ.get("ALLOW_EXTERNAL_LLM", "0").strip() in (
+        allow_ext = (
+            os.environ.get("CONTRACT_KB_ALLOW_EXTERNAL_LLM")
+            or os.environ.get("ALLOW_EXTERNAL_LLM", "0")
+        ).strip().lower() in (
             "1",
             "true",
             "yes",
         )
         if not is_local and not allow_ext:
             raise PermissionError(
-                "未开启 ALLOW_EXTERNAL_LLM=1，禁止将合同检索片段发送至非本机 Reranker 端点"
+                "未开启 CONTRACT_KB_ALLOW_EXTERNAL_LLM=1，禁止将合同检索片段发送至非本机 Reranker 端点"
             )
         self.endpoint_url = endpoint_url.rstrip("/")
         self.api_key = api_key

@@ -94,7 +94,13 @@ def storage(workspace_ready, corpus_dir, tmp_path_factory):
     st = Storage(db)
     result = scan_and_import(corpus_dir)
     for d in result.get("_raw", []):
-        st.upsert_document(d.to_dict(), tenant="t1")
+        did, _ = st.upsert_document(d.to_dict(), tenant="t1")
+        st.approve_knowledge_version(
+            tenant_id="t1",
+            document_id=did,
+            approver_id="legal_admin",
+            approval_reason="合成标准模板授权测试基准",
+        )
     yield st
     st.close()
 
