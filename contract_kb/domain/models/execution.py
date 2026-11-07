@@ -19,6 +19,7 @@ class JobLease:
     job_type: str = ""
     tenant_id: str = "default"
     created_by: str = "system"
+    max_attempts: int = 3
     payload: dict[str, Any] = field(default_factory=dict)
     temp_file_path: str | None = None
 

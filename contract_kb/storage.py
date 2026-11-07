@@ -2037,6 +2037,7 @@ class Storage:
                         job_type=r["job_type"],
                         tenant_id=r["tenant_id"],
                         created_by=str(r["created_by"] or "system"),
+                        max_attempts=max_attempts,
                         payload=decoded.get("payload") or {} if decoded else {},
                         temp_file_path=r["temp_file_path"],
                     )

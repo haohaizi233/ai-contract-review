@@ -14,7 +14,7 @@
 | 批次编号 | 目标缺陷 | 严重级别 | 核心问题概述 | 状态 | 验证用例 / 证据 | 修复提交 (SHA) |
 |---|---|---|---|---|---|---|
 | **Batch 1** | **R01** | P1 | 断点恢复丢失金额和格式风险，导致审核门禁降级 | **COMPLETED** | `tests/integration/test_checkpoint_resume_findings_preservation.py` (3 passed, 保持7项Findings与BLOCKED_BY_HIGH_RISK) | 待提交 |
-| **Batch 2** | **R02** | P1 | PersistentTaskRunner 未接租约心跳与 CAS 终态，迟到 worker 覆盖最新结果 | **PENDING** | `tests/integration/test_task_runner_fenced_leases.py` | 待提交 |
+| **Batch 2** | **R02** | P1 | PersistentTaskRunner 未接租约心跳与 CAS 终态，迟到 worker 覆盖最新结果 | **COMPLETED** | `tests/integration/test_task_runner_fenced_leases.py` (4 passed, 迟到worker被阻断且长任务心跳续租) | 待提交 |
 | **Batch 3** | **R03 / R06** | P1 | 同步忽略乐观锁冲突导致假成功与跳水；重点集成工具未走应用适配器 | **PENDING** | `tests/integration/test_sync_service_optimistic_conflict.py`, `tests/integration/test_multi_source_incremental_sync.py` | 待提交 |
 | **Batch 4** | **R04** | P1 | V2 认证未校验真实 body，API 未绑共享存储，提前消费 nonce 导致投毒 | **PENDING** | `tests/security/test_auth_v2_body_digest_and_shared_nonce.py` | 待提交 |
 | **Batch 5** | **R05** | P1 | 阶段 deadline 未传至底层 HTTP provider；预算未接主审核链路与硬限额 | **PENDING** | `tests/integration/test_provider_deadline_and_budget_enforcement.py` | 待提交 |

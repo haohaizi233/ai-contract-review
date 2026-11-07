@@ -25,6 +25,7 @@ from ...application.security.idempotency import (
     RequestIdentity,
     compute_request_fingerprint,
 )
+from ...domain.models.execution import JobLease, JobOutcome
 from ..observability import GLOBAL_METRICS, get_redacted_logger, redact_sensitive_text
 
 logger = get_redacted_logger("contract_kb.task_queue")
@@ -51,14 +52,20 @@ class PersistentTaskRunner:
         self,
         storage: Any,
         *,
+        worker_id: str | None = None,
         max_workers: int = 2,
         base_backoff_seconds: float = 1.0,
         poll_interval_seconds: float = 0.25,
+        lease_seconds: int = 60,
+        heartbeat_interval_seconds: float = 15.0,
     ):
         self.storage = storage
+        self.worker_id = worker_id or f"worker_{uuid.uuid4().hex[:8]}"
         self.max_workers = max(1, int(max_workers))
         self.base_backoff_seconds = max(0.0, float(base_backoff_seconds))
         self.poll_interval_seconds = max(0.05, float(poll_interval_seconds))
+        self.lease_seconds = max(1, int(lease_seconds))
+        self.heartbeat_interval_seconds = max(0.1, float(heartbeat_interval_seconds))
         self._handlers: dict[str, JobHandler] = {}
         self._stop_event = threading.Event()
         self._worker_thread: threading.Thread | None = None
@@ -204,12 +211,23 @@ class PersistentTaskRunner:
         return ok
 
     def process_next(self) -> dict[str, Any] | None:
-        """认领并同步执行下一条到期任务（便于确定性单测及内嵌轻量调度）。"""
+        """认领并同步执行下一条到期任务（基于显式租约栅栏与心跳）。"""
         supported_types = list(self._handlers.keys())
-        job = self.storage.claim_next_async_job(job_types=supported_types)
-        if job is None:
-            return None
-        return self._execute_claimed_job(job)
+        claim_fn = getattr(self.storage, "claim_job", None)
+        if claim_fn is not None:
+            lease = claim_fn(
+                worker_id=self.worker_id,
+                lease_seconds=self.lease_seconds,
+                job_types=supported_types,
+            )
+            if lease is None:
+                return None
+            return self._execute_claimed_job(lease)
+        else:
+            job = self.storage.claim_next_async_job(job_types=supported_types)
+            if job is None:
+                return None
+            return self._execute_claimed_job(job)
 
     def drain(self, *, max_jobs: int = 50) -> list[dict[str, Any]]:
         """连续消费所有当前可执行任务（最多 max_jobs 条）。"""
@@ -221,19 +239,64 @@ class PersistentTaskRunner:
             completed.append(res)
         return completed
 
-    def _execute_claimed_job(self, job: dict[str, Any]) -> dict[str, Any]:
-        job_id = job["job_id"]
-        tenant_id = job.get("tenant_id", "default")
-        job_type = job["job_type"]
-        attempt = int(job.get("attempts", 1))
-        max_attempts = int(job.get("max_attempts", 3))
-        temp_path = job.get("temp_file_path")
+    def _execute_claimed_job(self, job: JobLease | dict[str, Any]) -> dict[str, Any]:
+        if isinstance(job, JobLease):
+            job_id = job.job_id
+            tenant_id = job.tenant_id
+            job_type = job.job_type
+            attempt = job.attempt
+            max_attempts = getattr(job, "max_attempts", 3)
+            payload = job.payload
+            temp_path = job.temp_file_path
+            lease_token = job.lease_token
+            created_by = job.created_by
+        else:
+            job_id = job["job_id"]
+            tenant_id = job.get("tenant_id", "default")
+            job_type = job["job_type"]
+            attempt = int(job.get("attempts", 1))
+            max_attempts = int(job.get("max_attempts", 3))
+            payload = job.get("payload") or {}
+            temp_path = job.get("temp_file_path")
+            lease_token = job.get("lease_token")
+            created_by = str(job.get("created_by") or "system")
+
+        finish_fn = getattr(self.storage, "finish_job", None)
+        hb_fn = getattr(self.storage, "heartbeat_job", None)
+        stop_heartbeat = threading.Event()
+        lease_lost = threading.Event()
+
+        def _heartbeat_loop():
+            if hb_fn is None or not lease_token:
+                return
+            while not stop_heartbeat.wait(self.heartbeat_interval_seconds):
+                try:
+                    ext = max(int(self.lease_seconds), int(self.heartbeat_interval_seconds * 3))
+                    ok = hb_fn(job_id, lease_token, extension_seconds=ext)
+                    if not ok:
+                        logger.warning(f"Task {job_id} lease lost during heartbeat renewal")
+                        lease_lost.set()
+                        break
+                except Exception as e:
+                    logger.warning(f"Task {job_id} heartbeat renewal error: {e}")
+
+        hb_thread = threading.Thread(target=_heartbeat_loop, daemon=True, name=f"hb-{job_id}")
+        hb_thread.start()
 
         def _update_progress(pct: int) -> None:
+            if lease_lost.is_set():
+                return
             clamped = max(0, min(100, int(pct)))
-            self.storage.update_async_job(job_id, progress=clamped)
+            update_fn = getattr(self.storage, "update_async_job", None)
+            if update_fn is not None:
+                try:
+                    update_fn(job_id, progress=clamped, lease_token=lease_token)
+                except TypeError:
+                    update_fn(job_id, progress=clamped)
 
         def _is_cancelled() -> bool:
+            if lease_lost.is_set():
+                return True
             latest = self.storage.get_async_job(job_id)
             return bool(
                 latest
@@ -244,15 +307,20 @@ class PersistentTaskRunner:
             )
 
         if _is_cancelled():
-            self.storage.update_async_job(job_id, status="CANCELLED")
+            stop_heartbeat.set()
+            hb_thread.join(timeout=0.5)
+            if finish_fn is not None and lease_token:
+                finish_fn(job_id, lease_token, JobOutcome(status="CANCELLED", progress=100))
+            else:
+                self.storage.update_async_job(job_id, status="CANCELLED")
             self._cleanup_temp_file(temp_path)
-            return self.storage.get_async_job(job_id) or job
+            return self.storage.get_async_job(job_id) or {}
 
         handler = self._handlers[job_type]
         ctx = JobExecutionContext(
             job_id=job_id,
             tenant_id=tenant_id,
-            created_by=str(job.get("created_by") or "system"),
+            created_by=created_by,
             attempt=attempt,
             max_attempts=max_attempts,
             update_progress=_update_progress,
@@ -260,56 +328,102 @@ class PersistentTaskRunner:
         )
 
         try:
-            result = handler(job.get("payload") or {}, ctx)
+            result = handler(payload, ctx)
+            stop_heartbeat.set()
+            hb_thread.join(timeout=0.5)
+
+            if lease_lost.is_set():
+                logger.warning(f"Task {job_id} lease lost; discarding result from stale worker")
+                return self.storage.get_async_job(job_id) or {}
+
             if _is_cancelled():
-                self.storage.update_async_job(job_id, status="CANCELLED")
+                if finish_fn is not None and lease_token:
+                    finish_fn(job_id, lease_token, JobOutcome(status="CANCELLED", progress=100))
+                else:
+                    self.storage.update_async_job(job_id, status="CANCELLED")
                 self._cleanup_temp_file(temp_path)
             else:
-                self.storage.update_async_job(
-                    job_id,
-                    status="SUCCEEDED",
-                    progress=100,
-                    result=result,
-                    error_message=None,
-                )
+                if finish_fn is not None and lease_token:
+                    outcome = JobOutcome(status="SUCCEEDED", result=result, progress=100)
+                    committed = finish_fn(job_id, lease_token, outcome)
+                    if not committed:
+                        logger.warning(f"Task {job_id} finish_job rejected stale lease_token {lease_token}")
+                        return self.storage.get_async_job(job_id) or {}
+                else:
+                    self.storage.update_async_job(
+                        job_id,
+                        status="SUCCEEDED",
+                        progress=100,
+                        result=result,
+                        error_message=None,
+                    )
                 finalize_fn = getattr(self.storage, "finalize_idempotency_key", None)
                 if finalize_fn is not None:
                     finalize_fn(
                         resource_id=job_id,
                         status="COMPLETED",
-                        tenant_id=job.get("tenant_id"),
+                        tenant_id=tenant_id,
                     )
                 GLOBAL_METRICS.record_async_job_event("async_jobs_succeeded")
                 self._cleanup_temp_file(temp_path)
         except Exception as exc:
+            stop_heartbeat.set()
+            hb_thread.join(timeout=0.5)
+
+            if lease_lost.is_set():
+                logger.warning(f"Task {job_id} lease lost; discarding exception from stale worker")
+                return self.storage.get_async_job(job_id) or {}
+
             err_msg = redact_sensitive_text(f"{type(exc).__name__}: {exc}", max_len=400)
             if attempt < max_attempts:
                 backoff = self.base_backoff_seconds * (2 ** max(0, attempt - 1))
                 next_ts = time.time() + backoff
-                self.storage.update_async_job(
-                    job_id,
-                    status="RETRYING",
-                    error_message=err_msg,
-                    next_run_at=next_ts,
-                )
+                if finish_fn is not None and lease_token:
+                    outcome = JobOutcome(
+                        status="RETRYING",
+                        error_message=err_msg,
+                        next_run_at=next_ts,
+                    )
+                    committed = finish_fn(job_id, lease_token, outcome)
+                    if not committed:
+                        logger.warning(f"Task {job_id} retry rejected stale lease_token {lease_token}")
+                        return self.storage.get_async_job(job_id) or {}
+                else:
+                    self.storage.update_async_job(
+                        job_id,
+                        status="RETRYING",
+                        error_message=err_msg,
+                        next_run_at=next_ts,
+                    )
                 logger.warning(
                     f"异步任务 {job_id} 第 {attempt}/{max_attempts} 次失败，退避 {backoff:.2f}s 后重试：{err_msg}"
                 )
             else:
                 dlq_reason = f"exhausted_max_attempts({max_attempts}): {err_msg}"
-                self.storage.update_async_job(
-                    job_id,
-                    status="DEAD_LETTER",
-                    error_message=err_msg,
-                    dead_letter_reason=dlq_reason,
-                )
+                if finish_fn is not None and lease_token:
+                    outcome = JobOutcome(
+                        status="DEAD_LETTER",
+                        error_message=err_msg,
+                        dead_letter_reason=dlq_reason,
+                    )
+                    committed = finish_fn(job_id, lease_token, outcome)
+                    if not committed:
+                        logger.warning(f"Task {job_id} dead_letter rejected stale lease_token {lease_token}")
+                        return self.storage.get_async_job(job_id) or {}
+                else:
+                    self.storage.update_async_job(
+                        job_id,
+                        status="DEAD_LETTER",
+                        error_message=err_msg,
+                        dead_letter_reason=dlq_reason,
+                    )
                 GLOBAL_METRICS.record_async_job_event("async_jobs_dead_letter")
                 self._cleanup_temp_file(temp_path)
                 logger.error(
                     f"异步任务 {job_id} 进入死信状态（DEAD_LETTER）：{dlq_reason}"
                 )
 
-        return self.storage.get_async_job(job_id) or job
+        return self.storage.get_async_job(job_id) or {}
 
     def start_background_workers(self) -> None:
         if self._worker_thread is not None and self._worker_thread.is_alive():
@@ -332,12 +446,21 @@ class PersistentTaskRunner:
 
     def _poll_loop(self) -> None:
         futures: set[concurrent.futures.Future[Any]] = set()
+        claim_fn = getattr(self.storage, "claim_job", None)
         while not self._stop_event.is_set():
             futures = {f for f in futures if not f.done()}
             while len(futures) < self.max_workers and not self._stop_event.is_set():
-                claimed = self.storage.claim_next_async_job(
-                    job_types=list(self._handlers.keys())
-                )
+                claimed: Any = None
+                if claim_fn is not None:
+                    claimed = claim_fn(
+                        worker_id=self.worker_id,
+                        lease_seconds=self.lease_seconds,
+                        job_types=list(self._handlers.keys()),
+                    )
+                else:
+                    claimed = self.storage.claim_next_async_job(
+                        job_types=list(self._handlers.keys())
+                    )
                 if claimed is None or self._pool is None:
                     break
                 futures.add(self._pool.submit(self._execute_claimed_job, claimed))

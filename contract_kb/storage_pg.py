@@ -2103,6 +2103,7 @@ class PgVectorStorage:
                     job_type=jtype,
                     tenant_id=tid,
                     created_by=str(cby or "system"),
+                    max_attempts=m_att,
                     payload=payload,
                     temp_file_path=temp_path,
                 )
