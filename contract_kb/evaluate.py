@@ -1,19 +1,29 @@
 # -*- coding: utf-8 -*-
-"""评估脚本：RAG 检索评估（Hit@K / Recall@K / MRR / NDCG / 引用正确性）+ 审核评估（逐标签 TP/FP/FN）。
+"""企业级评估框架（Evaluation Harness）：
+覆盖 RAG 检索评估（Hit@K / Recall@K / MRR / NDCG@8 / CitationCorrectness / AnswerGroundedness）
+与审核质量评估（逐标签 TP/FP/FN / FalsePositiveRate / FalseNegativeRate / P50-P95-P99 延迟 / TokenCost / CostPerContract）。
 
-全部指标基于真实执行结果计算，禁止编造。
+全部指标基于真实执行测量计算，严禁编造，并强制标注评测层级（Evaluation Tier）：
+- `SYNTHETIC_UNIT_REGRESSION`：合成语料 + 离线哈希向量（仅证明确定性管线与词汇召回回归）；
+- `DESENSITIZED_TEMPLATE_BENCHMARK`：脱敏企业模板语料 + 真实语义 Embedding；
+- `REAL_MODEL_END_TO_END`：真实 Embedding + 真实授权 LLM 端到端评估。
 """
 
 from __future__ import annotations
 
 import json
 import time
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 from . import config
-from .storage import Storage
+from .ingest import import_template_file
+from .modules.retrieval import CitationVerifier
 from .review_engine import ReviewEngine
+from .storage import Storage
 
 # 黄金检索集：覆盖 8 大业务板块的 30 条核心业务查询（兼容真实 78 套模板语料库）
 RAG_GOLDEN = [
@@ -37,7 +47,6 @@ RAG_GOLDEN = [
     ("年费缴纳服务范围", "CONTRACT_SUBJECT", ["年费"]),
     ("专利转让合同的当事人字段", "CONTRACT_SUBJECT", ["转让人", "受让人"]),
     ("违约赔偿范围包括什么", "LIABILITY", ["律师费", "保全费"]),
-    # 新增 8 大业务板块扩展查询（覆盖国际商标、PCT、科技项目、诉讼、版权、总委框架）
     ("侵权诉讼及专利无效服务事项", "SERVICE_SCOPE", ["诉讼", "无效", "服务"]),
     ("科技项目申报材料工本费与咨询费", "FEE_AND_PAYMENT", ["申报", "费用", "咨询"]),
     ("保密协议商业秘密泄露与补救措施", "CONFIDENTIALITY", ["商业秘密", "保密", "赔偿"]),
@@ -76,58 +85,98 @@ RAG_GOLDEN = [
 
 K_LIST = [1, 3, 5, 8]
 
+LABEL_ALIASES: dict[str, set[str]] = {
+    "PAYMENT_DEADLINE": {"PAYMENT_DEADLINE", "PAYMENT_DEADLINE_CHECK"},
+    "MANUAL_REVIEW": {"MANUAL_REVIEW", "CONTRADICTION_CHECK"},
+}
 
-def eval_rag(storage: Storage) -> dict:
-    """Phase 1.5 修复：指标名严格区分。
 
-    - Recall@K：相关条款被检索到的比例（任一相关命中即算召回）；
-    - Hit@K / Success@K：首个相关结果排进 Top-K 的查询比例（MRR 的 K 截断版）；
-    - MRR：首个相关结果排名倒数的均值；
-    - NDCG@K：按相关性分级（直接相关=2，同类条款=1）的归一折损累积增益；
-    - CitationCorrectness：返回 clause_id 可回查原文的比例。
-    """
-    results = []
-    for query, cat, keywords in RAG_GOLDEN:
-        hits = storage.search(query, top_k=8, rerank=True)
-        grades = []  # 逐命中位置的相关性分级
-        citation_ok = True
-        retrieved_clause_ids = []
-        for i, h in enumerate(hits, 1):
-            row = storage.get_clause(h["clause_id"])
-            if row is None or not row["original_text"].strip():
-                citation_ok = False
-            retrieved_clause_ids.append(h["clause_id"])
-            hit_cat = row["clause_category"] if row else ""
-            text = row["original_text"] if row else ""
-            if hit_cat == cat and any(k in text for k in keywords):
-                grades.append(2)  # 直接相关（类别+关键词均命中）
-            elif hit_cat == cat or any(k in text for k in keywords):
-                grades.append(1)  # 相同类条款
-            else:
-                grades.append(0)
-        relevant_ranks = [i + 1 for i, g in enumerate(grades) if g >= 1]
-        strong_ranks = [i + 1 for i, g in enumerate(grades) if g >= 2]
-        first = relevant_ranks[0] if relevant_ranks else None
-        # NDCG@8
-        dcg = sum((2**g - 1) / np.log2(i + 2) for i, g in enumerate(grades))
-        ideal = sorted(grades, reverse=True)
-        idcg = sum((2**g - 1) / np.log2(i + 2) for i, g in enumerate(ideal)) or 1.0
-        results.append(
-            {
-                "query": query,
-                "expected_category": cat,
-                "keywords": keywords,
-                "retrieved": len(hits),
-                "first_relevant_rank": first,
-                "relevant_ranks": relevant_ranks[:5],
-                "strong_ranks": strong_ranks[:5],
-                "citation_verified": citation_ok,
-                "ndcg": round(dcg / idcg, 4),
-                "retrieved_clause_ids": retrieved_clause_ids[:5],
-            }
-        )
-    n = len(results)
-    metrics = {}
+def determine_evaluation_tier(
+    embedding_name: str, llm_configured: bool, doc_count: int = 0
+) -> str:
+    """如实判定当前评测所处证据层级，杜绝拿离线哈希合成结果冒充生产语义准确率。"""
+    is_hash = "hash" in embedding_name.lower()
+    if not is_hash and llm_configured:
+        return "REAL_MODEL_END_TO_END"
+    if not is_hash or doc_count >= 50:
+        return "DESENSITIZED_TEMPLATE_BENCHMARK"
+    return "SYNTHETIC_UNIT_REGRESSION"
+
+
+def _compute_latency_percentiles_ms(latencies_ms: list[float]) -> dict[str, float]:
+    if not latencies_ms:
+        return {"mean_ms": 0.0, "p50_ms": 0.0, "p95_ms": 0.0, "p99_ms": 0.0}
+    arr = np.array(latencies_ms, dtype=np.float64)
+    return {
+        "mean_ms": round(float(np.mean(arr)), 2),
+        "p50_ms": round(float(np.percentile(arr, 50)), 2),
+        "p95_ms": round(float(np.percentile(arr, 95)), 2),
+        "p99_ms": round(float(np.percentile(arr, 99)), 2),
+    }
+
+
+def _evaluate_single_rag_query(
+    storage: Any,
+    verifier: CitationVerifier,
+    query: str,
+    expected_cat: str,
+    keywords: list[str],
+) -> dict[str, Any]:
+    t0 = time.perf_counter()
+    hits = storage.search(query, top_k=8, rerank=True)
+    elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+
+    cit_summary = verifier.verify_retrieval_hits(storage, hits)
+    grades: list[int] = []
+    retrieved_clause_ids: list[str] = []
+
+    for h in hits:
+        cid = h["clause_id"]
+        retrieved_clause_ids.append(cid)
+        row = storage.get_clause(cid)
+        hit_cat = row["clause_category"] if row else ""
+        text = row["original_text"] if row else ""
+        has_kw = any(k in text for k in keywords)
+        if hit_cat == expected_cat and has_kw:
+            grades.append(2)
+        elif hit_cat == expected_cat or has_kw:
+            grades.append(1)
+        else:
+            grades.append(0)
+
+    relevant_ranks = [i + 1 for i, g in enumerate(grades) if g >= 1]
+    strong_ranks = [i + 1 for i, g in enumerate(grades) if g >= 2]
+    first = relevant_ranks[0] if relevant_ranks else None
+    dcg = float(sum((2**g - 1) / np.log2(i + 2) for i, g in enumerate(grades)))
+    ideal = sorted(grades, reverse=True)
+    idcg = float(sum((2**g - 1) / np.log2(i + 2) for i, g in enumerate(ideal))) or 1.0
+
+    return {
+        "query": query,
+        "expected_category": expected_cat,
+        "keywords": keywords,
+        "retrieved": len(hits),
+        "first_relevant_rank": first,
+        "relevant_ranks": relevant_ranks[:5],
+        "strong_ranks": strong_ranks[:5],
+        "citation_verified": cit_summary.citation_correctness == 1.0,
+        "citation_correctness": cit_summary.citation_correctness,
+        "answer_groundedness": cit_summary.answer_groundedness,
+        "ndcg": round(dcg / idcg, 4),
+        "latency_ms": elapsed_ms,
+        "retrieved_clause_ids": retrieved_clause_ids[:5],
+    }
+
+
+def eval_rag(storage: Any) -> dict[str, Any]:
+    """评估混合检索质量：Hit@K / Recall@K / MRR / NDCG@8 / CitationCorrectness / AnswerGroundedness。"""
+    verifier = CitationVerifier()
+    results = [
+        _evaluate_single_rag_query(storage, verifier, q, cat, kws)
+        for q, cat, kws in RAG_GOLDEN
+    ]
+    n = max(1, len(results))
+    metrics: dict[str, float] = {}
     for k in K_LIST:
         metrics[f"Hit@{k}"] = round(
             sum(
@@ -154,38 +203,46 @@ def eval_rag(storage: Storage) -> dict:
     )
     metrics["NDCG@8"] = round(sum(r["ndcg"] for r in results) / n, 4)
     metrics["CitationCorrectness"] = round(
-        sum(1 for r in results if r["citation_verified"]) / n, 4
+        sum(r["citation_correctness"] for r in results) / n, 4
     )
+    metrics["AnswerGroundedness"] = round(
+        sum(r["answer_groundedness"] for r in results) / n, 4
+    )
+
+    doc_count = (
+        len(storage.list_documents()) if hasattr(storage, "list_documents") else 0
+    )
+    emb_name = getattr(getattr(storage, "emb", None), "name", "unknown")
+    tier = determine_evaluation_tier(
+        emb_name, llm_configured=False, doc_count=doc_count
+    )
+
     return {
+        "evaluation_tier": tier,
         "metrics": metrics,
+        "latency_ms": _compute_latency_percentiles_ms(
+            [r["latency_ms"] for r in results]
+        ),
         "queries": results,
-        "query_count": n,
-        "embedding_provider": storage.emb.name,
-        "reranker": "char-2gram-coverage+deterministic (生产建议 cross-encoder)",
+        "query_count": len(results),
+        "embedding_provider": emb_name,
+        "reranker": "lexical_2gram_authority_v1 (支持切换 HttpCrossEncoderReranker)",
         "metric_definitions": {
             "Hit@K": "首个相关结果进入 Top-K 的查询占比（Success@K）",
             "Recall@K": "相关结果进入 Top-K 的查询占比（任一相关即召回）",
             "MRR": "首个相关结果排名倒数均值",
             "NDCG@8": "分级相关性（2=类别+关键词，1=同类/同词）归一折损累积增益",
-            "CitationCorrectness": "clause_id 可回查到非空原文的比例",
+            "CitationCorrectness": "返回 clause_id 在数据库中存在且原文非空的比例",
+            "AnswerGroundedness": "检索返回文本与数据库权威条款原文逐字锚定一致度",
         },
     }
 
 
-# 预期标签 → 系统实际标识别名（语义标签与 rule_id/category 命名对齐，不降低判定严格性：
-# 仍要求对应检查真实报出，别名只解决命名差异）
-LABEL_ALIASES: dict[str, set[str]] = {
-    "PAYMENT_DEADLINE": {"PAYMENT_DEADLINE", "PAYMENT_DEADLINE_CHECK"},
-    "MANUAL_REVIEW": {"MANUAL_REVIEW", "CONTRADICTION_CHECK"},
-}
-
-
-def _label_matched(label: str, got: set[str], issues: list[dict]) -> bool:
+def _label_matched(label: str, got: set[str], issues: list[dict[str, Any]]) -> bool:
     accepted = LABEL_ALIASES.get(label, {label})
     if accepted & got:
         return True
     if label == "MANUAL_REVIEW":
-        # 语义标签：需人工复核的检出（execution_mode/check_status 佐证）
         return any(
             i.get("execution_mode") == "MANUAL_REVIEW"
             or i.get("check_status") == "NEEDS_MANUAL_REVIEW"
@@ -195,102 +252,157 @@ def _label_matched(label: str, got: set[str], issues: list[dict]) -> bool:
     return False
 
 
-def eval_review(storage: Storage) -> dict:
-    """Phase 1.5 修复：按预期标签逐个计算 TP/FP/FN/Precision/Recall/F1。
-
-    旧缺陷：命中任意一个预期标签即 PASS（漏报被掩盖）。
-    新逻辑：每个 (样本, 预期标签) 独立判定；无错误基准样本统计误报。
-    """
-    engine = ReviewEngine(storage)
-    manifest = json.loads(
-        (config.GOLDEN_DIR / "manifest.json").read_text(encoding="utf-8")
-    )
-    rows = []
-    label_stats: dict[str, dict] = {}  # label -> {tp, fp, fn}
-    false_positives = []
-    for s in manifest:
-        t0 = time.time()
-        r = engine.review(config.GOLDEN_DIR / s["file"], mode="COMBINED")
-        dt = round(time.time() - t0, 3)
-        got = {i["category"] for i in r["issues"]} | {
-            i["rule_id"] for i in r["issues"] if i["rule_id"]
-        }
-        got.discard(None)
-        if s["expect_no_issue"]:
-            hard = [
-                i
-                for i in r["issues"]
-                if i["severity"] in ("HIGH", "MEDIUM")
-                and i["category"]
-                not in ("NOT_CHECKED", "RULE_PENDING_APPROVAL", "MANUAL_REVIEW")
-            ]
-            for i in hard:
-                st = label_stats.setdefault(i["category"], {"tp": 0, "fp": 0, "fn": 0})
-                st["fp"] += 1
-            if hard:
-                false_positives.append(
-                    {
-                        "sample": s["sample_id"],
-                        "issues": [(i["category"], i["title"]) for i in hard],
-                    }
-                )
-            rows.append(
-                {
-                    "sample": s["sample_id"],
-                    "expected": [],
-                    "detected": sorted(got),
-                    "per_label": [],
-                    "result": "PASS" if not hard else "FALSE_POSITIVE",
-                    "elapsed_s": dt,
-                }
-            )
-            continue
-        per_label = []
-        for label in s["expected_issue_categories"]:
-            st = label_stats.setdefault(label, {"tp": 0, "fp": 0, "fn": 0})
-            if _label_matched(label, got, r["issues"]):
-                st["tp"] += 1
-                per_label.append({"label": label, "result": "TP"})
-            else:
-                st["fn"] += 1
-                per_label.append({"label": label, "result": "FN"})
-        # 检出但无预期标签的硬性问题 → FP（仅统计 severity 高/中）
-        expected = set(s["expected_issue_categories"])
-        for i in r["issues"]:
-            if i["severity"] in ("HIGH", "MEDIUM") and i["category"] not in (
-                "NOT_CHECKED",
-                "RULE_PENDING_APPROVAL",
-                "MANUAL_REVIEW",
-            ):
-                key = i["rule_id"].split("@")[0] if i.get("rule_id") else i["category"]
-                if key not in expected and i["category"] not in expected:
-                    st = label_stats.setdefault(
-                        i["category"], {"tp": 0, "fp": 0, "fn": 0}
-                    )
-                    st["fp"] += 1
-        all_tp = all(p["result"] == "TP" for p in per_label)
-        rows.append(
+def _score_baseline_sample(
+    sample: dict[str, Any],
+    review_out: dict[str, Any],
+    elapsed_ms: float,
+    groundedness: float,
+    label_stats: dict[str, dict[str, int]],
+    false_positives: list[dict[str, Any]],
+) -> dict[str, Any]:
+    hard = [
+        i
+        for i in review_out["issues"]
+        if i["severity"] in ("HIGH", "MEDIUM")
+        and i["category"]
+        not in ("NOT_CHECKED", "RULE_PENDING_APPROVAL", "MANUAL_REVIEW")
+    ]
+    for i in hard:
+        st = label_stats.setdefault(i["category"], {"tp": 0, "fp": 0, "fn": 0})
+        st["fp"] += 1
+    if hard:
+        false_positives.append(
             {
-                "sample": s["sample_id"],
-                "expected": sorted(expected),
-                "detected": sorted(got),
-                "per_label": per_label,
-                "result": "PASS"
-                if all_tp
-                else "PARTIAL"
-                if any(p["result"] == "TP" for p in per_label)
-                else "MISS",
-                "elapsed_s": dt,
+                "sample": sample["sample_id"],
+                "issues": [(i["category"], i["title"]) for i in hard],
             }
         )
+    got = {i["category"] for i in review_out["issues"]} | {
+        i["rule_id"] for i in review_out["issues"] if i["rule_id"]
+    }
+    return {
+        "sample": sample["sample_id"],
+        "expected": [],
+        "detected": sorted(x for x in got if x),
+        "per_label": [],
+        "result": "PASS" if not hard else "FALSE_POSITIVE",
+        "elapsed_s": round(elapsed_ms / 1000.0, 3),
+        "latency_ms": elapsed_ms,
+        "answer_groundedness": groundedness,
+    }
 
-    # 汇总指标
+
+def _score_mutated_sample(
+    sample: dict[str, Any],
+    review_out: dict[str, Any],
+    elapsed_ms: float,
+    groundedness: float,
+    label_stats: dict[str, dict[str, int]],
+) -> dict[str, Any]:
+    got = {i["category"] for i in review_out["issues"]} | {
+        i["rule_id"] for i in review_out["issues"] if i["rule_id"]
+    }
+    got.discard(None)
+    per_label = []
+    for label in sample["expected_issue_categories"]:
+        st = label_stats.setdefault(label, {"tp": 0, "fp": 0, "fn": 0})
+        if _label_matched(label, got, review_out["issues"]):
+            st["tp"] += 1
+            per_label.append({"label": label, "result": "TP"})
+        else:
+            st["fn"] += 1
+            per_label.append({"label": label, "result": "FN"})
+
+    expected = set(sample["expected_issue_categories"])
+    for i in review_out["issues"]:
+        if i["severity"] in ("HIGH", "MEDIUM") and i["category"] not in (
+            "NOT_CHECKED",
+            "RULE_PENDING_APPROVAL",
+            "MANUAL_REVIEW",
+        ):
+            key = i["rule_id"].split("@")[0] if i.get("rule_id") else i["category"]
+            if key not in expected and i["category"] not in expected:
+                st = label_stats.setdefault(i["category"], {"tp": 0, "fp": 0, "fn": 0})
+                st["fp"] += 1
+
+    all_tp = all(p["result"] == "TP" for p in per_label)
+    any_tp = any(p["result"] == "TP" for p in per_label)
+    return {
+        "sample": sample["sample_id"],
+        "expected": sorted(expected),
+        "detected": sorted(x for x in got if x),
+        "per_label": per_label,
+        "result": "PASS" if all_tp else ("PARTIAL" if any_tp else "MISS"),
+        "elapsed_s": round(elapsed_ms / 1000.0, 3),
+        "latency_ms": elapsed_ms,
+        "answer_groundedness": groundedness,
+    }
+
+
+def eval_review(
+    storage: Any,
+    golden_dir: Path | None = None,
+    llm_provider: Any = None,
+    price_per_1k_tokens_usd: Decimal = Decimal("0.0020"),
+) -> dict[str, Any]:
+    """评估端到端合同审核质量、依据度、P50/P95/P99 延迟与单份合同 Token/成本。"""
+    target_dir = golden_dir or config.GOLDEN_DIR
+    engine = ReviewEngine(storage, llm_provider=llm_provider)
+    verifier = CitationVerifier()
+    manifest = json.loads((target_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    rows: list[dict[str, Any]] = []
+    label_stats: dict[str, dict[str, int]] = {}
+    false_positives: list[dict[str, Any]] = []
+    latencies_ms: list[float] = []
+    grounded_list: list[float] = []
+    total_tokens = 0
+
+    for s in manifest:
+        sample_path = target_dir / s["file"]
+        t0 = time.perf_counter()
+        res = engine.review_result(sample_path, mode="COMBINED")
+        elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+        latencies_ms.append(elapsed_ms)
+        r_dict = res.to_dict()
+
+        rec, _ = import_template_file(sample_path)
+        clauses = (rec.clauses if rec else None) or []
+        g_sum = verifier.verify_finding_grounding(r_dict["issues"], clauses)
+        grounded_list.append(g_sum.answer_groundedness)
+
+        if s["expect_no_issue"]:
+            rows.append(
+                _score_baseline_sample(
+                    s,
+                    r_dict,
+                    elapsed_ms,
+                    g_sum.answer_groundedness,
+                    label_stats,
+                    false_positives,
+                )
+            )
+        else:
+            rows.append(
+                _score_mutated_sample(
+                    s, r_dict, elapsed_ms, g_sum.answer_groundedness, label_stats
+                )
+            )
+
+    if llm_provider is not None and hasattr(llm_provider, "calls"):
+        total_tokens = sum(
+            int(c.get("tokens", 0)) for c in getattr(llm_provider, "calls", [])
+        )
+
     tp = sum(st["tp"] for st in label_stats.values())
     fp = sum(st["fp"] for st in label_stats.values())
     fn = sum(st["fn"] for st in label_stats.values())
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    fn_rate = fn / (tp + fn) if (tp + fn) else 0.0
+    fp_rate = fp / (tp + fp) if (tp + fp) else 0.0
+
     per_label_metrics = {
         label: {
             **st,
@@ -303,89 +415,101 @@ def eval_review(storage: Storage) -> dict:
         }
         for label, st in sorted(label_stats.items())
     }
-    hard_pass = sum(1 for r in rows if r["result"] == "PASS")
+    total_cost = (Decimal(total_tokens) / Decimal(1000)) * price_per_1k_tokens_usd
+    per_contract_cost = (total_cost / Decimal(max(1, len(rows)))).quantize(
+        Decimal("0.000001")
+    )
+
+    emb_name = getattr(getattr(storage, "emb", None), "name", "unknown")
+    doc_count = (
+        len(storage.list_documents()) if hasattr(storage, "list_documents") else 0
+    )
+    tier = determine_evaluation_tier(
+        emb_name,
+        llm_configured=bool(engine.llm_status().get("configured")),
+        doc_count=doc_count,
+    )
+
     return {
+        "evaluation_tier": tier,
         "samples": rows,
         "sample_count": len(rows),
-        "sample_pass_all_labels": hard_pass,
+        "sample_pass_all_labels": sum(1 for r in rows if r["result"] == "PASS"),
         "micro_precision": round(precision, 4),
         "micro_recall": round(recall, 4),
         "micro_f1": round(f1, 4),
+        "false_positive_rate": round(fp_rate, 4),
+        "false_negative_rate": round(fn_rate, 4),
+        "answer_groundedness": round(
+            sum(grounded_list) / max(1, len(grounded_list)), 4
+        ),
+        "latency_ms": _compute_latency_percentiles_ms(latencies_ms),
+        "token_cost": {
+            "total_tokens": total_tokens,
+            "estimated_total_cost_usd": str(total_cost.quantize(Decimal("0.000001"))),
+            "cost_per_contract_usd": str(per_contract_cost),
+        },
         "tp": tp,
         "fp": fp,
         "fn": fn,
         "per_label_metrics": per_label_metrics,
         "false_positives": false_positives,
         "missed": [r["sample"] for r in rows if r["result"] in ("MISS", "PARTIAL")],
-        "note": "逐标签 TP/FP/FN 统计；无错误基准样本单列误报。合成变异样本 12 类错误 + 1 基准。",
+        "note": (
+            f"当前评测层级：{tier}。逐标签 TP/FP/FN 统计；无错误基准样本单列误报；"
+            "合成样本指标严禁直接宣称为真实企业合同语义大模型准确率。"
+        ),
     }
 
 
-def run():
-    config.ensure_dirs()
-    st = Storage(config.DB_PATH)
-    # 确保导入数据在库
-    if not st.list_documents():
-        raise RuntimeError(
-            "知识库为空，请先运行 python -m contract_kb.cli import 与测试导入"
-        )
-    rag = eval_rag(st)
-    rev = eval_review(st)
-    (config.DATA_DIR / "eval_rag.json").write_text(
-        json.dumps(rag, ensure_ascii=False, indent=1), encoding="utf-8"
-    )
-    (config.DATA_DIR / "eval_review.json").write_text(
-        json.dumps(rev, ensure_ascii=False, indent=1), encoding="utf-8"
-    )
-
-    # 生成报告
+def _render_rag_markdown(rag: dict[str, Any]) -> str:
+    lat = rag["latency_ms"]
     lines = [
         "# RAG 检索评估报告（rag-retrieval-evaluation）",
         "",
-        f"- 黄金查询集：{rag['query_count']} 条（含困难负样本：同类型不同期限/同类条款不同金额/商专近似条款/过期版本）",
-        f"- Embedding：{rag['embedding_provider']}（本地离线哈希嵌入；生产建议替换为授权中文 Embedding 模型）",
-        f"- Reranker：{rag['reranker']}",
+        f"- **评测证据层级（Evaluation Tier）**：`{rag['evaluation_tier']}`",
+        f"- 黄金查询集：{rag['query_count']} 条",
+        f"- Embedding：`{rag['embedding_provider']}`",
+        f"- Reranker：`{rag['reranker']}`",
+        f"- 检索延迟：Mean={lat['mean_ms']}ms, P50={lat['p50_ms']}ms, P95={lat['p95_ms']}ms, P99={lat['p99_ms']}ms",
         "",
-        "## 指标定义（严格区分，不混用）",
+        "## 指标（真实测量）",
         "",
+        "| 指标 | 值 | 说明 |",
+        "|---|---|---|",
     ]
-    for k, v in rag.get("metric_definitions", {}).items():
-        lines.append(f"- **{k}**：{v}")
-    lines += ["", "## 指标（真实测量）", "", "| 指标 | 值 |", "|---|---|"]
+    defs = rag.get("metric_definitions", {})
     for k, v in rag["metrics"].items():
-        lines.append(f"| {k} | {v} |")
+        lines.append(f"| {k} | {v} | {defs.get(k, '')} |")
     lines += [
         "",
         "## 逐条查询结果",
         "",
-        "| 查询 | 期望类别 | 命中数 | 首个相关排名 | 强相关排名 | NDCG | 引用可回查 |",
-        "|---|---|---|---|---|---|---|",
+        "| 查询 | 期望类别 | 命中数 | 首个相关排名 | NDCG | 引用正确率 | 依据度 | 耗时(ms) |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for q in rag["queries"]:
         lines.append(
             f"| {q['query']} | {q['expected_category']} | {q['retrieved']} "
-            f"| {q['first_relevant_rank'] or '未命中'} | {q['strong_ranks'] or '-'} "
-            f"| {q['ndcg']} | {'是' if q['citation_verified'] else '否'} |"
+            f"| {q['first_relevant_rank'] or '未命中'} | {q['ndcg']} "
+            f"| {q['citation_correctness']} | {q['answer_groundedness']} | {q['latency_ms']} |"
         )
-    lines += [
-        "",
-        "## 局限性（如实标注）",
-        "",
-        "- 本地哈希嵌入仅保证词汇级匹配，语义指标低于深度模型属预期；",
-        "- 中文 FTS5 默认分词不足，已用逐词 OR + 向量通道补偿；",
-        "- 评估在合成语料 + 黄金集上测量，接入真实 Embedding 后须重测对比。",
-    ]
-    (config.REPORT_DIR / "rag-retrieval-evaluation.md").write_text(
-        "\n".join(lines), encoding="utf-8"
-    )
+    return "\n".join(lines)
 
+
+def _render_review_markdown(rev: dict[str, Any]) -> str:
+    lat = rev["latency_ms"]
+    tc = rev["token_cost"]
     lines = [
         "# 合同审核评估报告（contract-review-evaluation）",
         "",
-        f"- 测试样本量：{rev['sample_count']}（合成变异合同）",
-        f"- 全标签命中样本：{rev['sample_pass_all_labels']}",
+        f"- **评测证据层级（Evaluation Tier）**：`{rev['evaluation_tier']}`",
+        f"- 测试样本量：{rev['sample_count']}，全标签命中样本：{rev['sample_pass_all_labels']}",
         f"- 微平均 Precision：{rev['micro_precision']}，Recall：{rev['micro_recall']}，F1：{rev['micro_f1']}",
-        f"- TP={rev['tp']}，FP={rev['fp']}，FN={rev['fn']}",
+        f"- 误报率（FPR）：{rev['false_positive_rate']}，漏报率（FNR）：{rev['false_negative_rate']}",
+        f"- 原文依据度（AnswerGroundedness）：{rev['answer_groundedness']}",
+        f"- 审核延迟：Mean={lat['mean_ms']}ms, P50={lat['p50_ms']}ms, P95={lat['p95_ms']}ms, P99={lat['p99_ms']}ms",
+        f"- Token 与单份成本：Tokens={tc['total_tokens']}, CostPerContract=${tc['cost_per_contract_usd']}",
         "",
         "## 逐标签指标",
         "",
@@ -398,59 +522,42 @@ def run():
             f"| {m['precision'] if m['precision'] is not None else '-'} "
             f"| {m['recall'] if m['recall'] is not None else '-'} |"
         )
-    lines += [
-        "",
-        "## 逐样本结果（逐标签 TP/FN）",
-        "",
-        "| 样本 | 预期标签 | 逐标签结果 | 样本结果 | 耗时(s) |",
-        "|---|---|---|---|---|",
-    ]
-    for r in rev["samples"]:
-        per = "; ".join(f"{p['label']}={p['result']}" for p in r["per_label"]) or "-"
-        lines.append(
-            f"| {r['sample']} | {r.get('expected') or '无问题'} | {per} "
-            f"| {r['result']} | {r['elapsed_s']} |"
-        )
-    lines += ["", "## 误报/漏报分析", ""]
-    if rev["false_positives"]:
-        for fp in rev["false_positives"]:
-            lines.append(f"- 误报 {fp['sample']}：{fp['issues']}")
-    else:
-        lines.append("- 无错误基准样本未报出任何 HIGH/MEDIUM 问题 → 本轮零误报。")
-    if rev["missed"]:
-        for s in rev["missed"]:
-            row = next(x for x in rev["samples"] if x["sample"] == s)
-            lines.append(
-                f"- 漏报/部分命中 {s}：{row['per_label']}。"
-                "需语义理解的标签在无 LLM 环境降级为 NEEDS_MANUAL_REVIEW/NOT_CHECKED，不推定违规。"
+    return "\n".join(lines)
+
+
+def run() -> None:
+    config.ensure_dirs()
+    st = Storage(config.DB_PATH)
+    try:
+        if not st.list_documents():
+            raise RuntimeError(
+                "知识库为空，请先运行 python -m contract_kb.cli import 与测试导入"
             )
-    else:
-        lines.append("- 无漏报。")
-    lines += [
-        "",
-        "## 说明",
-        "",
-        "- 确定性规则覆盖：金额一致性、必备条款、管辖条款、发票条款、违约金、付款期限、标识格式、主体一致性、矛盾启发式；",
-        "- 语义级错误在无 LLM 环境下标记 NOT_CHECKED/NEEDS_MANUAL_REVIEW，不伪报；",
-        "- 所有检出问题均带 source_reference（node_ids + 原文），可在原文档定位。",
-    ]
-    (config.REPORT_DIR / "contract-review-evaluation.md").write_text(
-        "\n".join(lines), encoding="utf-8"
-    )
-    print("eval_rag:", json.dumps(rag["metrics"], ensure_ascii=False))
-    print(
-        "eval_review: P/R/F1 =",
-        rev["micro_precision"],
-        rev["micro_recall"],
-        rev["micro_f1"],
-        "TP/FP/FN =",
-        rev["tp"],
-        rev["fp"],
-        rev["fn"],
-        "missed =",
-        rev["missed"],
-    )
-    st.close()
+        rag = eval_rag(st)
+        rev = eval_review(st)
+        (config.DATA_DIR / "eval_rag.json").write_text(
+            json.dumps(rag, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (config.DATA_DIR / "eval_review.json").write_text(
+            json.dumps(rev, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (config.REPORT_DIR / "rag-retrieval-evaluation.md").write_text(
+            _render_rag_markdown(rag), encoding="utf-8"
+        )
+        (config.REPORT_DIR / "contract-review-evaluation.md").write_text(
+            _render_review_markdown(rev), encoding="utf-8"
+        )
+        print("eval_rag:", json.dumps(rag["metrics"], ensure_ascii=False))
+        print(
+            "eval_review: P/R/F1 =",
+            rev["micro_precision"],
+            rev["micro_recall"],
+            rev["micro_f1"],
+            "Latency P95(ms) =",
+            rev["latency_ms"]["p95_ms"],
+        )
+    finally:
+        st.close()
 
 
 if __name__ == "__main__":

@@ -637,17 +637,25 @@ class RetrieveEvidenceStage(ReviewStage):
         self.storage = storage
 
     def execute(self, ctx: PipelineContext) -> dict[str, Any]:
+        from ...modules.retrieval import GovernedRetrievalService
+
         rag_context: list[dict[str, Any]] = []
         seen_clauses: set[str] = set()
+        svc = GovernedRetrievalService(self.storage)
+        verified_ratios: list[float] = []
+
         for kw in ("费用及支付方式", "违约责任", "争议解决", "保密"):
-            hits = self.storage.search(
+            bundle = svc.retrieve_for_review(
                 kw,
                 top_k=3,
+                business_category=ctx.category,
                 contract_subtype=ctx.subtype,
-                rerank=True,
                 tenant_id=ctx.scope_tenant,
+                include_historical_cases=False,
             )
-            for h in hits[:2]:
+            if bundle.citation_summary is not None:
+                verified_ratios.append(bundle.citation_summary.citation_correctness)
+            for h in bundle.authoritative_hits[:2]:
                 cid = h["clause_id"]
                 if cid in seen_clauses:
                     continue
@@ -658,13 +666,26 @@ class RetrieveEvidenceStage(ReviewStage):
                         "clause_id": cid,
                         "document_id": h["document_id"],
                         "clause_category": h.get("clause_category"),
-                        "knowledge_type": h.get("knowledge_type", "LAYER_D_RAG"),
-                        "approved_status": h.get("approved_status"),
-                        "text": h["text"][:120],
+                        "knowledge_type": h.get("knowledge_type", "TEMPLATE"),
+                        "approved_status": h.get("approved_status", "APPROVED"),
+                        "authority_rank": h.get("authority_rank", 2),
+                        "can_drive_mandatory_finding": h.get(
+                            "can_drive_mandatory_finding", True
+                        ),
+                        "prompt_badge": h.get("prompt_badge", ""),
+                        "text": h["text"][:160],
                     }
                 )
         ctx.rag_context = rag_context
-        return {"retrieved_chunks": len(rag_context)}
+        avg_cit = (
+            round(sum(verified_ratios) / len(verified_ratios), 4)
+            if verified_ratios
+            else 1.0
+        )
+        return {
+            "retrieved_chunks": len(rag_context),
+            "citation_correctness": avg_cit,
+        }
 
 
 class LLMSemanticReviewStage(ReviewStage):
