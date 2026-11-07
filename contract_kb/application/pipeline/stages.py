@@ -1265,6 +1265,7 @@ class VerifyEvidenceStage(ReviewStage):
         self.storage = storage
         if verifier is None:
             from ...modules.retrieval.citation import CitationVerifier
+
             self.verifier = CitationVerifier()
         else:
             self.verifier = verifier
@@ -1331,8 +1332,13 @@ class VerifyEvidenceStage(ReviewStage):
                             downgraded += 1
                             break
                         # 检查来源是否允许驱动强制结论
-                        ktype = str(kref.get("knowledge_type") or kref.get("source_type") or "").upper()
-                        if ktype in ("LEGAL_REFERENCE", "HISTORICAL_CASE") or kref.get("can_drive_mandatory_finding") is False:
+                        ktype = str(
+                            kref.get("knowledge_type") or kref.get("source_type") or ""
+                        ).upper()
+                        if (
+                            ktype in ("LEGAL_REFERENCE", "HISTORICAL_CASE")
+                            or kref.get("can_drive_mandatory_finding") is False
+                        ):
                             if f.severity in ("HIGH", "CRITICAL"):
                                 f.severity = "LOW"
                                 f.requires_human_review = True
@@ -1340,11 +1346,17 @@ class VerifyEvidenceStage(ReviewStage):
                                 f.description += "（参考依据不具备企业强制基准效力，已降级并提示人工复核）"
                     else:
                         ref_tenant = kref.get("tenant_id")
-                        if ref_tenant and ctx.scope_tenant and ref_tenant != ctx.scope_tenant:
+                        if (
+                            ref_tenant
+                            and ctx.scope_tenant
+                            and ref_tenant != ctx.scope_tenant
+                        ):
                             f.check_status = CheckStatus.INSUFFICIENT_EVIDENCE.value
                             f.requires_human_review = True
                             f.citation_status = "CITATION_UNVERIFIED"
-                            f.description += "（证据校验：知识库引用跨租户越权，已降级）"
+                            f.description += (
+                                "（证据校验：知识库引用跨租户越权，已降级）"
+                            )
                             downgraded += 1
                             break
                         st = kref.get("approved_status")

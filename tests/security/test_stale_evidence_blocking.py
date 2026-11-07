@@ -86,7 +86,12 @@ def test_stale_and_unapproved_evidence_blocking(tmp_path: Path):
         }
     )
 
-    st.approve_knowledge_version(tenant_id="default", document_id=did_active, approver_id="legal_admin", approval_reason="正式审批现行有效标准")
+    st.approve_knowledge_version(
+        tenant_id="default",
+        document_id=did_active,
+        approver_id="legal_admin",
+        approval_reason="正式审批现行有效标准",
+    )
     svc = GovernedRetrievalService(st)
 
     # 4. 执行权威检索，要求仅能召回现行已审批标准

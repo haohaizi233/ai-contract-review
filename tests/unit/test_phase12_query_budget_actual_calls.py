@@ -4,13 +4,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 import pytest
 
 from contract_kb import config
 from contract_kb.modules.retrieval.query_planner import (
     ContractAwareQueryPlanner,
-    QueryPlanningBudget,
     RetrievalIntent,
 )
 from contract_kb.modules.retrieval.service import (
@@ -30,7 +28,9 @@ class DummyLLM:
         return self.reply
 
 
-def test_query_budget_tracks_actual_calls_and_stops_on_exhaustion(tmp_path: Path) -> None:
+def test_query_budget_tracks_actual_calls_and_stops_on_exhaustion(
+    tmp_path: Path,
+) -> None:
     """验证 RetrievalExecutionBudget 精确记录实际底层 search 调用，并在达到上限时熔断阻断。"""
     st = Storage(tmp_path / "budget_test.db")
     svc = GovernedRetrievalService(st)
@@ -81,14 +81,18 @@ def test_llm_query_expansion_explicit_marking(monkeypatch: pytest.MonkeyPatch) -
 
     # 1. 未授权外部 LLM 时的行为：显式标记状态，禁止静默假装执行
     monkeypatch.setattr(config, "ALLOW_EXTERNAL_LLM", False)
-    intents_no_llm = planner.expand_intents_with_llm(clause, base_intents, llm_provider=None)
+    intents_no_llm = planner.expand_intents_with_llm(
+        clause, base_intents, llm_provider=None
+    )
     assert len(intents_no_llm) == len(base_intents)
     assert intents_no_llm[0].llm_expansion_status == "DISABLED_NO_AUTHORIZED_LLM"
 
     # 2. 授权并注入模拟 LLM 时的行为：生成 LLM 增补意图并标记 SUCCESS
     monkeypatch.setattr(config, "ALLOW_EXTERNAL_LLM", True)
     llm = DummyLLM(reply="违约金逾期计算规则与法律后果分析")
-    intents_with_llm = planner.expand_intents_with_llm(clause, base_intents, llm_provider=llm)
+    intents_with_llm = planner.expand_intents_with_llm(
+        clause, base_intents, llm_provider=llm
+    )
     assert llm.call_count == 1
     assert any(i.generation_method == "llm_assisted_v1" for i in intents_with_llm)
     assert intents_with_llm[0].llm_expansion_status == "SUCCESS"

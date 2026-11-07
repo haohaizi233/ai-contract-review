@@ -326,7 +326,11 @@ class PgVectorStorage:
                         self._commit()
                         return row[0], False
 
-                    base_did = doc.get("template_id") or doc.get("document_id") or "doc_unknown"
+                    base_did = (
+                        doc.get("template_id")
+                        or doc.get("document_id")
+                        or "doc_unknown"
+                    )
                     cur.execute(
                         "SELECT tenant_id FROM documents WHERE document_id=%s",
                         (base_did,),
@@ -594,7 +598,6 @@ class PgVectorStorage:
                 self._rollback()
                 raise
 
-
     def authorized_bulk_import_approved(
         self,
         doc: dict,
@@ -643,7 +646,10 @@ class PgVectorStorage:
                     )
 
                 current_rev = int(doc.get("revision") or 1)
-                if expected_revision is not None and int(expected_revision) != current_rev:
+                if (
+                    expected_revision is not None
+                    and int(expected_revision) != current_rev
+                ):
                     raise OptimisticLockConflictError(
                         f"知识版本审批冲突：预期 revision={expected_revision}，当前数据库 revision={current_rev}"
                     )
@@ -762,7 +768,10 @@ class PgVectorStorage:
                     )
 
                 current_rev = int(doc.get("revision") or 1)
-                if expected_revision is not None and int(expected_revision) != current_rev:
+                if (
+                    expected_revision is not None
+                    and int(expected_revision) != current_rev
+                ):
                     raise OptimisticLockConflictError(
                         f"知识版本撤销冲突：预期 revision={expected_revision}，当前数据库 revision={current_rev}"
                     )
@@ -1195,43 +1204,49 @@ class PgVectorStorage:
         """独立结构化编号/元数据精确召回通道（Channel D: 条款号精确匹配）。"""
         with self._lock:
             try:
-                fsql, fparams = self._where(
-                    business_category,
-                    contract_subtype,
-                    None,
-                    approved_only,
-                    tenant_id,
-                )
+                where_clauses = ["d.status='ACTIVE'", "c.clause_number=%s"]
+                params: list[Any] = [clause_number]
+                if business_category:
+                    where_clauses.append("d.business_category=%s")
+                    params.append(business_category)
+                if contract_subtype:
+                    where_clauses.append("d.contract_subtype=%s")
+                    params.append(contract_subtype)
+                if approved_only:
+                    where_clauses.append("c.approval_status='APPROVED'")
+                if tenant_id is not None:
+                    where_clauses.append("d.tenant_id=%s")
+                    params.append(tenant_id)
+
                 sql = (
                     "SELECT c.clause_id, c.document_id, c.original_text, c.clause_number, "
-                    "c.clause_category, e.chunk_id, e.business_category, e.contract_subtype, "
-                    "e.knowledge_type, e.approved_status, d.status AS doc_status, d.tenant_id "
+                    "c.clause_category, c.clause_id AS chunk_id, d.business_category, d.contract_subtype, "
+                    "c.knowledge_type, c.approval_status, d.status AS doc_status, d.tenant_id "
                     "FROM clauses c "
-                    "JOIN embeddings e ON e.clause_id=c.clause_id "
                     "JOIN documents d ON d.document_id=c.document_id "
-                    "WHERE c.clause_number=%s" + fsql + " LIMIT %s"
+                    f"WHERE {' AND '.join(where_clauses)} LIMIT %s"
                 )
                 with self.conn.cursor() as cur:
-                    cur.execute(sql, [clause_number] + fparams + [top_k])
+                    cur.execute(sql, params + [top_k])
                     rows = cur.fetchall()
                 self._commit()
                 out = []
                 for r in rows:
                     out.append(
                         {
-                            "chunk_id": r["chunk_id"],
-                            "clause_id": r["clause_id"],
-                            "document_id": r["document_id"],
-                            "text": r["original_text"],
-                            "clause_number": r["clause_number"],
-                            "clause_category": r["clause_category"],
+                            "chunk_id": r[5],
+                            "clause_id": r[0],
+                            "document_id": r[1],
+                            "text": r[2],
+                            "clause_number": r[3],
+                            "clause_category": r[4],
                             "channel": "structured",
-                            "business_category": r["business_category"],
-                            "contract_subtype": r["contract_subtype"],
-                            "knowledge_type": r["knowledge_type"],
-                            "approved_status": r["approved_status"],
-                            "doc_status": r["doc_status"],
-                            "tenant_id": r["tenant_id"],
+                            "business_category": r[6],
+                            "contract_subtype": r[7],
+                            "knowledge_type": r[8],
+                            "approved_status": r[9],
+                            "doc_status": r[10],
+                            "tenant_id": r[11],
                         }
                     )
                 return out

@@ -90,7 +90,9 @@ class CitationVerifier:
                 tenant_id="",
                 document_id=did,
                 clause_id=cid,
-                failure_reasons=["引文自身缺少明确的租户标识 (tenant_id)，严禁缺省默认放行"],
+                failure_reasons=[
+                    "引文自身缺少明确的租户标识 (tenant_id)，严禁缺省默认放行"
+                ],
             )
 
         if not eff_tenant:
@@ -103,14 +105,20 @@ class CitationVerifier:
                 failure_reasons=["缺少有效租户上下文，拒绝跨租户或无租户引用"],
             )
 
-        if item_tenant and expected_tenant_id and str(item_tenant) != str(expected_tenant_id):
+        if (
+            item_tenant
+            and expected_tenant_id
+            and str(item_tenant) != str(expected_tenant_id)
+        ):
             return EvidenceVerificationResult(
                 verified=False,
                 status="TENANT_MISMATCH",
                 tenant_id=str(item_tenant),
                 document_id=did,
                 clause_id=cid,
-                failure_reasons=[f"租户隔离不匹配：引文声明租户={item_tenant} vs 审核限定租户={expected_tenant_id}"],
+                failure_reasons=[
+                    f"租户隔离不匹配：引文声明租户={item_tenant} vs 审核限定租户={expected_tenant_id}"
+                ],
             )
 
         if not hasattr(storage, "get_clause"):
@@ -144,7 +152,9 @@ class CitationVerifier:
                 tenant_id=str(eff_tenant),
                 document_id=did,
                 clause_id=cid,
-                failure_reasons=[f"租户隔离不匹配：请求租户={eff_tenant}，数据库归属={db_tenant}"],
+                failure_reasons=[
+                    f"租户隔离不匹配：请求租户={eff_tenant}，数据库归属={db_tenant}"
+                ],
             )
 
         # 2. 文档 ID 校验
@@ -168,7 +178,9 @@ class CitationVerifier:
                 tenant_id=str(eff_tenant),
                 document_id=db_did,
                 clause_id=cid,
-                failure_reasons=[f"依据文档生命周期非 ACTIVE (当前={raw_doc_status})，无法作为有效依据"],
+                failure_reasons=[
+                    f"依据文档生命周期非 ACTIVE (当前={raw_doc_status})，无法作为有效依据"
+                ],
             )
 
         # 4. 来源哈希 (source_hash) 校验
@@ -191,11 +203,15 @@ class CitationVerifier:
                 document_id=db_did,
                 clause_id=cid,
                 source_hash=db_hash,
-                failure_reasons=[f"来源哈希不一致：引用携带={req_hash[:16]}...，数据库真实={db_hash[:16]}..."],
+                failure_reasons=[
+                    f"来源哈希不一致：引用携带={req_hash[:16]}...，数据库真实={db_hash[:16]}..."
+                ],
             )
 
         # 5. 文档版本一致性校验
-        req_ver = str(item_dict.get("document_version") or item_dict.get("source_version") or "").strip()
+        req_ver = str(
+            item_dict.get("document_version") or item_dict.get("source_version") or ""
+        ).strip()
         db_ver = str(row_dict.get("source_version") or "").strip()
         if req_ver and db_ver and req_ver != db_ver:
             return EvidenceVerificationResult(
@@ -205,12 +221,22 @@ class CitationVerifier:
                 document_id=db_did,
                 clause_id=cid,
                 document_version=db_ver,
-                failure_reasons=[f"依据版本不一致：请求={req_ver}，数据库当前={db_ver}"],
+                failure_reasons=[
+                    f"依据版本不一致：请求={req_ver}，数据库当前={db_ver}"
+                ],
             )
 
         # 6. 审批状态核验（撤销立即失效，未审批不得作为权威标准）
         db_approval = str(row_dict.get("approval_status") or "").strip().upper()
-        ktype = str(row_dict.get("knowledge_type") or item_dict.get("knowledge_type") or "TEMPLATE").strip().upper()
+        ktype = (
+            str(
+                row_dict.get("knowledge_type")
+                or item_dict.get("knowledge_type")
+                or "TEMPLATE"
+            )
+            .strip()
+            .upper()
+        )
 
         if db_approval == "REVOKED":
             return EvidenceVerificationResult(
@@ -229,12 +255,16 @@ class CitationVerifier:
                 tenant_id=str(eff_tenant),
                 document_id=db_did,
                 clause_id=cid,
-                failure_reasons=[f"权威标准未经正式审批授权 (当前状态={db_approval or 'NONE'})"],
+                failure_reasons=[
+                    f"权威标准未经正式审批授权 (当前状态={db_approval or 'NONE'})"
+                ],
             )
 
         # 7. 原文一致性核验
         db_text = str(row_dict.get("original_text") or "").strip()
-        hit_text = str(item_dict.get("text") or item_dict.get("original_text") or "").strip()
+        hit_text = str(
+            item_dict.get("text") or item_dict.get("original_text") or ""
+        ).strip()
         if not db_text:
             return EvidenceVerificationResult(
                 verified=False,
@@ -288,7 +318,9 @@ class CitationVerifier:
         unverified_ids: list[str] = []
 
         for h in hits:
-            res = self.verify_evidence_item(storage, h, expected_tenant_id=expected_tenant_id)
+            res = self.verify_evidence_item(
+                storage, h, expected_tenant_id=expected_tenant_id
+            )
             if res.verified:
                 verified += 1
                 grounded_scores.append(1.0)

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import pytest
 
 from contract_kb.ablation_study import run_full_ablation_study
 

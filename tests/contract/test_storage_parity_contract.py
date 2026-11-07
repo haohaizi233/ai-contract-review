@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 import uuid
 from pathlib import Path
 import pytest
@@ -21,12 +20,15 @@ from contract_kb.storage import Storage
 from contract_kb.storage_pg import PgVectorStorage
 from contract_kb.storage_errors import OptimisticLockConflictError
 
-PG_DSN = os.environ.get("CONTRACT_KB_TEST_PG_DSN", "postgresql://postgres:postgres@localhost:5432/postgres")
+PG_DSN = os.environ.get(
+    "CONTRACT_KB_TEST_PG_DSN", "postgresql://postgres:postgres@localhost:5432/postgres"
+)
 
 
 def _is_pg_reachable(dsn: str) -> bool:
     try:
         import psycopg2
+
         conn = psycopg2.connect(dsn, connect_timeout=2)
         conn.close()
         return True
@@ -34,7 +36,9 @@ def _is_pg_reachable(dsn: str) -> bool:
         return False
 
 
-def _run_lifecycle_and_security_parity_suite(st: Storage | PgVectorStorage, tenant: str) -> None:
+def _run_lifecycle_and_security_parity_suite(
+    st: Storage | PgVectorStorage, tenant: str
+) -> None:
     """在指定存储后端上执行全套一致性契约检验。"""
     doc_id = f"doc_{uuid.uuid4().hex[:8]}"
     clause_id = f"c_{uuid.uuid4().hex[:8]}"
@@ -61,7 +65,9 @@ def _run_lifecycle_and_security_parity_suite(st: Storage | PgVectorStorage, tena
 
     c_init = st.get_clause(clause_id, tenant_id=tenant)
     assert c_init is not None
-    assert c_init["approval_status"] == "PENDING_REVIEW", "导入不可直接授予 APPROVED 权限"
+    assert c_init["approval_status"] == "PENDING_REVIEW", (
+        "导入不可直接授予 APPROVED 权限"
+    )
 
     # Contract 2: 严格租户隔离
     c_other = st.get_clause(clause_id, tenant_id=f"other_{tenant}")
@@ -126,7 +132,10 @@ def _run_lifecycle_and_security_parity_suite(st: Storage | PgVectorStorage, tena
         approver_id="legal_admin",
         expected_revision=cur_doc["revision"],
     )
-    assert any(h["clause_id"] == clause_id for h in st.search("保密义务", approved_only=True, tenant_id=tenant))
+    assert any(
+        h["clause_id"] == clause_id
+        for h in st.search("保密义务", approved_only=True, tenant_id=tenant)
+    )
 
     # 置为 SUPERSEDED 后自动被排除
     st.set_document_status(did, "SUPERSEDED", tenant_id=tenant)
@@ -138,7 +147,9 @@ def test_sqlite_storage_security_parity_contract(tmp_path: Path) -> None:
     """验证 SQLite 存储引擎完全遵循双库安全契约。"""
     st = Storage(tmp_path / "sqlite_parity.db")
     try:
-        _run_lifecycle_and_security_parity_suite(st, tenant=f"tenant_sqlite_{uuid.uuid4().hex[:6]}")
+        _run_lifecycle_and_security_parity_suite(
+            st, tenant=f"tenant_sqlite_{uuid.uuid4().hex[:6]}"
+        )
     finally:
         st.close()
 
@@ -150,6 +161,8 @@ def test_postgres_storage_security_parity_contract() -> None:
 
     st = PgVectorStorage(PG_DSN)
     try:
-        _run_lifecycle_and_security_parity_suite(st, tenant=f"tenant_pg_{uuid.uuid4().hex[:6]}")
+        _run_lifecycle_and_security_parity_suite(
+            st, tenant=f"tenant_pg_{uuid.uuid4().hex[:6]}"
+        )
     finally:
         st.close()

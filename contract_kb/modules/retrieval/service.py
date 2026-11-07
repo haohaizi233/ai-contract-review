@@ -58,8 +58,6 @@ class RetrievalExecutionBudget:
         }
 
 
-
-
 @dataclass
 class GovernedRetrievalBundle:
     """分层受控检索输出包：明确隔离权威标准依据与历史合同参考先例。"""

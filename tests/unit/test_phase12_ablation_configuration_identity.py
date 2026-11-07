@@ -9,14 +9,12 @@
 
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 
 from contract_kb.ablation_study import (
     AblationConfig,
     ComponentCallTracker,
     evaluate_configuration,
-    run_full_ablation_study,
 )
 
 

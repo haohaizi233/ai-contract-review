@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import pytest
 
 from contract_kb.modules.retrieval.governance import KnowledgeSourceType
 from contract_kb.modules.retrieval.service import GovernedRetrievalService
@@ -25,7 +24,9 @@ def test_storage_implements_separated_recall_channels(tmp_path: Path) -> None:
     assert hasattr(PgVectorStorage, "search_structured_candidates")
 
 
-def test_retrieve_authoritative_strictly_excludes_non_binding_references(tmp_path: Path) -> None:
+def test_retrieve_authoritative_strictly_excludes_non_binding_references(
+    tmp_path: Path,
+) -> None:
     """验证 retrieve_authoritative 严格排除 LEGAL_REFERENCE 与 HISTORICAL_CASE，只允许 TEMPLATE 与 APPROVED_RULE。"""
     st = Storage(tmp_path / "auth_test.db")
 
@@ -45,7 +46,9 @@ def test_retrieve_authoritative_strictly_excludes_non_binding_references(tmp_pat
         ],
     }
     did_tpl, _ = st.upsert_document(doc_template, tenant="tenant_1")
-    st.approve_knowledge_version(tenant_id="tenant_1", document_id=did_tpl, approver_id="admin")
+    st.approve_knowledge_version(
+        tenant_id="tenant_1", document_id=did_tpl, approver_id="admin"
+    )
 
     # 2. 录入一份外部法规参考 (LEGAL_REFERENCE) - 即使审批通过，也不得进入权威标准集合
     doc_legal = {
@@ -63,7 +66,9 @@ def test_retrieve_authoritative_strictly_excludes_non_binding_references(tmp_pat
         ],
     }
     did_law, _ = st.upsert_document(doc_legal, tenant="tenant_1")
-    st.approve_knowledge_version(tenant_id="tenant_1", document_id=did_law, approver_id="admin")
+    st.approve_knowledge_version(
+        tenant_id="tenant_1", document_id=did_law, approver_id="admin"
+    )
 
     # 3. 录入一份历史合同案卷 (HISTORICAL_CASE)
     doc_hist = {

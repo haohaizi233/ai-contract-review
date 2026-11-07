@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-import pytest
 
 from contract_kb.storage import Storage
 from contract_kb.application.pipeline.runner import PipelineContext
@@ -157,6 +156,10 @@ def test_stage11_toctou_revocation_downgrades_mandatory_finding():
         assert f.check_status == CheckStatus.INSUFFICIENT_EVIDENCE.value
         assert f.requires_human_review is True
         assert f.citation_status == "CITATION_UNVERIFIED"
-        assert "撤销" in f.description or "revoked" in f.description.lower() or "失效" in f.description
+        assert (
+            "撤销" in f.description
+            or "revoked" in f.description.lower()
+            or "失效" in f.description
+        )
     finally:
         st.close()

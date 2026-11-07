@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-import pytest
 
 from contract_kb.storage import Storage
 from contract_kb.modules.retrieval.citation import (
@@ -68,7 +67,9 @@ def test_citation_verifier_returns_typed_evidence_result():
                 "knowledge_type": "TEMPLATE",
                 "text": "甲方应在收到发票后十五个工作日内完成付款。",
             }
-            res = verifier.verify_evidence_item(st, hit_valid, expected_tenant_id="tenant_citation")
+            res = verifier.verify_evidence_item(
+                st, hit_valid, expected_tenant_id="tenant_citation"
+            )
             assert isinstance(res, EvidenceVerificationResult)
             assert res.verified is True
             assert res.status == "VERIFIED"
@@ -93,10 +94,14 @@ def test_citation_hash_mismatch_fails_closed():
                 "knowledge_type": "TEMPLATE",
                 "text": "甲方应在收到发票后十五个工作日内完成付款。",
             }
-            res = verifier.verify_evidence_item(st, hit_tampered, expected_tenant_id="tenant_citation")
+            res = verifier.verify_evidence_item(
+                st, hit_tampered, expected_tenant_id="tenant_citation"
+            )
             assert res.verified is False
             assert res.status == "HASH_MISMATCH"
-            assert any("哈希不一致" in r or "hash" in r.lower() for r in res.failure_reasons)
+            assert any(
+                "哈希不一致" in r or "hash" in r.lower() for r in res.failure_reasons
+            )
         finally:
             st.close()
 
@@ -124,7 +129,9 @@ def test_citation_revoked_source_fails_closed():
                 "knowledge_type": "TEMPLATE",
                 "text": "甲方应在收到发票后十五个工作日内完成付款。",
             }
-            res = verifier.verify_evidence_item(st, hit_revoked, expected_tenant_id="tenant_citation")
+            res = verifier.verify_evidence_item(
+                st, hit_revoked, expected_tenant_id="tenant_citation"
+            )
             assert res.verified is False
             assert res.status == "APPROVAL_REVOKED"
         finally:
@@ -154,7 +161,9 @@ def test_citation_missing_fields_fails_closed():
                 "tenant_id": "tenant_other",
                 "text": "甲方应在收到发票后十五个工作日内完成付款。",
             }
-            res_wrong = verifier.verify_evidence_item(st, hit_wrong_tenant, expected_tenant_id="tenant_citation")
+            res_wrong = verifier.verify_evidence_item(
+                st, hit_wrong_tenant, expected_tenant_id="tenant_citation"
+            )
             assert res_wrong.verified is False
             assert res_wrong.status == "TENANT_MISMATCH"
 
@@ -165,7 +174,9 @@ def test_citation_missing_fields_fails_closed():
                 "tenant_id": "tenant_citation",
                 "text": "甲方应在收到发票后十五个工作日内完成付款。",
             }
-            res_doc = verifier.verify_evidence_item(st, hit_wrong_doc, expected_tenant_id="tenant_citation")
+            res_doc = verifier.verify_evidence_item(
+                st, hit_wrong_doc, expected_tenant_id="tenant_citation"
+            )
             assert res_doc.verified is False
             assert res_doc.status == "DOCUMENT_MISMATCH"
         finally:

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from contract_kb.modules.retrieval.comparison import ClauseComparisonEngine
 

@@ -430,10 +430,14 @@ class Storage:
 
         doc_cols = self._table_cols("documents")
         if "revision" not in doc_cols:
-            self.conn.execute("ALTER TABLE documents ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
+            self.conn.execute(
+                "ALTER TABLE documents ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"
+            )
         clause_cols = self._table_cols("clauses")
         if "revision" not in clause_cols:
-            self.conn.execute("ALTER TABLE clauses ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
+            self.conn.execute(
+                "ALTER TABLE clauses ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"
+            )
 
         fmt_cols = self._table_cols("format_standards")
         if "tenant_id" not in fmt_cols:
@@ -888,7 +892,6 @@ class Storage:
             self._commit()
             return cur.rowcount > 0
 
-
     def authorized_bulk_import_approved(
         self,
         doc: dict,
@@ -974,7 +977,8 @@ class Storage:
             emb_params: list[Any] = [document_id]
             emb_extra = ""
             if clause_ids:
-                emb_extra = f" AND clause_id IN ({",".join("?" for _ in clause_ids)})"
+                c_ph = ",".join("?" for _ in clause_ids)
+                emb_extra = f" AND clause_id IN ({c_ph})"
                 emb_params.extend(clause_ids)
             self.conn.execute(
                 f"UPDATE embeddings SET approved_status='APPROVED' WHERE document_id=?{emb_extra}",
@@ -1083,7 +1087,8 @@ class Storage:
             emb_params: list[Any] = [document_id]
             emb_extra = ""
             if clause_ids:
-                emb_extra = f" AND clause_id IN ({",".join("?" for _ in clause_ids)})"
+                c_ph = ",".join("?" for _ in clause_ids)
+                emb_extra = f" AND clause_id IN ({c_ph})"
                 emb_params.extend(clause_ids)
             self.conn.execute(
                 f"UPDATE embeddings SET approved_status='REVOKED' WHERE document_id=?{emb_extra}",
@@ -1375,23 +1380,29 @@ class Storage:
     ) -> list[dict]:
         """独立结构化编号/元数据精确召回通道（Channel D: 条款号精确匹配）。"""
         with self._lock:
-            fsql, fparams = self._filters(
-                business_category,
-                contract_subtype,
-                None,
-                approved_only,
-                tenant_id=tenant_id,
-            )
+            where_clauses = ["documents.status='ACTIVE'", "c.clause_number=?"]
+            params: list[Any] = [clause_number]
+            if business_category:
+                where_clauses.append("documents.business_category=?")
+                params.append(business_category)
+            if contract_subtype:
+                where_clauses.append("documents.contract_subtype=?")
+                params.append(contract_subtype)
+            if approved_only:
+                where_clauses.append("c.approval_status='APPROVED'")
+            if tenant_id is not None:
+                where_clauses.append("documents.tenant_id=?")
+                params.append(tenant_id)
+
             sql = (
                 "SELECT c.clause_id, c.document_id, c.original_text, c.clause_number, "
-                "c.clause_category, e.chunk_id, e.business_category, e.contract_subtype, "
-                "e.knowledge_type, e.approved_status, documents.status AS doc_status, documents.tenant_id "
+                "c.clause_category, c.clause_id AS chunk_id, documents.business_category, documents.contract_subtype, "
+                "c.knowledge_type, c.approval_status, documents.status AS doc_status, documents.tenant_id "
                 "FROM clauses c "
-                "JOIN embeddings e ON e.clause_id=c.clause_id "
                 "JOIN documents ON documents.document_id=c.document_id "
-                "WHERE c.clause_number=?" + fsql + " LIMIT ?"
+                f"WHERE {' AND '.join(where_clauses)} LIMIT ?"
             )
-            rows = self.conn.execute(sql, [clause_number] + fparams + [top_k]).fetchall()
+            rows = self.conn.execute(sql, params + [top_k]).fetchall()
             out = []
             for r in rows:
                 out.append(
@@ -1406,7 +1417,7 @@ class Storage:
                         "business_category": r["business_category"],
                         "contract_subtype": r["contract_subtype"],
                         "knowledge_type": r["knowledge_type"],
-                        "approved_status": r["approved_status"],
+                        "approved_status": r["approval_status"],
                         "doc_status": r["doc_status"],
                         "tenant_id": r["tenant_id"],
                     }

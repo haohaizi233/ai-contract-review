@@ -19,8 +19,16 @@ import pytest
 import contract_kb.api as api
 from contract_kb.storage import Storage, OptimisticLockConflictError
 
-ADMIN_HEADERS = {"X-User": "admin_legal", "X-Roles": "admin,reviewer", "X-Tenant": "tenant_cas"}
-AUDITOR_HEADERS = {"X-User": "guest_auditor", "X-Roles": "auditor", "X-Tenant": "tenant_cas"}
+ADMIN_HEADERS = {
+    "X-User": "admin_legal",
+    "X-Roles": "admin,reviewer",
+    "X-Tenant": "tenant_cas",
+}
+AUDITOR_HEADERS = {
+    "X-User": "guest_auditor",
+    "X-Roles": "auditor",
+    "X-Tenant": "tenant_cas",
+}
 
 
 def _make_sample_doc(doc_id: str = "doc_cas_test") -> dict:
@@ -64,7 +72,10 @@ def test_approve_with_mismatched_expected_revision_fails():
                     approval_reason="并发审批测试",
                     expected_revision=initial_revision + 99,
                 )
-            assert "冲突" in str(exc_info.value) or "conflict" in str(exc_info.value).lower()
+            assert (
+                "冲突" in str(exc_info.value)
+                or "conflict" in str(exc_info.value).lower()
+            )
         finally:
             st.close()
 

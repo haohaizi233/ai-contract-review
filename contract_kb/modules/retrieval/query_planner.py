@@ -405,7 +405,9 @@ class ContractAwareQueryPlanner:
                     source_clause_id=cid,
                     intent_type="LLM_ASSISTED_EXPANDED_CHECK",
                     contract_category=clause.get("clause_category"),
-                    lexical_queries=[w for w in re.findall(r"[\u4e00-\u9fff]{2,}", resp)][:3],
+                    lexical_queries=[
+                        w for w in re.findall(r"[\u4e00-\u9fff]{2,}", resp)
+                    ][:3],
                     semantic_queries=[resp[:60]],
                     target_knowledge_types=["TEMPLATE", "APPROVED_RULE"],
                     generation_method="llm_assisted_v1",

@@ -384,6 +384,7 @@ def approve_document_knowledge(
     storage = get_storage()
     try:
         from .storage_errors import OptimisticLockConflictError
+
         res = storage.approve_knowledge_version(
             tenant_id=p.tenant_id,
             document_id=document_id,
@@ -411,6 +412,7 @@ def revoke_document_knowledge(
     storage = get_storage()
     try:
         from .storage_errors import OptimisticLockConflictError
+
         res = storage.revoke_knowledge_version(
             tenant_id=p.tenant_id,
             document_id=document_id,

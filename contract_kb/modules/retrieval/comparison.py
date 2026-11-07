@@ -82,8 +82,12 @@ class ClauseComparisonEngine:
         diffs: list[NumericDifference] = []
 
         # 0. 提取具体金额
-        rev_money = re.findall(r"(?:人民币|RMB|¥)?\s*([\d,]+(?:\.\d+)?)\s*(?:元|圆整)", reviewed_text)
-        ref_money = re.findall(r"(?:人民币|RMB|¥)?\s*([\d,]+(?:\.\d+)?)\s*(?:元|圆整)", reference_text)
+        rev_money = re.findall(
+            r"(?:人民币|RMB|¥)?\s*([\d,]+(?:\.\d+)?)\s*(?:元|圆整)", reviewed_text
+        )
+        ref_money = re.findall(
+            r"(?:人民币|RMB|¥)?\s*([\d,]+(?:\.\d+)?)\s*(?:元|圆整)", reference_text
+        )
         if rev_money and ref_money:
             m_rev = self._parse_decimal_value(rev_money[0])
             m_ref = self._parse_decimal_value(ref_money[0])
@@ -199,8 +203,14 @@ class ClauseComparisonEngine:
     ) -> tuple[bool, str]:
         """检测非对称保密/权属等法律义务主体倒错（如甲方披露/乙方保密 vs 乙方披露/甲方保密）。"""
         patterns = [
-            (r"甲方.*?(?:披露|提供).*?乙方.*?(?:保密|承担保密义务)", r"乙方.*?(?:披露|提供).*?甲方.*?(?:保密|承担保密义务)"),
-            (r"乙方.*?(?:披露|提供).*?甲方.*?(?:保密|承担保密义务)", r"甲方.*?(?:披露|提供).*?乙方.*?(?:保密|承担保密义务)"),
+            (
+                r"甲方.*?(?:披露|提供).*?乙方.*?(?:保密|承担保密义务)",
+                r"乙方.*?(?:披露|提供).*?甲方.*?(?:保密|承担保密义务)",
+            ),
+            (
+                r"乙方.*?(?:披露|提供).*?甲方.*?(?:保密|承担保密义务)",
+                r"甲方.*?(?:披露|提供).*?乙方.*?(?:保密|承担保密义务)",
+            ),
             (r"知识产权.*?(?:归|归属于).*?甲方", r"知识产权.*?(?:归|归属于).*?乙方"),
             (r"知识产权.*?(?:归|归属于).*?乙方", r"知识产权.*?(?:归|归属于).*?甲方"),
         ]
@@ -208,7 +218,6 @@ class ClauseComparisonEngine:
             if re.search(p_rev, reviewed_text) and re.search(p_ref, reference_text):
                 return True, "非对称法律义务主体倒错"
         return False, ""
-
 
     def compare_clauses(
         self,
@@ -256,7 +265,9 @@ class ClauseComparisonEngine:
         ref_has_exception = bool(re.search(r"除非|除.*?外|但书|若经.*?同意", ref_text))
         if rev_has_exception != ref_has_exception:
             conclusions.append("EXCEPTION_DIFFERENCE")
-            findings.append("【例外条件不对称】待审条款与企业标准条款关于免责例外条件的约定不一致！")
+            findings.append(
+                "【例外条件不对称】待审条款与企业标准条款关于免责例外条件的约定不一致！"
+            )
 
         # 2. 数值精度检查 (Numeric Differences)
         num_diffs = self.compare_numerics(rev_text, ref_text)

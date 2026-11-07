@@ -17,13 +17,11 @@
 
 from __future__ import annotations
 
-import json
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import numpy as np
-from pydantic import BaseModel, Field as PydanticField
+from pydantic import BaseModel
 
 from . import config
 from .embeddings import EmbeddingProvider, LocalHashEmbedding
@@ -33,7 +31,7 @@ from .modules.retrieval.citation import CitationVerifier
 from .modules.retrieval.comparison import ClauseComparisonEngine
 from .modules.retrieval.hierarchy import HierarchicalKnowledgeTree
 from .modules.retrieval.query_planner import ContractAwareQueryPlanner
-from .modules.retrieval.reranker import LexicalCoverageReranker, RerankerPort
+from .modules.retrieval.reranker import LexicalCoverageReranker
 from .modules.retrieval.service import GovernedRetrievalService
 from .retrieval_golden import GOLDEN_QUERIES, HARD_NEGATIVES, judge_hits
 from .storage import Storage
@@ -66,7 +64,9 @@ class AblationConfig(BaseModel):
     query_mode: str  # "FIXED" | "DYNAMIC"
     embedding_type: str  # "LOCAL_HASH" | "DENSE_REAL" | "MOCK_DENSE_TEST"
     use_parent_child: bool = False
-    reranker_type: str = "LEXICAL"  # "LEXICAL" | "CROSS_ENCODER" | "MOCK_CROSS_ENCODER_TEST"
+    reranker_type: str = (
+        "LEXICAL"  # "LEXICAL" | "CROSS_ENCODER" | "MOCK_CROSS_ENCODER_TEST"
+    )
     use_structural_comparison: bool = False
     is_contract_test: bool = False
 
@@ -77,15 +77,17 @@ class MockDenseEmbedding(EmbeddingProvider):
     name = "mock_dense_embedding_contract_only"
     dim = 256
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: list[str]) -> np.ndarray:
         rng = np.random.RandomState(42)
-        return [rng.randn(256).astype(np.float32).tolist() for _ in texts]
+        return rng.randn(len(texts), 256).astype(np.float32)
 
 
 class MockCrossEncoderReranker:
     """工程契约测试专用 Mock Cross-Encoder，不可作为真实算法效果结论。"""
 
-    def rerank(self, query: str, hits: list[dict[str, Any]], top_k: int = 8) -> list[dict[str, Any]]:
+    def rerank(
+        self, query: str, hits: list[dict[str, Any]], top_k: int = 8
+    ) -> list[dict[str, Any]]:
         scored = []
         for idx, h in enumerate(hits):
             score = 1.0 / (idx + 1)
@@ -96,6 +98,7 @@ class MockCrossEncoderReranker:
 def check_real_dense_model_available() -> tuple[bool, str]:
     try:
         import sentence_transformers  # noqa: F401
+
         return True, "sentence_transformers installed"
     except ImportError:
         return (
@@ -107,6 +110,7 @@ def check_real_dense_model_available() -> tuple[bool, str]:
 def check_cross_encoder_available() -> tuple[bool, str]:
     try:
         import sentence_transformers  # noqa: F401
+
         return True, "sentence_transformers installed"
     except ImportError:
         return (
@@ -215,14 +219,13 @@ def evaluate_configuration(
             reranker: Any = MockCrossEncoderReranker()
         else:
             from .rerankers import CrossEncoderReranker
+
             reranker = CrossEncoderReranker()
     else:
         reranker = LexicalCoverageReranker()
 
-    svc = GovernedRetrievalService(st, reranker=reranker)
-    comp_engine = (
-        ClauseComparisonEngine() if cfg.use_structural_comparison else None
-    )
+    _ = GovernedRetrievalService(st, reranker=reranker)
+    comp_engine = ClauseComparisonEngine() if cfg.use_structural_comparison else None
     verifier = CitationVerifier()
 
     n = len(GOLDEN_QUERIES)
@@ -318,7 +321,9 @@ def evaluate_configuration(
     )
 
     all_hits = [h for r in rows for h in r["hits"][:3]]
-    cit_sum = verifier.verify_retrieval_hits(st, all_hits, expected_tenant_id=config.TENANT_ID)
+    cit_sum = verifier.verify_retrieval_hits(
+        st, all_hits, expected_tenant_id=config.TENANT_ID
+    )
     metrics["CitationCorrectness"] = cit_sum.citation_correctness
     metrics["AnswerGroundedness"] = cit_sum.answer_groundedness
 
@@ -347,7 +352,11 @@ def run_full_ablation_study(
     # 构建层级知识树用于 Parent-Child 扩展
     all_clauses = []
     for doc in st_local.list_documents(tenant_id=config.TENANT_ID):
-        all_clauses.extend(st_local.get_document_clauses(doc["document_id"], tenant_id=config.TENANT_ID))
+        all_clauses.extend(
+            st_local.get_document_clauses(
+                doc["document_id"], tenant_id=config.TENANT_ID
+            )
+        )
     tree = HierarchicalKnowledgeTree.build_from_clauses(
         "ablation_corpus",
         all_clauses,
@@ -367,7 +376,9 @@ def run_full_ablation_study(
         AblationConfig(
             name="Config B (Fixed 4 Keywords + Real Dense + Lexical Reranker)",
             query_mode="FIXED",
-            embedding_type="DENSE_REAL" if not allow_mock_for_contract_test else "MOCK_DENSE_TEST",
+            embedding_type="DENSE_REAL"
+            if not allow_mock_for_contract_test
+            else "MOCK_DENSE_TEST",
             use_parent_child=False,
             reranker_type="LEXICAL",
             use_structural_comparison=False,
@@ -376,7 +387,9 @@ def run_full_ablation_study(
         AblationConfig(
             name="Config C (Dynamic Query Planning + Real Dense + Lexical Reranker)",
             query_mode="DYNAMIC",
-            embedding_type="DENSE_REAL" if not allow_mock_for_contract_test else "MOCK_DENSE_TEST",
+            embedding_type="DENSE_REAL"
+            if not allow_mock_for_contract_test
+            else "MOCK_DENSE_TEST",
             use_parent_child=False,
             reranker_type="LEXICAL",
             use_structural_comparison=False,
@@ -385,7 +398,9 @@ def run_full_ablation_study(
         AblationConfig(
             name="Config D (Dynamic Query Planning + Real Dense + Parent-Child Hierarchy)",
             query_mode="DYNAMIC",
-            embedding_type="DENSE_REAL" if not allow_mock_for_contract_test else "MOCK_DENSE_TEST",
+            embedding_type="DENSE_REAL"
+            if not allow_mock_for_contract_test
+            else "MOCK_DENSE_TEST",
             use_parent_child=True,
             reranker_type="LEXICAL",
             use_structural_comparison=False,
@@ -394,18 +409,26 @@ def run_full_ablation_study(
         AblationConfig(
             name="Config E (Dynamic Query Planning + Real Dense + Parent-Child + Cross-Encoder)",
             query_mode="DYNAMIC",
-            embedding_type="DENSE_REAL" if not allow_mock_for_contract_test else "MOCK_DENSE_TEST",
+            embedding_type="DENSE_REAL"
+            if not allow_mock_for_contract_test
+            else "MOCK_DENSE_TEST",
             use_parent_child=True,
-            reranker_type="CROSS_ENCODER" if not allow_mock_for_contract_test else "MOCK_CROSS_ENCODER_TEST",
+            reranker_type="CROSS_ENCODER"
+            if not allow_mock_for_contract_test
+            else "MOCK_CROSS_ENCODER_TEST",
             use_structural_comparison=False,
             is_contract_test=allow_mock_for_contract_test,
         ),
         AblationConfig(
             name="Config F (Full Phase 12: DQP + Hierarchy + Cross-Encoder + Structural Comparison)",
             query_mode="DYNAMIC",
-            embedding_type="DENSE_REAL" if not allow_mock_for_contract_test else "MOCK_DENSE_TEST",
+            embedding_type="DENSE_REAL"
+            if not allow_mock_for_contract_test
+            else "MOCK_DENSE_TEST",
             use_parent_child=True,
-            reranker_type="CROSS_ENCODER" if not allow_mock_for_contract_test else "MOCK_CROSS_ENCODER_TEST",
+            reranker_type="CROSS_ENCODER"
+            if not allow_mock_for_contract_test
+            else "MOCK_CROSS_ENCODER_TEST",
             use_structural_comparison=True,
             is_contract_test=allow_mock_for_contract_test,
         ),

@@ -97,6 +97,12 @@ def test_semantic_contract_review_e2e_full_pipeline(tmp_path: Path):
         },
         tenant="tenant_alpha",
     )
+    st.approve_knowledge_version(
+        tenant_id="tenant_alpha",
+        document_id=standard_doc_id,
+        approver_id="legal_admin",
+        approval_reason="E2E标准模板基准审批",
+    )
 
     # 在隔离租户 tenant_beta 录入不应泄露的条款
     st.upsert_document(
