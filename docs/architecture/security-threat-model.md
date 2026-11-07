@@ -121,3 +121,26 @@ git filter-repo --replace-text expressions.txt --force
 # git push origin --force --all
 # git push origin --force --tags
 ```
+
+---
+
+## 4. 已落地工程加固测试核查矩阵（Verification Status Matrix）
+
+| 威胁编号 | 威胁级别 | 描述 | 处置方案 | 自动化测试与验证状态 |
+|---|---|---|---|---|
+| **SEC-P0-01** | P0 | 明文应用密钥与微盘空间 ID 入库 | 代码与文档全部脱敏为占位符 + 环境变量；阻断提交 | `tests/contract/test_architecture_fitness.py`（全仓正则扫描零泄露，**PASSED**） |
+| **SEC-P0-02** | P0 | 企业实名主体与银行账户入库 | 生产文档与代码脱敏，银行卡号与人名模糊化 | `tests/contract/test_architecture_fitness.py` + `verify_phase_b.py`（**PASSED**） |
+| **SEC-P0-03** | P0 | 命令行密码泄露 (`-p<PWD>`) 与硬编码 IP | 移除硬编码 IP，改由进程环境变量（如 `MYSQL_PWD`）传递密码 | `tests/contract/test_architecture_fitness.py`（**PASSED**） |
+| **SEC-P0-04** | P0 | 跨租户 RAG 与模板原文泄露 | `ReviewPipeline`、`Storage` 全链路注入 `tenant_id` 过滤 | `tests/test_tenant_isolation.py`、`tests/integration/test_uow_and_pg18_relational.py`（**PASSED**） |
+| **SEC-P0-05** | P0 | 分类器私开全局数据库 | 解除 `classifier.py` 内部 `Storage()` 实例化，改为纯函数/依赖注入 | `tests/test_docx_parser.py`、`verify_phase_b.py`（**PASSED**） |
+| **SEC-P1-01** | P1 | HMAC 签名重放与静态密钥冻结 | 引入 `X-Auth-Timestamp` 防重放时间窗校验 + 动态配置读取 | `tests/test_security_api.py`（**PASSED**） |
+| **SEC-P1-02** | P1 | RBAC 路由边界模糊与未鉴权越权 | 改为精确段边界匹配，未知管理接口 Fail-Closed | `tests/test_security_api.py`、`tests/integration/test_api_v1_and_observability.py`（**PASSED**） |
+| **SEC-P1-03** | P1 | 上传文件全量内存 DoS 与临时文件残留 | 分块流式读取超 20MB 即刻熔断 + 终态自动清理临时上传文件 | `tests/test_security_api.py`、`tests/unit/test_async_runner_and_integrations.py`（**PASSED**） |
+| **SEC-P1-04** | P1 | XML 解析实体注入与内存放大 (XXE / Billion Laughs) | 强制注入加固 `SAFE_XML_PARSER`（关闭网络与外部实体） | `tests/test_docx_parser.py`、`tests/test_security_api.py`（**PASSED**） |
+| **SEC-P1-05** | P1 | `pickle.load` 不安全反序列化 (CWE-502) | 默认采用带完整性校验的 `SafeJsonCache`，遗留 pickle 需显式安全开关 | `tests/test_contract_merge_repair.py`、`tests/unit/test_async_runner_and_integrations.py`（**PASSED**） |
+| **SEC-P1-06** | P1 | 提示词注入逃逸与无授权数据出境 | 随机 Cryptographic Nonce 隔离信封 + `ALLOW_EXTERNAL_LLM` 外发红线 | `tests/security/test_prompt_injection_nonce.py`、`tests/test_llm_e2e.py`（**PASSED**） |
+| **SEC-P1-07** | P1 | 规则与格式标准缺乏租户隔离 | 数据库新增 `tenant_id` 联合索引与版本审批隔离 | `tests/integration/test_uow_and_pg18_relational.py`（**PASSED**） |
+| **SEC-P2-01** | P2 | 日志与异常堆栈明文泄露口令/Token/合同正文 | 引入 `redact_sensitive_text()` 与 `StructuredJsonFormatter` 脱敏 | `tests/unit/test_async_runner_and_integrations.py`（**PASSED**） |
+| **SEC-P2-02** | P2 | CI Artifact 长期留存与超额占用 | 设置 `retention-days: 7`，且严禁打包合同与数据库快照 | `.github/workflows/ci.yml`（**PASSED**） |
+| **SEC-P2-03** | P2 | 依赖版本漂移与供应链风险 | 锁定核心依赖与测试依赖分组，生成 `requirements-lock.txt` | `requirements-lock.txt`、`pyproject.toml`（**PASSED**） |
+

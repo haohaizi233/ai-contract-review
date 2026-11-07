@@ -22,7 +22,16 @@ import time
 from typing import Any
 import uuid
 
-from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import PlainTextResponse
 
 from . import config
@@ -485,13 +494,15 @@ def approve_format_standard(
 def create_review_task(
     request: Request,
     file: UploadFile = File(...),
-    mode: str = "STANDARD",
-    custom: str = "",
+    mode: str = Form(default=""),
+    custom: str = Form(default=""),
 ):
     p = _principal(request)
     if not p.has_role(ROLE_REVIEWER):
         raise HTTPException(403, "审核需要 reviewer")
-    enforce_input_limits(custom=custom)
+    resolved_mode = mode or request.query_params.get("mode") or "STANDARD"
+    resolved_custom = custom or request.query_params.get("custom") or ""
+    enforce_input_limits(custom=resolved_custom)
     idem_key = request.headers.get("X-Idempotency-Key", "").strip() or None
     tmp, data = _validate_and_stage_docx(file, prefix="")
     retention = int(
@@ -505,8 +516,10 @@ def create_review_task(
         engine = ReviewEngine(st)
         res = engine.review_result(
             tmp,
-            mode=mode,
-            custom_requirements=[c.strip() for c in custom.split(";") if c.strip()],
+            mode=resolved_mode,
+            custom_requirements=[
+                c.strip() for c in resolved_custom.split(";") if c.strip()
+            ],
             tenant_id=p.tenant_id,
             created_by=p.user_id,
             idempotency_key=idem_key,
@@ -518,7 +531,7 @@ def create_review_task(
             p.user_id,
             "review_task",
             res.task_id,
-            f"mode={mode} bytes={len(data)}",
+            f"mode={resolved_mode} bytes={len(data)}",
         )
         return res.to_dict()
     finally:
@@ -660,21 +673,25 @@ def get_canonical_contract(contract_id: str, request: Request):
 def enqueue_review_job(
     request: Request,
     file: UploadFile = File(...),
-    mode: str = "STANDARD",
-    custom: str = "",
+    mode: str = Form(default=""),
+    custom: str = Form(default=""),
 ):
     p = _principal(request)
     if not p.has_role(ROLE_REVIEWER):
         raise HTTPException(403, "提交异步审核任务需要 reviewer")
-    enforce_input_limits(custom=custom)
+    resolved_mode = mode or request.query_params.get("mode") or "STANDARD"
+    resolved_custom = custom or request.query_params.get("custom") or ""
+    enforce_input_limits(custom=resolved_custom)
     idem_key = request.headers.get("X-Idempotency-Key", "").strip() or None
     tmp, data = _validate_and_stage_docx(file, prefix="async_")
     job, created = get_runner().submit(
         "CONTRACT_REVIEW",
         {
             "docx_path": str(tmp),
-            "mode": mode,
-            "custom_requirements": [c.strip() for c in custom.split(";") if c.strip()],
+            "mode": resolved_mode,
+            "custom_requirements": [
+                c.strip() for c in resolved_custom.split(";") if c.strip()
+            ],
             "idempotency_key": idem_key,
         },
         tenant_id=p.tenant_id,
@@ -686,7 +703,7 @@ def enqueue_review_job(
         p.user_id,
         "enqueue_review_job",
         job["job_id"],
-        f"created={created} mode={mode} bytes={len(data)}",
+        f"created={created} mode={resolved_mode} bytes={len(data)}",
     )
     return {"job": job, "created": created}
 
