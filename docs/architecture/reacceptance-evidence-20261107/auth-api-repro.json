@@ -1,0 +1,10 @@
+{
+  "tampered_actual_body_status": 200,
+  "stored_rule_id": "tampered-rule",
+  "same_signed_request_two_api_workers": [
+    200,
+    200
+  ],
+  "missing_status_approval_tenant_admitted": true,
+  "unknown_type_admitted": true
+}

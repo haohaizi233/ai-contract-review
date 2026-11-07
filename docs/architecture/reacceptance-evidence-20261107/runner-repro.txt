@@ -1,0 +1,22 @@
+import sys,tempfile,time,json
+from pathlib import Path
+sys.path.insert(0,r'D:\Users\Administrator\Desktop\AI合同')
+from contract_kb.storage import Storage
+from contract_kb.infrastructure.task_queue.runner import PersistentTaskRunner
+from contract_kb.domain.models.execution import JobOutcome
+from contract_kb.application.pipeline.runner import ReviewPipeline
+from contract_kb.application.pipeline.stages import ReviewStage
+from contract_kb.domain.models.review import PipelineContext
+with tempfile.TemporaryDirectory() as p:
+ s=Storage(Path(p)/'db.sqlite');r=PersistentTaskRunner(s)
+ r.register_handler('TEST',lambda p,c:{'from':'stale_worker'})
+ job,_=r.submit('TEST',{},tenant_id='t'); a=s.claim_job(worker_id='A',lease_seconds=1,job_types=['TEST']);old=s.get_async_job(a.job_id)
+ time.sleep(1.1); b=s.claim_job(worker_id='B',lease_seconds=10,job_types=['TEST']);s.finish_job(b.job_id,b.lease_token,JobOutcome(status='SUCCEEDED',result={'from':'new_worker'}))
+ before=s.get_async_job(a.job_id)['result'];r._execute_claimed_job(old);after=s.get_async_job(a.job_id)['result']
+ print('STALE_RUNNER_OVERWRITE',json.dumps({'before':before,'after':after}))
+ class Slow(ReviewStage):
+  stage_name='Slow';stage_order=2
+  def execute(self,ctx):time.sleep(.2);return {}
+ ctx=PipelineContext(docx_path=Path(p)/'unused',task_id='testtask',effective_tenant='t',timeout_seconds=.01,started_monotonic=time.monotonic())
+ pipe=ReviewPipeline(s);t=time.monotonic();result=pipe._execute_single_stage(Slow(),ctx,1);elapsed=time.monotonic()-t
+ print('PIPELINE_TIMEOUT',json.dumps({'status':result.status,'deadline':.01,'elapsed':round(elapsed,3)}));s.close()

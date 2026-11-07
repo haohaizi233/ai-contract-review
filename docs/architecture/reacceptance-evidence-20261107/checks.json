@@ -1,0 +1,3511 @@
+[
+  {
+    "command": "python -m ruff check contract_kb tests tools scripts --output-format=json",
+    "exit_code": 1,
+    "findings": [
+      {
+        "cell": null,
+        "code": "E401",
+        "end_location": {
+          "column": 14,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\analyze_templates.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import os\r\nimport re",
+              "end_location": {
+                "column": 14,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Split imports"
+        },
+        "location": {
+          "column": 1,
+          "row": 1
+        },
+        "message": "Multiple imports on one line",
+        "name": "multiple-imports-on-one-line",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-imports-on-one-line"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 14,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\analyze_templates.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import os",
+              "end_location": {
+                "column": 14,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Remove unused import: `re`"
+        },
+        "location": {
+          "column": 12,
+          "row": 1
+        },
+        "message": "`re` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "F541",
+        "end_location": {
+          "column": 76,
+          "row": 21
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\analyze_templates.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "\"====================================================\\n\"",
+              "end_location": {
+                "column": 76,
+                "row": 21
+              },
+              "location": {
+                "column": 19,
+                "row": 21
+              }
+            }
+          ],
+          "message": "Remove extraneous `f` prefix"
+        },
+        "location": {
+          "column": 19,
+          "row": 21
+        },
+        "message": "f-string without any placeholders",
+        "name": "f-string-missing-placeholders",
+        "noqa_row": 21,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/f-string-missing-placeholders"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 10,
+          "row": 17
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\build_knowledge_graph_html.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 18
+              },
+              "location": {
+                "column": 1,
+                "row": 17
+              }
+            }
+          ],
+          "message": "Remove unused import: `re`"
+        },
+        "location": {
+          "column": 8,
+          "row": 17
+        },
+        "message": "`re` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 17,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "F841",
+        "end_location": {
+          "column": 18,
+          "row": 28
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\build_knowledge_graph_html.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 21,
+                "row": 28
+              },
+              "location": {
+                "column": 9,
+                "row": 28
+              }
+            }
+          ],
+          "message": "Remove assignment to unused variable `extracted`"
+        },
+        "location": {
+          "column": 9,
+          "row": 28
+        },
+        "message": "Local variable `extracted` is assigned to but never used",
+        "name": "unused-variable",
+        "noqa_row": 28,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-variable"
+      },
+      {
+        "cell": null,
+        "code": "F821",
+        "end_location": {
+          "column": 23,
+          "row": 62
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\build_template_5th_layer_rules.py",
+        "fix": null,
+        "location": {
+          "column": 19,
+          "row": 62
+        },
+        "message": "Undefined name `Font`",
+        "name": "undefined-name",
+        "noqa_row": 62,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+      },
+      {
+        "cell": null,
+        "code": "F821",
+        "end_location": {
+          "column": 30,
+          "row": 63
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\build_template_5th_layer_rules.py",
+        "fix": null,
+        "location": {
+          "column": 19,
+          "row": 63
+        },
+        "message": "Undefined name `PatternFill`",
+        "name": "undefined-name",
+        "noqa_row": 63,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+      },
+      {
+        "cell": null,
+        "code": "F821",
+        "end_location": {
+          "column": 21,
+          "row": 64
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\build_template_5th_layer_rules.py",
+        "fix": null,
+        "location": {
+          "column": 17,
+          "row": 64
+        },
+        "message": "Undefined name `Font`",
+        "name": "undefined-name",
+        "noqa_row": 64,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+      },
+      {
+        "cell": null,
+        "code": "F821",
+        "end_location": {
+          "column": 21,
+          "row": 65
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\build_template_5th_layer_rules.py",
+        "fix": null,
+        "location": {
+          "column": 17,
+          "row": 65
+        },
+        "message": "Undefined name `Font`",
+        "name": "undefined-name",
+        "noqa_row": 65,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+      },
+      {
+        "cell": null,
+        "code": "F821",
+        "end_location": {
+          "column": 21,
+          "row": 66
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\build_template_5th_layer_rules.py",
+        "fix": null,
+        "location": {
+          "column": 17,
+          "row": 66
+        },
+        "message": "Undefined name `Side`",
+        "name": "undefined-name",
+        "noqa_row": 66,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+      },
+      {
+        "cell": null,
+        "code": "F821",
+        "end_location": {
+          "column": 20,
+          "row": 67
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\build_template_5th_layer_rules.py",
+        "fix": null,
+        "location": {
+          "column": 14,
+          "row": 67
+        },
+        "message": "Undefined name `Border`",
+        "name": "undefined-name",
+        "noqa_row": 67,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+      },
+      {
+        "cell": null,
+        "code": "F821",
+        "end_location": {
+          "column": 39,
+          "row": 73
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\build_template_5th_layer_rules.py",
+        "fix": null,
+        "location": {
+          "column": 22,
+          "row": 73
+        },
+        "message": "Undefined name `get_column_letter`",
+        "name": "undefined-name",
+        "noqa_row": 73,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+      },
+      {
+        "cell": null,
+        "code": "F821",
+        "end_location": {
+          "column": 43,
+          "row": 82
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\build_template_5th_layer_rules.py",
+        "fix": null,
+        "location": {
+          "column": 34,
+          "row": 82
+        },
+        "message": "Undefined name `Alignment`",
+        "name": "undefined-name",
+        "noqa_row": 82,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+      },
+      {
+        "cell": null,
+        "code": "F821",
+        "end_location": {
+          "column": 43,
+          "row": 88
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\build_template_5th_layer_rules.py",
+        "fix": null,
+        "location": {
+          "column": 34,
+          "row": 88
+        },
+        "message": "Undefined name `Alignment`",
+        "name": "undefined-name",
+        "noqa_row": 88,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+      },
+      {
+        "cell": null,
+        "code": "F541",
+        "end_location": {
+          "column": 88,
+          "row": 172
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\build_template_5th_layer_rules.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "\"-- 78套标准合同模板 - 待补录产品绑定关系 SQL 脚本 (tender_contract.contract_template_products)\"",
+              "end_location": {
+                "column": 88,
+                "row": 172
+              },
+              "location": {
+                "column": 9,
+                "row": 172
+              }
+            }
+          ],
+          "message": "Remove extraneous `f` prefix"
+        },
+        "location": {
+          "column": 9,
+          "row": 172
+        },
+        "message": "f-string without any placeholders",
+        "name": "f-string-missing-placeholders",
+        "noqa_row": 172,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/f-string-missing-placeholders"
+      },
+      {
+        "cell": null,
+        "code": "E401",
+        "end_location": {
+          "column": 15,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\check_db_tables.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import os\r\nimport sys",
+              "end_location": {
+                "column": 15,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Split imports"
+        },
+        "location": {
+          "column": 1,
+          "row": 1
+        },
+        "message": "Multiple imports on one line",
+        "name": "multiple-imports-on-one-line",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-imports-on-one-line"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 10,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\check_db_tables.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import sys",
+              "end_location": {
+                "column": 15,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Remove unused import: `os`"
+        },
+        "location": {
+          "column": 8,
+          "row": 1
+        },
+        "message": "`os` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 11,
+          "row": 24
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\compile_b64_to_png.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 25
+              },
+              "location": {
+                "column": 1,
+                "row": 24
+              }
+            }
+          ],
+          "message": "Remove unused import: `sys`"
+        },
+        "location": {
+          "column": 8,
+          "row": 24
+        },
+        "message": "`sys` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 24,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 36,
+          "row": 26
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\compile_b64_to_png.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 27
+              },
+              "location": {
+                "column": 1,
+                "row": 26
+              }
+            }
+          ],
+          "message": "Remove unused import: `collections.defaultdict`"
+        },
+        "location": {
+          "column": 25,
+          "row": 26
+        },
+        "message": "`collections.defaultdict` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 26,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "F841",
+        "end_location": {
+          "column": 17,
+          "row": 99
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\compile_b64_to_png.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 20,
+                "row": 99
+              },
+              "location": {
+                "column": 9,
+                "row": 99
+              }
+            }
+          ],
+          "message": "Remove assignment to unused variable `orig_ext`"
+        },
+        "location": {
+          "column": 9,
+          "row": 99
+        },
+        "message": "Local variable `orig_ext` is assigned to but never used",
+        "name": "unused-variable",
+        "noqa_row": 99,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-variable"
+      },
+      {
+        "cell": null,
+        "code": "F841",
+        "end_location": {
+          "column": 32,
+          "row": 130
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\compile_b64_to_png.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 32,
+                "row": 130
+              },
+              "location": {
+                "column": 25,
+                "row": 130
+              }
+            }
+          ],
+          "message": "Remove assignment to unused variable `err`"
+        },
+        "location": {
+          "column": 29,
+          "row": 130
+        },
+        "message": "Local variable `err` is assigned to but never used",
+        "name": "unused-variable",
+        "noqa_row": 130,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-variable"
+      },
+      {
+        "cell": null,
+        "code": "F841",
+        "end_location": {
+          "column": 21,
+          "row": 198
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\compile_b64_to_png.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 24,
+                "row": 198
+              },
+              "location": {
+                "column": 17,
+                "row": 198
+              }
+            }
+          ],
+          "message": "Remove assignment to unused variable `c_no`"
+        },
+        "location": {
+          "column": 17,
+          "row": 198
+        },
+        "message": "Local variable `c_no` is assigned to but never used",
+        "name": "unused-variable",
+        "noqa_row": 198,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-variable"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 10,
+          "row": 19
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\contract_diff_web.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 20
+              },
+              "location": {
+                "column": 1,
+                "row": 19
+              }
+            }
+          ],
+          "message": "Remove unused import: `io`"
+        },
+        "location": {
+          "column": 8,
+          "row": 19
+        },
+        "message": "`io` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 19,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 10,
+          "row": 21
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\contract_diff_web.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 22
+              },
+              "location": {
+                "column": 1,
+                "row": 21
+              }
+            }
+          ],
+          "message": "Remove unused import: `os`"
+        },
+        "location": {
+          "column": 8,
+          "row": 21
+        },
+        "message": "`os` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 21,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "E402",
+        "end_location": {
+          "column": 31,
+          "row": 38
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\contract_diff_web.py",
+        "fix": null,
+        "location": {
+          "column": 1,
+          "row": 38
+        },
+        "message": "Module level import not at top of file",
+        "name": "module-import-not-at-top-of-file",
+        "noqa_row": 38,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/module-import-not-at-top-of-file"
+      },
+      {
+        "cell": null,
+        "code": "E402",
+        "end_location": {
+          "column": 40,
+          "row": 39
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\contract_diff_web.py",
+        "fix": null,
+        "location": {
+          "column": 1,
+          "row": 39
+        },
+        "message": "Module level import not at top of file",
+        "name": "module-import-not-at-top-of-file",
+        "noqa_row": 39,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/module-import-not-at-top-of-file"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 40,
+          "row": 39
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\contract_diff_web.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 40
+              },
+              "location": {
+                "column": 1,
+                "row": 39
+              }
+            }
+          ],
+          "message": "Remove unused import: `contract_kb.storage.Storage`"
+        },
+        "location": {
+          "column": 33,
+          "row": 39
+        },
+        "message": "`contract_kb.storage.Storage` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 39,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "E402",
+        "end_location": {
+          "column": 41,
+          "row": 40
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\contract_diff_web.py",
+        "fix": null,
+        "location": {
+          "column": 1,
+          "row": 40
+        },
+        "message": "Module level import not at top of file",
+        "name": "module-import-not-at-top-of-file",
+        "noqa_row": 40,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/module-import-not-at-top-of-file"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 3,
+          "row": 101
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\contract_diff_web.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 3,
+                "row": 101
+              },
+              "location": {
+                "column": 1,
+                "row": 101
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 101
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 620,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 3,
+          "row": 103
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\contract_diff_web.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 3,
+                "row": 103
+              },
+              "location": {
+                "column": 1,
+                "row": 103
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 103
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 620,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 3,
+          "row": 132
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\contract_diff_web.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 3,
+                "row": 132
+              },
+              "location": {
+                "column": 1,
+                "row": 132
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 132
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 620,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 3,
+          "row": 172
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\contract_diff_web.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 3,
+                "row": 172
+              },
+              "location": {
+                "column": 1,
+                "row": 172
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 172
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 620,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 3,
+          "row": 202
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\contract_diff_web.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 3,
+                "row": 202
+              },
+              "location": {
+                "column": 1,
+                "row": 202
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 202
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 620,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "E741",
+        "end_location": {
+          "column": 37,
+          "row": 235
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\contract_merge_repair.py",
+        "fix": null,
+        "location": {
+          "column": 36,
+          "row": 235
+        },
+        "message": "Ambiguous variable name: `l`",
+        "name": "ambiguous-variable-name",
+        "noqa_row": 235,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/ambiguous-variable-name"
+      },
+      {
+        "cell": null,
+        "code": "E741",
+        "end_location": {
+          "column": 42,
+          "row": 238
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\contract_merge_repair.py",
+        "fix": null,
+        "location": {
+          "column": 41,
+          "row": 238
+        },
+        "message": "Ambiguous variable name: `l`",
+        "name": "ambiguous-variable-name",
+        "noqa_row": 238,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/ambiguous-variable-name"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 12,
+          "row": 26
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\cross_verify_and_merge.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 27
+              },
+              "location": {
+                "column": 1,
+                "row": 26
+              }
+            }
+          ],
+          "message": "Remove unused import: `glob`"
+        },
+        "location": {
+          "column": 8,
+          "row": 26
+        },
+        "message": "`glob` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 26,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 14,
+          "row": 31
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\cross_verify_and_merge.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 32
+              },
+              "location": {
+                "column": 1,
+                "row": 31
+              }
+            }
+          ],
+          "message": "Remove unused import: `shutil`"
+        },
+        "location": {
+          "column": 8,
+          "row": 31
+        },
+        "message": "`shutil` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 31,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 32,
+          "row": 35
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\cross_verify_and_merge.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "from collections import defaultdict",
+              "end_location": {
+                "column": 45,
+                "row": 35
+              },
+              "location": {
+                "column": 1,
+                "row": 35
+              }
+            }
+          ],
+          "message": "Remove unused import: `collections.Counter`"
+        },
+        "location": {
+          "column": 25,
+          "row": 35
+        },
+        "message": "`collections.Counter` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 35,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 50,
+          "row": 39
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\cross_verify_and_merge.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "from typing import Any, Dict, List, Optional, Tuple",
+              "end_location": {
+                "column": 57,
+                "row": 39
+              },
+              "location": {
+                "column": 1,
+                "row": 39
+              }
+            }
+          ],
+          "message": "Remove unused import: `typing.Set`"
+        },
+        "location": {
+          "column": 47,
+          "row": 39
+        },
+        "message": "`typing.Set` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 39,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 21,
+          "row": 191
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\cross_verify_and_merge.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 21,
+                "row": 191
+              },
+              "location": {
+                "column": 1,
+                "row": 191
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 191
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 191,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 17,
+          "row": 258
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\cross_verify_and_merge.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 17,
+                "row": 258
+              },
+              "location": {
+                "column": 1,
+                "row": 258
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 258
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 258,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W291",
+        "end_location": {
+          "column": 23,
+          "row": 966
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\cross_verify_and_merge.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 23,
+                "row": 966
+              },
+              "location": {
+                "column": 21,
+                "row": 966
+              }
+            }
+          ],
+          "message": "Remove trailing whitespace"
+        },
+        "location": {
+          "column": 21,
+          "row": 966
+        },
+        "message": "Trailing whitespace",
+        "name": "trailing-whitespace",
+        "noqa_row": 1079,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W291",
+        "end_location": {
+          "column": 73,
+          "row": 967
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\cross_verify_and_merge.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 73,
+                "row": 967
+              },
+              "location": {
+                "column": 71,
+                "row": 967
+              }
+            }
+          ],
+          "message": "Remove trailing whitespace"
+        },
+        "location": {
+          "column": 71,
+          "row": 967
+        },
+        "message": "Trailing whitespace",
+        "name": "trailing-whitespace",
+        "noqa_row": 1079,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "E402",
+        "end_location": {
+          "column": 47,
+          "row": 25
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\diff_contract.py",
+        "fix": null,
+        "location": {
+          "column": 1,
+          "row": 25
+        },
+        "message": "Module level import not at top of file",
+        "name": "module-import-not-at-top-of-file",
+        "noqa_row": 25,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/module-import-not-at-top-of-file"
+      },
+      {
+        "cell": null,
+        "code": "E402",
+        "end_location": {
+          "column": 73,
+          "row": 26
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\diff_contract.py",
+        "fix": null,
+        "location": {
+          "column": 1,
+          "row": 26
+        },
+        "message": "Module level import not at top of file",
+        "name": "module-import-not-at-top-of-file",
+        "noqa_row": 26,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/module-import-not-at-top-of-file"
+      },
+      {
+        "cell": null,
+        "code": "E402",
+        "end_location": {
+          "column": 53,
+          "row": 27
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\diff_contract.py",
+        "fix": null,
+        "location": {
+          "column": 1,
+          "row": 27
+        },
+        "message": "Module level import not at top of file",
+        "name": "module-import-not-at-top-of-file",
+        "noqa_row": 27,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/module-import-not-at-top-of-file"
+      },
+      {
+        "cell": null,
+        "code": "E402",
+        "end_location": {
+          "column": 31,
+          "row": 28
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\diff_contract.py",
+        "fix": null,
+        "location": {
+          "column": 1,
+          "row": 28
+        },
+        "message": "Module level import not at top of file",
+        "name": "module-import-not-at-top-of-file",
+        "noqa_row": 28,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/module-import-not-at-top-of-file"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 31,
+          "row": 28
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\diff_contract.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 29
+              },
+              "location": {
+                "column": 1,
+                "row": 28
+              }
+            }
+          ],
+          "message": "Remove unused import: `contract_kb.config`"
+        },
+        "location": {
+          "column": 25,
+          "row": 28
+        },
+        "message": "`contract_kb.config` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 28,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 14,
+          "row": 8
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\download_db_templates.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 9
+              },
+              "location": {
+                "column": 1,
+                "row": 8
+              }
+            }
+          ],
+          "message": "Remove unused import: `shutil`"
+        },
+        "location": {
+          "column": 8,
+          "row": 8
+        },
+        "message": "`shutil` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 8,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "E401",
+        "end_location": {
+          "column": 15,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_all_col_comments.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import os\r\nimport sys",
+              "end_location": {
+                "column": 15,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Split imports"
+        },
+        "location": {
+          "column": 1,
+          "row": 1
+        },
+        "message": "Multiple imports on one line",
+        "name": "multiple-imports-on-one-line",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-imports-on-one-line"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 10,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_all_col_comments.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import sys",
+              "end_location": {
+                "column": 15,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Remove unused import: `os`"
+        },
+        "location": {
+          "column": 8,
+          "row": 1
+        },
+        "message": "`os` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "W291",
+        "end_location": {
+          "column": 55,
+          "row": 20
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_all_col_comments.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 55,
+                "row": 20
+              },
+              "location": {
+                "column": 54,
+                "row": 20
+              }
+            }
+          ],
+          "message": "Remove trailing whitespace"
+        },
+        "location": {
+          "column": 54,
+          "row": 20
+        },
+        "message": "Trailing whitespace",
+        "name": "trailing-whitespace",
+        "noqa_row": 25,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W291",
+        "end_location": {
+          "column": 41,
+          "row": 21
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_all_col_comments.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 41,
+                "row": 21
+              },
+              "location": {
+                "column": 40,
+                "row": 21
+              }
+            }
+          ],
+          "message": "Remove trailing whitespace"
+        },
+        "location": {
+          "column": 40,
+          "row": 21
+        },
+        "message": "Trailing whitespace",
+        "name": "trailing-whitespace",
+        "noqa_row": 25,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W291",
+        "end_location": {
+          "column": 48,
+          "row": 22
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_all_col_comments.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 48,
+                "row": 22
+              },
+              "location": {
+                "column": 47,
+                "row": 22
+              }
+            }
+          ],
+          "message": "Remove trailing whitespace"
+        },
+        "location": {
+          "column": 47,
+          "row": 22
+        },
+        "message": "Trailing whitespace",
+        "name": "trailing-whitespace",
+        "noqa_row": 25,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "E401",
+        "end_location": {
+          "column": 15,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_all_db_templates.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import os\r\nimport sys",
+              "end_location": {
+                "column": 15,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Split imports"
+        },
+        "location": {
+          "column": 1,
+          "row": 1
+        },
+        "message": "Multiple imports on one line",
+        "name": "multiple-imports-on-one-line",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-imports-on-one-line"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 10,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_all_db_templates.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import sys",
+              "end_location": {
+                "column": 15,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Remove unused import: `os`"
+        },
+        "location": {
+          "column": 8,
+          "row": 1
+        },
+        "message": "`os` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "E401",
+        "end_location": {
+          "column": 15,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_db_enums.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import os\r\nimport sys",
+              "end_location": {
+                "column": 15,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Split imports"
+        },
+        "location": {
+          "column": 1,
+          "row": 1
+        },
+        "message": "Multiple imports on one line",
+        "name": "multiple-imports-on-one-line",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-imports-on-one-line"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 10,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_db_enums.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import sys",
+              "end_location": {
+                "column": 15,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Remove unused import: `os`"
+        },
+        "location": {
+          "column": 8,
+          "row": 1
+        },
+        "message": "`os` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "W291",
+        "end_location": {
+          "column": 55,
+          "row": 21
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_db_enums.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 55,
+                "row": 21
+              },
+              "location": {
+                "column": 54,
+                "row": 21
+              }
+            }
+          ],
+          "message": "Remove trailing whitespace"
+        },
+        "location": {
+          "column": 54,
+          "row": 21
+        },
+        "message": "Trailing whitespace",
+        "name": "trailing-whitespace",
+        "noqa_row": 26,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W291",
+        "end_location": {
+          "column": 41,
+          "row": 22
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_db_enums.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 41,
+                "row": 22
+              },
+              "location": {
+                "column": 40,
+                "row": 22
+              }
+            }
+          ],
+          "message": "Remove trailing whitespace"
+        },
+        "location": {
+          "column": 40,
+          "row": 22
+        },
+        "message": "Trailing whitespace",
+        "name": "trailing-whitespace",
+        "noqa_row": 26,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W291",
+        "end_location": {
+          "column": 48,
+          "row": 23
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_db_enums.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 48,
+                "row": 23
+              },
+              "location": {
+                "column": 47,
+                "row": 23
+              }
+            }
+          ],
+          "message": "Remove trailing whitespace"
+        },
+        "location": {
+          "column": 47,
+          "row": 23
+        },
+        "message": "Trailing whitespace",
+        "name": "trailing-whitespace",
+        "noqa_row": 26,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "E401",
+        "end_location": {
+          "column": 15,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_dict_tables.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import os\r\nimport sys",
+              "end_location": {
+                "column": 15,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Split imports"
+        },
+        "location": {
+          "column": 1,
+          "row": 1
+        },
+        "message": "Multiple imports on one line",
+        "name": "multiple-imports-on-one-line",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-imports-on-one-line"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 10,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_dict_tables.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import sys",
+              "end_location": {
+                "column": 15,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Remove unused import: `os`"
+        },
+        "location": {
+          "column": 8,
+          "row": 1
+        },
+        "message": "`os` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 10,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\dump_sample.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 2
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Remove unused import: `os`"
+        },
+        "location": {
+          "column": 8,
+          "row": 1
+        },
+        "message": "`os` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "W291",
+        "end_location": {
+          "column": 24,
+          "row": 270
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\export_contract_mappings_excel.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 24,
+                "row": 270
+              },
+              "location": {
+                "column": 23,
+                "row": 270
+              }
+            }
+          ],
+          "message": "Remove trailing whitespace"
+        },
+        "location": {
+          "column": 23,
+          "row": 270
+        },
+        "message": "Trailing whitespace",
+        "name": "trailing-whitespace",
+        "noqa_row": 277,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "F841",
+        "end_location": {
+          "column": 17,
+          "row": 427
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\export_contract_mappings_excel.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 20,
+                "row": 427
+              },
+              "location": {
+                "column": 9,
+                "row": 427
+              }
+            }
+          ],
+          "message": "Remove assignment to unused variable `seg_rows`"
+        },
+        "location": {
+          "column": 9,
+          "row": 427
+        },
+        "message": "Local variable `seg_rows` is assigned to but never used",
+        "name": "unused-variable",
+        "noqa_row": 427,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-variable"
+      },
+      {
+        "cell": null,
+        "code": "F811",
+        "end_location": {
+          "column": 88,
+          "row": 712
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\export_contract_mappings_excel.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "from template_5th_layer_data import TEMPLATE_5TH_LAYER_RULES",
+              "end_location": {
+                "column": 88,
+                "row": 712
+              },
+              "location": {
+                "column": 5,
+                "row": 712
+              }
+            }
+          ],
+          "message": "Remove definition: `DISAMBIGUATION_GROUPS`"
+        },
+        "location": {
+          "column": 67,
+          "row": 712
+        },
+        "message": "Redefinition of unused `DISAMBIGUATION_GROUPS` from line 445: `DISAMBIGUATION_GROUPS` redefined here",
+        "name": "redefined-while-unused",
+        "noqa_row": 712,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/redefined-while-unused"
+      },
+      {
+        "cell": null,
+        "code": "E401",
+        "end_location": {
+          "column": 22,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\export_merge_supplement.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import sys\r\nimport csv\r\nimport shutil",
+              "end_location": {
+                "column": 22,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Split imports"
+        },
+        "location": {
+          "column": 1,
+          "row": 1
+        },
+        "message": "Multiple imports on one line",
+        "name": "multiple-imports-on-one-line",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-imports-on-one-line"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 15,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\export_merge_supplement.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import sys,shutil",
+              "end_location": {
+                "column": 22,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Remove unused import: `csv`"
+        },
+        "location": {
+          "column": 12,
+          "row": 1
+        },
+        "message": "`csv` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "E702",
+        "end_location": {
+          "column": 20,
+          "row": 6
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\export_merge_supplement.py",
+        "fix": null,
+        "location": {
+          "column": 19,
+          "row": 6
+        },
+        "message": "Multiple statements on one line (semicolon)",
+        "name": "multiple-statements-on-one-line-semicolon",
+        "noqa_row": 6,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-semicolon"
+      },
+      {
+        "cell": null,
+        "code": "E701",
+        "end_location": {
+          "column": 48,
+          "row": 9
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\export_merge_supplement.py",
+        "fix": null,
+        "location": {
+          "column": 47,
+          "row": 9
+        },
+        "message": "Multiple statements on one line (colon)",
+        "name": "multiple-statements-on-one-line-colon",
+        "noqa_row": 9,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+      },
+      {
+        "cell": null,
+        "code": "E701",
+        "end_location": {
+          "column": 172,
+          "row": 10
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\export_merge_supplement.py",
+        "fix": null,
+        "location": {
+          "column": 171,
+          "row": 10
+        },
+        "message": "Multiple statements on one line (colon)",
+        "name": "multiple-statements-on-one-line-colon",
+        "noqa_row": 10,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 12,
+          "row": 14
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\export_mubu_files.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 15
+              },
+              "location": {
+                "column": 1,
+                "row": 14
+              }
+            }
+          ],
+          "message": "Remove unused import: `json`"
+        },
+        "location": {
+          "column": 8,
+          "row": 14
+        },
+        "message": "`json` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 14,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 61,
+          "row": 17
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\export_mubu_files.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "from template_5th_layer_data import DISAMBIGUATION_GROUPS",
+              "end_location": {
+                "column": 84,
+                "row": 17
+              },
+              "location": {
+                "column": 1,
+                "row": 17
+              }
+            }
+          ],
+          "message": "Remove unused import: `template_5th_layer_data.TEMPLATE_5TH_LAYER_RULES`"
+        },
+        "location": {
+          "column": 37,
+          "row": 17
+        },
+        "message": "`template_5th_layer_data.TEMPLATE_5TH_LAYER_RULES` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 17,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "E741",
+        "end_location": {
+          "column": 31,
+          "row": 63
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\generate_classification_ledger.py",
+        "fix": null,
+        "location": {
+          "column": 30,
+          "row": 63
+        },
+        "message": "Ambiguous variable name: `l`",
+        "name": "ambiguous-variable-name",
+        "noqa_row": 63,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/ambiguous-variable-name"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 5,
+          "row": 78
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\generate_classification_ledger.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 5,
+                "row": 78
+              },
+              "location": {
+                "column": 1,
+                "row": 78
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 78
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 78,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 5,
+          "row": 84
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\generate_classification_ledger.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 5,
+                "row": 84
+              },
+              "location": {
+                "column": 1,
+                "row": 84
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 84
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 84,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 5,
+          "row": 86
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\generate_classification_ledger.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 5,
+                "row": 86
+              },
+              "location": {
+                "column": 1,
+                "row": 86
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 86
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 86,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 5,
+          "row": 90
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\generate_classification_ledger.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 5,
+                "row": 90
+              },
+              "location": {
+                "column": 1,
+                "row": 90
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 90
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 90,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 5,
+          "row": 94
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\generate_classification_ledger.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 5,
+                "row": 94
+              },
+              "location": {
+                "column": 1,
+                "row": 94
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 94
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 94,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 5,
+          "row": 98
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\generate_classification_ledger.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 5,
+                "row": 98
+              },
+              "location": {
+                "column": 1,
+                "row": 98
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 98
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 98,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 9,
+          "row": 104
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\generate_classification_ledger.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 9,
+                "row": 104
+              },
+              "location": {
+                "column": 1,
+                "row": 104
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 104
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 104,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 5,
+          "row": 113
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\generate_classification_ledger.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 5,
+                "row": 113
+              },
+              "location": {
+                "column": 1,
+                "row": 113
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 113
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 113,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 5,
+          "row": 131
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\generate_classification_ledger.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 5,
+                "row": 131
+              },
+              "location": {
+                "column": 1,
+                "row": 131
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 131
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 131,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "E741",
+        "end_location": {
+          "column": 23,
+          "row": 12
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\inspect_matter.py",
+        "fix": null,
+        "location": {
+          "column": 22,
+          "row": 12
+        },
+        "message": "Ambiguous variable name: `l`",
+        "name": "ambiguous-variable-name",
+        "noqa_row": 12,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/ambiguous-variable-name"
+      },
+      {
+        "cell": null,
+        "code": "W291",
+        "end_location": {
+          "column": 23,
+          "row": 842
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\live_db_merge.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 23,
+                "row": 842
+              },
+              "location": {
+                "column": 21,
+                "row": 842
+              }
+            }
+          ],
+          "message": "Remove trailing whitespace"
+        },
+        "location": {
+          "column": 21,
+          "row": 842
+        },
+        "message": "Trailing whitespace",
+        "name": "trailing-whitespace",
+        "noqa_row": 917,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W291",
+        "end_location": {
+          "column": 48,
+          "row": 843
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\live_db_merge.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 48,
+                "row": 843
+              },
+              "location": {
+                "column": 46,
+                "row": 843
+              }
+            }
+          ],
+          "message": "Remove trailing whitespace"
+        },
+        "location": {
+          "column": 46,
+          "row": 843
+        },
+        "message": "Trailing whitespace",
+        "name": "trailing-whitespace",
+        "noqa_row": 917,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 5,
+          "row": 861
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\live_db_merge.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 5,
+                "row": 861
+              },
+              "location": {
+                "column": 1,
+                "row": 861
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 861
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 917,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 5,
+          "row": 868
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\live_db_merge.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 5,
+                "row": 868
+              },
+              "location": {
+                "column": 1,
+                "row": 868
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 868
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 917,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "E401",
+        "end_location": {
+          "column": 20,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\match_templates.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import os\r\nimport glob\r\nimport re",
+              "end_location": {
+                "column": 20,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Split imports"
+        },
+        "location": {
+          "column": 1,
+          "row": 1
+        },
+        "message": "Multiple imports on one line",
+        "name": "multiple-imports-on-one-line",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-imports-on-one-line"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 5,
+          "row": 25
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\match_templates.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 5,
+                "row": 25
+              },
+              "location": {
+                "column": 1,
+                "row": 25
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 25
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 25,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 10,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\query_e9_workflows.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 2
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Remove unused import: `os`"
+        },
+        "location": {
+          "column": 8,
+          "row": 1
+        },
+        "message": "`os` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "W291",
+        "end_location": {
+          "column": 39,
+          "row": 18
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\query_e9_workflows.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 39,
+                "row": 18
+              },
+              "location": {
+                "column": 38,
+                "row": 18
+              }
+            }
+          ],
+          "message": "Remove trailing whitespace"
+        },
+        "location": {
+          "column": 38,
+          "row": 18
+        },
+        "message": "Trailing whitespace",
+        "name": "trailing-whitespace",
+        "noqa_row": 24,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "E401",
+        "end_location": {
+          "column": 19,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\read_sample_templates.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import zipfile\r\nimport os",
+              "end_location": {
+                "column": 19,
+                "row": 1
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Split imports"
+        },
+        "location": {
+          "column": 1,
+          "row": 1
+        },
+        "message": "Multiple imports on one line",
+        "name": "multiple-imports-on-one-line",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-imports-on-one-line"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 10,
+          "row": 1
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\reorganize_cases_by_category.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 2
+              },
+              "location": {
+                "column": 1,
+                "row": 1
+              }
+            }
+          ],
+          "message": "Remove unused import: `os`"
+        },
+        "location": {
+          "column": 8,
+          "row": 1
+        },
+        "message": "`os` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 1,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "F841",
+        "end_location": {
+          "column": 26,
+          "row": 61
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\reorganize_cases_by_category.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 1,
+                "row": 62
+              },
+              "location": {
+                "column": 1,
+                "row": 61
+              }
+            }
+          ],
+          "message": "Remove assignment to unused variable `rewritten_links_total`"
+        },
+        "location": {
+          "column": 5,
+          "row": 61
+        },
+        "message": "Local variable `rewritten_links_total` is assigned to but never used",
+        "name": "unused-variable",
+        "noqa_row": 61,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-variable"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 9,
+          "row": 77
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\reorganize_cases_by_category.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 9,
+                "row": 77
+              },
+              "location": {
+                "column": 1,
+                "row": 77
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 77
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 77,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "W293",
+        "end_location": {
+          "column": 5,
+          "row": 14
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\sample_prefixes.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 5,
+                "row": 14
+              },
+              "location": {
+                "column": 1,
+                "row": 14
+              }
+            }
+          ],
+          "message": "Remove whitespace from blank line"
+        },
+        "location": {
+          "column": 1,
+          "row": 14
+        },
+        "message": "Blank line contains whitespace",
+        "name": "blank-line-with-whitespace",
+        "noqa_row": 14,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+      },
+      {
+        "cell": null,
+        "code": "E402",
+        "end_location": {
+          "column": 31,
+          "row": 29
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\sync_wecom_wedrive.py",
+        "fix": null,
+        "location": {
+          "column": 1,
+          "row": 29
+        },
+        "message": "Module level import not at top of file",
+        "name": "module-import-not-at-top-of-file",
+        "noqa_row": 29,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/module-import-not-at-top-of-file"
+      },
+      {
+        "cell": null,
+        "code": "E402",
+        "end_location": {
+          "column": 56,
+          "row": 30
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\sync_wecom_wedrive.py",
+        "fix": null,
+        "location": {
+          "column": 1,
+          "row": 30
+        },
+        "message": "Module level import not at top of file",
+        "name": "module-import-not-at-top-of-file",
+        "noqa_row": 30,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/module-import-not-at-top-of-file"
+      },
+      {
+        "cell": null,
+        "code": "E402",
+        "end_location": {
+          "column": 73,
+          "row": 31
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\sync_wecom_wedrive.py",
+        "fix": null,
+        "location": {
+          "column": 1,
+          "row": 31
+        },
+        "message": "Module level import not at top of file",
+        "name": "module-import-not-at-top-of-file",
+        "noqa_row": 31,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/module-import-not-at-top-of-file"
+      },
+      {
+        "cell": null,
+        "code": "E402",
+        "end_location": {
+          "column": 102,
+          "row": 58
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\tender_case_export.py",
+        "fix": null,
+        "location": {
+          "column": 1,
+          "row": 57
+        },
+        "message": "Module level import not at top of file",
+        "name": "module-import-not-at-top-of-file",
+        "noqa_row": 57,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/module-import-not-at-top-of-file"
+      },
+      {
+        "cell": null,
+        "code": "F841",
+        "end_location": {
+          "column": 14,
+          "row": 389
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\tender_case_export.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 17,
+                "row": 389
+              },
+              "location": {
+                "column": 5,
+                "row": 389
+              }
+            }
+          ],
+          "message": "Remove assignment to unused variable `apply_ids`"
+        },
+        "location": {
+          "column": 5,
+          "row": 389
+        },
+        "message": "Local variable `apply_ids` is assigned to but never used",
+        "name": "unused-variable",
+        "noqa_row": 389,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-variable"
+      },
+      {
+        "cell": null,
+        "code": "F841",
+        "end_location": {
+          "column": 10,
+          "row": 740
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\tender_case_export.py",
+        "fix": {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "content": "",
+              "end_location": {
+                "column": 13,
+                "row": 740
+              },
+              "location": {
+                "column": 5,
+                "row": 740
+              }
+            }
+          ],
+          "message": "Remove assignment to unused variable `small`"
+        },
+        "location": {
+          "column": 5,
+          "row": 740
+        },
+        "message": "Local variable `small` is assigned to but never used",
+        "name": "unused-variable",
+        "noqa_row": 740,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-variable"
+      },
+      {
+        "cell": null,
+        "code": "E401",
+        "end_location": {
+          "column": 19,
+          "row": 2
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\validate_contract_merge_repair.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import json\r\nimport sys\r\nimport re",
+              "end_location": {
+                "column": 19,
+                "row": 2
+              },
+              "location": {
+                "column": 1,
+                "row": 2
+              }
+            }
+          ],
+          "message": "Split imports"
+        },
+        "location": {
+          "column": 1,
+          "row": 2
+        },
+        "message": "Multiple imports on one line",
+        "name": "multiple-imports-on-one-line",
+        "noqa_row": 2,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-imports-on-one-line"
+      },
+      {
+        "cell": null,
+        "code": "F401",
+        "end_location": {
+          "column": 19,
+          "row": 2
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\validate_contract_merge_repair.py",
+        "fix": {
+          "applicability": "safe",
+          "edits": [
+            {
+              "content": "import json,sys",
+              "end_location": {
+                "column": 19,
+                "row": 2
+              },
+              "location": {
+                "column": 1,
+                "row": 2
+              }
+            }
+          ],
+          "message": "Remove unused import: `re`"
+        },
+        "location": {
+          "column": 17,
+          "row": 2
+        },
+        "message": "`re` imported but unused",
+        "name": "unused-import",
+        "noqa_row": 2,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/unused-import"
+      },
+      {
+        "cell": null,
+        "code": "E741",
+        "end_location": {
+          "column": 30,
+          "row": 11
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\validate_contract_merge_repair.py",
+        "fix": null,
+        "location": {
+          "column": 29,
+          "row": 11
+        },
+        "message": "Ambiguous variable name: `l`",
+        "name": "ambiguous-variable-name",
+        "noqa_row": 11,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/ambiguous-variable-name"
+      },
+      {
+        "cell": null,
+        "code": "E741",
+        "end_location": {
+          "column": 32,
+          "row": 12
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\validate_contract_merge_repair.py",
+        "fix": null,
+        "location": {
+          "column": 31,
+          "row": 12
+        },
+        "message": "Ambiguous variable name: `l`",
+        "name": "ambiguous-variable-name",
+        "noqa_row": 12,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/ambiguous-variable-name"
+      },
+      {
+        "cell": null,
+        "code": "E741",
+        "end_location": {
+          "column": 33,
+          "row": 13
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\validate_contract_merge_repair.py",
+        "fix": null,
+        "location": {
+          "column": 32,
+          "row": 13
+        },
+        "message": "Ambiguous variable name: `l`",
+        "name": "ambiguous-variable-name",
+        "noqa_row": 13,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/ambiguous-variable-name"
+      },
+      {
+        "cell": null,
+        "code": "E701",
+        "end_location": {
+          "column": 21,
+          "row": 19
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\validate_contract_merge_repair.py",
+        "fix": null,
+        "location": {
+          "column": 20,
+          "row": 19
+        },
+        "message": "Multiple statements on one line (colon)",
+        "name": "multiple-statements-on-one-line-colon",
+        "noqa_row": 19,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+      },
+      {
+        "cell": null,
+        "code": "E702",
+        "end_location": {
+          "column": 57,
+          "row": 19
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\validate_contract_merge_repair.py",
+        "fix": null,
+        "location": {
+          "column": 56,
+          "row": 19
+        },
+        "message": "Multiple statements on one line (semicolon)",
+        "name": "multiple-statements-on-one-line-semicolon",
+        "noqa_row": 19,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-semicolon"
+      },
+      {
+        "cell": null,
+        "code": "E701",
+        "end_location": {
+          "column": 49,
+          "row": 22
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\validate_contract_merge_repair.py",
+        "fix": null,
+        "location": {
+          "column": 48,
+          "row": 22
+        },
+        "message": "Multiple statements on one line (colon)",
+        "name": "multiple-statements-on-one-line-colon",
+        "noqa_row": 22,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+      },
+      {
+        "cell": null,
+        "code": "E701",
+        "end_location": {
+          "column": 53,
+          "row": 25
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\validate_contract_merge_repair.py",
+        "fix": null,
+        "location": {
+          "column": 52,
+          "row": 25
+        },
+        "message": "Multiple statements on one line (colon)",
+        "name": "multiple-statements-on-one-line-colon",
+        "noqa_row": 25,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+      },
+      {
+        "cell": null,
+        "code": "E701",
+        "end_location": {
+          "column": 46,
+          "row": 27
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\validate_contract_merge_repair.py",
+        "fix": null,
+        "location": {
+          "column": 45,
+          "row": 27
+        },
+        "message": "Multiple statements on one line (colon)",
+        "name": "multiple-statements-on-one-line-colon",
+        "noqa_row": 27,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+      },
+      {
+        "cell": null,
+        "code": "E701",
+        "end_location": {
+          "column": 25,
+          "row": 33
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\validate_contract_merge_repair.py",
+        "fix": null,
+        "location": {
+          "column": 24,
+          "row": 33
+        },
+        "message": "Multiple statements on one line (colon)",
+        "name": "multiple-statements-on-one-line-colon",
+        "noqa_row": 33,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+      },
+      {
+        "cell": null,
+        "code": "E701",
+        "end_location": {
+          "column": 25,
+          "row": 35
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\validate_contract_merge_repair.py",
+        "fix": null,
+        "location": {
+          "column": 24,
+          "row": 35
+        },
+        "message": "Multiple statements on one line (colon)",
+        "name": "multiple-statements-on-one-line-colon",
+        "noqa_row": 35,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+      },
+      {
+        "cell": null,
+        "code": "E701",
+        "end_location": {
+          "column": 25,
+          "row": 49
+        },
+        "filename": "D:\\Users\\Administrator\\Desktop\\AI合同\\tools\\validate_contract_merge_repair.py",
+        "fix": null,
+        "location": {
+          "column": 24,
+          "row": 49
+        },
+        "message": "Multiple statements on one line (colon)",
+        "name": "multiple-statements-on-one-line-colon",
+        "noqa_row": 49,
+        "severity": "error",
+        "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+      }
+    ],
+    "count": 117
+  },
+  {
+    "command": "python -m ruff format --check contract_kb tests tools scripts --output-format=concise",
+    "exit_code": 1,
+    "output": "tools\\analyze_templates.py:5:1: unformatted: File would be reformatted\ntools\\build_knowledge_graph_html.py:21:30: unformatted: File would be reformatted\ntools\\build_template_5th_layer_rules.py:27:30: unformatted: File would be reformatted\ntools\\check_db_tables.py:3:1: unformatted: File would be reformatted\ntools\\compile_b64_to_png.py:15:1: unformatted: File would be reformatted\ntools\\contract_diff_web.py:679:54: unformatted: File would be reformatted\ntools\\contract_merge_repair.py:6:1: unformatted: File would be reformatted\ntools\\cross_verify_and_merge.py:22:1: unformatted: File would be reformatted\ntools\\diff_contract.py:100:11: unformatted: File would be reformatted\ntools\\download_db_templates.py:6:1: unformatted: File would be reformatted\ntools\\dump_all_col_comments.py:3:1: unformatted: File would be reformatted\ntools\\dump_all_db_templates.py:3:1: unformatted: File would be reformatted\ntools\\dump_db_enums.py:4:29: unformatted: File would be reformatted\ntools\\dump_dict_tables.py:3:1: unformatted: File would be reformatted\ntools\\dump_sample.py:3:11: unformatted: File would be reformatted\ntools\\export_contract_mappings_excel.py:7:1: unformatted: File would be reformatted\ntools\\export_merge_supplement.py:1:12: unformatted: File would be reformatted\ntools\\export_mubu_files.py:21:29: unformatted: File would be reformatted\ntools\\export_prefixes.py:8:11: unformatted: File would be reformatted\ntools\\generate_classification_ledger.py:7:13: unformatted: File would be reformatted\ntools\\inspect_matter.py:3:19: unformatted: File would be reformatted\ntools\\list_ref_files.py:3:24: unformatted: File would be reformatted\ntools\\live_db_merge.py:23:1: unformatted: File would be reformatted\ntools\\match_templates.py:5:36: unformatted: File would be reformatted\ntools\\query_e9_workflows.py:5:18: unformatted: File would be reformatted\ntools\\read_rules_docx.py:4:1: unformatted: File would be reformatted\ntools\\read_sample_templates.py:4:1: unformatted: File would be reformatted\ntools\\reorganize_cases_by_category.py:9:23: unformatted: File would be reformatted\ntools\\sample_prefixes.py:5:11: unformatted: File would be reformatted\ntools\\sync_wecom_wedrive.py:46:24: unformatted: File would be reformatted\ntools\\template_5th_layer_data.py:19:12: unformatted: File would be reformatted\ntools\\tender_attach_export.py:12:1: unformatted: File would be reformatted\ntools\\tender_case_export.py:32:1: unformatted: File would be reformatted\ntools\\tender_case_quality.py:2:1: unformatted: File would be reformatted\ntools\\tender_case_web.py:12:1: unformatted: File would be reformatted\ntools\\tender_fullsync.py:24:1: unformatted: File would be reformatted\ntools\\tender_sync_web.py:13:1: unformatted: File would be reformatted\ntools\\tender_unify_merge.py:19:1: unformatted: File would be reformatted\ntools\\validate_contract_merge_repair.py:2:1: unformatted: File would be reformatted\n39 files would be reformatted, 150 files already formatted\n"
+  },
+  {
+    "command": "python -m mypy contract_kb --ignore-missing-imports",
+    "exit_code": 0,
+    "output": "Success: no issues found in 86 source files\n"
+  },
+  {
+    "command": "python -m pip check",
+    "exit_code": 0,
+    "output": "No broken requirements found.\n"
+  }
+]

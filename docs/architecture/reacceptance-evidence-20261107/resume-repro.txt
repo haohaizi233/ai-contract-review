@@ -1,0 +1,22 @@
+import tempfile,json
+from pathlib import Path
+from contract_kb.storage import Storage
+from contract_kb.application.pipeline.runner import ReviewPipeline
+from contract_kb.application.pipeline.stages import ReviewStage
+from contract_kb.golden import generate_all
+out={}
+with tempfile.TemporaryDirectory() as td:
+ p=Path(td);generate_all(p/'samples');sample=p/'samples'/'mut_08_amount_case_mismatch.docx';st=Storage(p/'t.db')
+ normal=ReviewPipeline(st).run(sample,task_id='baseline',tenant_id='audit')
+ class FailNine(ReviewStage):
+  stage_name='RetrieveEvidence';stage_order=9
+  def execute(self,ctx):raise RuntimeError('synthetic stage9 interruption')
+ pl=ReviewPipeline(st);pl.stages[8]=FailNine()
+ try:pl.run(sample,task_id='resume',tenant_id='audit')
+ except RuntimeError:pass
+ resumed=ReviewPipeline(st).run(sample,task_id='resume',tenant_id='audit')
+ out['baseline']={'status':normal.status,'rules':[i['rule_id'] for i in normal.issues],'gate':normal.review_gate}
+ out['resumed']={'status':resumed.status,'rules':[i['rule_id'] for i in resumed.issues],'gate':resumed.review_gate,'stored_rules':[i['rule_id'] for i in st.get_issues('resume')]}
+ out['stage8_snapshot']=next(c.output_snapshot for c in ReviewPipeline(st).checkpoint_store.get_checkpoints('resume') if c.stage_name=='DeterministicValidation')
+ st.close()
+f=Path(tempfile.gettempdir())/'core_reacceptance_90b7ccb.json';f.write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding='utf-8');print(json.dumps(out,ensure_ascii=False,indent=2));print(f)

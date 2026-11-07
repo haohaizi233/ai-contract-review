@@ -1,0 +1,22 @@
+{
+  "resume-repro.txt": {
+    "exit_code": 0,
+    "stdout": "{\n  \"baseline\": {\n    \"status\": \"COMPLETED\",\n    \"rules\": [\n      \"AMOUNT_CASE_CONSISTENCY\",\n      null,\n      \"FORMAT:header_footer\",\n      \"FORMAT:font\",\n      \"FORMAT:heading_level\",\n      \"FORMAT:margin\",\n      \"LLM_SEMANTIC_REVIEW\"\n    ],\n    \"gate\": \"BLOCKED_BY_HIGH_RISK\"\n  },\n  \"resumed\": {\n    \"status\": \"COMPLETED\",\n    \"rules\": [\n      null,\n      \"LLM_SEMANTIC_REVIEW\"\n    ],\n    \"gate\": \"HUMAN_REVIEW_REQUIRED\",\n    \"stored_rules\": [\n      null,\n      \"LLM_SEMANTIC_REVIEW\"\n    ]\n  },\n  \"stage8_snapshot\": {\n    \"rule_set_version\": \"rs-7b0249cc1262\",\n    \"deterministic_findings_added\": 28\n  }\n}\nC:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\core_reacceptance_90b7ccb.json\n",
+    "stderr": ""
+  },
+  "sync-conflict-repro.txt": {
+    "exit_code": 0,
+    "stdout": "{\n  \"success\": true,\n  \"records_synced\": 1,\n  \"cursor\": {\n    \"tenant_id\": \"audit\",\n    \"source_system\": \"WEAVER_E9\",\n    \"source_scope\": \"scope\",\n    \"last_updated_at\": 100.0,\n    \"last_external_id\": \"id1\"\n  },\n  \"canonical\": null\n}\nC:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\sync_reacceptance_90b7ccb.json\n",
+    "stderr": ""
+  },
+  "auth-api-repro.txt": {
+    "exit_code": 0,
+    "stdout": "{\n  \"tampered_actual_body_status\": 200,\n  \"stored_rule_id\": \"tampered-rule\",\n  \"same_signed_request_two_api_workers\": [\n    200,\n    200\n  ],\n  \"missing_status_approval_tenant_admitted\": true,\n  \"unknown_type_admitted\": true\n}\n",
+    "stderr": "D:\\Users\\Administrator\\Desktop\\AI��ͬ\\.venv\\Lib\\site-packages\\fastapi\\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n  from starlette.testclient import TestClient as TestClient  # noqa\n"
+  },
+  "runner-repro.txt": {
+    "exit_code": 0,
+    "stdout": "STALE_RUNNER_OVERWRITE {\"before\": {\"from\": \"new_worker\"}, \"after\": {\"from\": \"stale_worker\"}}\nPIPELINE_TIMEOUT {\"status\": \"TIMED_OUT\", \"deadline\": 0.01, \"elapsed\": 0.214}\n",
+    "stderr": ""
+  }
+}

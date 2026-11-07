@@ -1,0 +1,28 @@
+import os,sys,json,time,hashlib,tempfile
+from pathlib import Path
+from unittest.mock import patch
+from fastapi.testclient import TestClient
+import contract_kb.api as api
+from contract_kb.auth import TrustedHeaderAuth,compute_auth_signature_v2
+from contract_kb.storage import Storage
+from contract_kb.modules.retrieval.governance import KnowledgeGovernancePolicy as P
+key='synthetic-reacceptance-only';out={}
+def headers(method,path,nonce,body=b''):
+ ts=str(time.time());sha=hashlib.sha256(body).hexdigest()
+ return {'X-User':'alice','X-Roles':'admin','X-Tenant':'test','X-Auth-Version':'2','X-Auth-Timestamp':ts,'X-Auth-Nonce':nonce,'X-Content-SHA256':sha,'X-Auth-Signature':compute_auth_signature_v2(key=key,method=method,path=path,user='alice',roles='admin',tenant='test',timestamp=ts,nonce=nonce,body_sha256=sha)}
+with tempfile.TemporaryDirectory(prefix='adr-security-') as td:
+ st=Storage(Path(td)/'isolated.db')
+ original={'rule_id':'approved-intent','name':'synthetic','rule_type':'SYNTHETIC','execution_mode':'DETERMINISTIC','severity':'LOW'}
+ body=json.dumps(original).encode();tampered=dict(original,rule_id='tampered-rule',severity='HIGH')
+ h=headers('POST','/api/v1/contract-kb/rules','body-tamper-nonce-0001',body);h['Content-Type']='application/json'
+ with patch.object(api,'get_storage',return_value=st),patch.object(api,'_auth',TrustedHeaderAuth(shared_key=key,auth_version='2')):
+  c=TestClient(api.app);r=c.post('/api/v1/contract-kb/rules',headers=h,content=json.dumps(tampered).encode());out['tampered_actual_body_status']=r.status_code;out['stored_rule_id']=r.json().get('rule_id')
+ h=headers('GET','/api/v1/contract-kb/rules','cross-worker-nonce-00001');statuses=[]
+ for worker in range(2):
+  with patch.object(api,'get_storage',return_value=st),patch.object(api,'_auth',TrustedHeaderAuth(shared_key=key,auth_version='2')):
+   statuses.append(TestClient(api.app).get('/api/v1/contract-kb/rules',headers=h).status_code)
+ out['same_signed_request_two_api_workers']=statuses
+ st.close()
+out['missing_status_approval_tenant_admitted']=P.is_chunk_admissible({'knowledge_type':'TEMPLATE'},expected_tenant_id='test')
+out['unknown_type_admitted']=P.is_chunk_admissible({'knowledge_type':'UNTRUSTED_UNKNOWN'},expected_tenant_id='test')
+print(json.dumps(out,indent=2));Path(__file__).with_suffix('.json').write_text(json.dumps(out,indent=2),encoding='utf-8')

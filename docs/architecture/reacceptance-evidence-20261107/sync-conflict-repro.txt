@@ -1,0 +1,14 @@
+import tempfile,json
+from pathlib import Path
+from contract_kb.storage import Storage
+from contract_kb.application.integrations.sync_service import SyncWatermarkService,SyncCursor
+from contract_kb.domain.models.canonical_contract import SourceContractRecord
+out={}
+with tempfile.TemporaryDirectory() as td:
+ st=Storage(Path(td)/'s.db');svc=SyncWatermarkService(st)
+ st.save_canonical_version=lambda *a,**kw:False
+ cursor=SyncCursor('audit','WEAVER_E9','scope',100.0,'id1')
+ result=svc.commit_sync_batch('test_rejected_version',[SourceContractRecord(tenant_id='audit',source_system='WEAVER_E9',external_id='id1',title='synthetic')],SyncCursor('audit','WEAVER_E9','scope'),cursor)
+ out={'success':result.success,'records_synced':result.records_synced,'cursor':svc.get_cursor('audit','WEAVER_E9','scope').to_dict(),'canonical':st.find_canonical_by_source('audit','WEAVER_E9','id1')}
+ st.close()
+p=Path(tempfile.gettempdir())/'sync_reacceptance_90b7ccb.json';p.write_text(json.dumps(out,indent=2),encoding='utf-8');print(json.dumps(out,indent=2));print(p)
