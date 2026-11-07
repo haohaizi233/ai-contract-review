@@ -5,8 +5,17 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from typing import Any
+
+
+def normalize_route_path(path: str) -> str:
+    """Normalize dynamic IDs (UUID, hex, req_*, task_*) to prevent metric cardinality explosion."""
+    p = re.sub(r"/(?:req|task|cc|job)_[a-zA-Z0-9_\-]+", "/{id}", path)
+    p = re.sub(r"/[0-9a-fA-F\-]{8,36}", "/{id}", p)
+    p = re.sub(r"/\d+", "/{id}", p)
+    return p
 
 
 class MetricsCollector:
@@ -32,6 +41,14 @@ class MetricsCollector:
                 "async_jobs_enqueued": 0,
                 "async_jobs_succeeded": 0,
                 "async_jobs_dead_letter": 0,
+                "lease_steals": 0,
+                "budget_exhaustions": 0,
+                "circuit_breaks": 0,
+            }
+            self._gauges: dict[str, float | int] = {
+                "queue_backlog": 0,
+                "queue_oldest_age_seconds": 0.0,
+                "active_leases": 0,
             }
             self._rule_hits: dict[str, int] = {}
             self._http_requests: dict[str, int] = {}
@@ -93,7 +110,8 @@ class MetricsCollector:
             self._db_latency_ms_sum += max(0.0, float(duration_ms))
 
     def record_http_request(self, method: str, path: str, status_code: int) -> None:
-        key = f"{method} {path} [{status_code}]"
+        normalized_path = normalize_route_path(path)
+        key = f"{method} {normalized_path} [{status_code}]"
         with self._lock:
             self._http_requests[key] = self._http_requests.get(key, 0) + 1
 
@@ -101,6 +119,27 @@ class MetricsCollector:
         with self._lock:
             if event in self._counters:
                 self._counters[event] += 1
+
+    def record_lease_steal(self) -> None:
+        with self._lock:
+            self._counters["lease_steals"] += 1
+
+    def record_budget_exhaustion(self) -> None:
+        with self._lock:
+            self._counters["budget_exhaustions"] += 1
+
+    def record_circuit_break(self) -> None:
+        with self._lock:
+            self._counters["circuit_breaks"] += 1
+
+    def set_queue_stats(self, backlog_count: int, oldest_age_seconds: float) -> None:
+        with self._lock:
+            self._gauges["queue_backlog"] = int(backlog_count)
+            self._gauges["queue_oldest_age_seconds"] = float(oldest_age_seconds)
+
+    def set_active_leases(self, count: int) -> None:
+        with self._lock:
+            self._gauges["active_leases"] = int(count)
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -117,17 +156,18 @@ class MetricsCollector:
             }
             return {
                 "counters": dict(self._counters),
+                "gauges": dict(self._gauges),
                 "rates": {
                     "review_success_rate": round(
                         self._counters["review_succeeded"] / total_rev, 4
                     )
                     if total_rev
-                    else 1.0,
+                    else None,
                     "rag_hit_rate": round(
                         self._counters["rag_hits_queries"] / total_rag, 4
                     )
                     if total_rag
-                    else 1.0,
+                    else None,
                     "db_avg_latency_ms": round(self._db_latency_ms_sum / total_db, 3)
                     if total_db
                     else 0.0,
@@ -141,6 +181,8 @@ class MetricsCollector:
         snap = self.snapshot()
         lines: list[str] = []
         for k, v in sorted(snap["counters"].items()):
+            lines.append(f"contract_kb_{k} {v}")
+        for k, v in sorted(snap["gauges"].items()):
             lines.append(f"contract_kb_{k} {v}")
         for sname, st in snap["stage_durations_ms"].items():
             safe = sname.replace('"', "")
