@@ -29,5 +29,5 @@
 | **T14** | 可选 Agent 边界与三个重点工具逐步接线 | F12 | **COMPLETED** | `c5503ec` | `pytest tests/contract/test_legacy_cli_compatibility.py tests/integration/test_integration_entrypoints.py` (6 passed) | T08, T11, T12 | 进入 T15 |
 | **T15** | 真实业务指标、临时文件生命周期与故障追踪 | F14 | **COMPLETED** | `b791a0a` | `pytest tests/integration/test_observability_wiring.py tests/security/test_upload_retention.py` (8 passed) | T03, T06-T09 | 进入 T16 |
 | **T16** | 可复现依赖、全仓质量门禁及安全扫描闭环 | F13 | **COMPLETED** | `6852c60` | `ruff check`, `ruff format`, `pip check`, `mypy`, `pytest` | M1/M2 | 进入 T17 |
-| **T17** | 真实 PG+pgvector、并发负载、部署与恢复演练 | 未验证项 | **COMPLETED** | 待提交 | `test_pgvector_pipeline_e2e.py`, `test_concurrent_review_load.py` | 独立测试基础设施（CI 验证） | 进入 T18 |
-| **T18** | 文档修订、独立重验与最终交接 | 全部 F | **NOT_STARTED** | - | `architecture-acceptance.md` | 全部任务完成 | - |
+| **T17** | 真实 PG+pgvector、并发负载、部署与恢复演练 | 未验证项 | **COMPLETED** | `e31e7d3` | `test_pgvector_pipeline_e2e.py`, `test_concurrent_review_load.py` | 独立测试基础设施（CI 验证） | 进入 T18 |
+| **T18** | 文档修订、独立重验与最终交接 | 全部 F | **COMPLETED** | 待提交 | `remediation-final-acceptance.md`, `ADR 001-004` | 无（全部已闭环） | 整改圆满完成 |
