@@ -1759,6 +1759,20 @@ class Storage:
                 return None
             return self.get_canonical_contract(row["contract_id"], tenant_id=tenant_id)
 
+    def find_canonical_by_contract_number(
+        self, tenant_id: str, contract_number: str
+    ) -> dict | None:
+        if not contract_number:
+            return None
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM canonical_contracts WHERE tenant_id=? AND contract_number=?",
+                (tenant_id, contract_number),
+            ).fetchone()
+            if not row:
+                return None
+            return self._decode_canonical_row(dict(row))
+
     def upsert_canonical_contract(self, contract: dict) -> str:
         cid = contract["contract_id"]
         now = time.time()

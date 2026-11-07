@@ -1785,6 +1785,26 @@ class PgVectorStorage:
                     if not row:
                         return None
                     return self.get_canonical_contract(row[0], tenant_id=tenant_id)
+
+    def find_canonical_by_contract_number(
+        self, tenant_id: str, contract_number: str
+    ) -> dict | None:
+        if not contract_number:
+            return None
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT * FROM canonical_contracts WHERE tenant_id=%s AND contract_number=%s",
+                        (tenant_id, contract_number),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return None
+                    return self._decode_canonical_row(dict(row))
+            except Exception:
+                self._rollback()
+                raise
             except Exception:
                 self._rollback()
                 raise

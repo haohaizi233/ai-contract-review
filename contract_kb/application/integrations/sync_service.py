@@ -260,12 +260,18 @@ class SyncWatermarkService:
                     )
 
                 outcome = merge_canonical(existing_canonical, rec)
-                self.storage.save_canonical_version(
+                saved = self.storage.save_canonical_version(
                     outcome,
                     expected_version=(
                         existing_canonical.version if existing_canonical else None
                     ),
                 )
+                if not saved:
+                    exp_ver = existing_canonical.version if existing_canonical else None
+                    raise SyncBatchConflictError(
+                        f"并发版本冲突：保存标准合同版本失败 (contract_id={outcome.contract.contract_id}, "
+                        f"external_id={rec.external_id}, expected_version={exp_ver})"
+                    )
 
             # (c) 推进水位线
             now = time.time()
