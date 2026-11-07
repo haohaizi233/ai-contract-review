@@ -3,9 +3,9 @@
 Download all active standard contract templates (78 official templates, including the 52 missing from 参考/)
 from the OSS URLs recorded in tender_contract.contract_attachment (source_type=3).
 """
+
 import os
 import re
-import shutil
 import sys
 import urllib.parse
 import urllib.request
@@ -16,7 +16,9 @@ import pymysql
 
 
 _ENTITY_SUFFIX = os.environ.get("CONTRACT_KB_TEMPLATE_ENTITY_SUFFIX", "标准代理主体")
-_ENTITY_FULL = os.environ.get("CONTRACT_KB_TEMPLATE_ENTITY_FULL", "标准知识产权代理主体")
+_ENTITY_FULL = os.environ.get(
+    "CONTRACT_KB_TEMPLATE_ENTITY_FULL", "标准知识产权代理主体"
+)
 
 REF_EXISTING_MAP = {
     "MB20251205012": f"国内专利服务合同（仅快速预审）-{_ENTITY_SUFFIX}.docx",
@@ -77,8 +79,12 @@ def safe_filename(s: str) -> str:
 
 def encode_url(raw_url: str) -> str:
     parsed = urllib.parse.urlsplit(raw_url)
-    quoted_path = urllib.parse.quote(urllib.parse.unquote(parsed.path), safe="/()（）-_.~")
-    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, quoted_path, parsed.query, parsed.fragment))
+    quoted_path = urllib.parse.quote(
+        urllib.parse.unquote(parsed.path), safe="/()（）-_.~"
+    )
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, quoted_path, parsed.query, parsed.fragment)
+    )
 
 
 def main():
@@ -108,7 +114,9 @@ def main():
 
     ref_root = os.environ.get(
         "CONTRACT_KB_TEMPLATE_DIR",
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "参考"),
+        os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "参考"
+        ),
     )
     missing_dir = os.path.join(ref_root, "数据库补齐模板_52份")
     all_cat_dir = os.path.join(ref_root, "全量标准模板库_按分类(78份)")
@@ -154,7 +162,9 @@ def main():
             if is_missing_in_ref:
                 # Save into 参考/数据库补齐模板_52份 AND directly into 参考/ root so 参考/ is complete
                 missing_fname = safe_filename(f"{tname}{ext}")
-                missing_path = os.path.join(missing_dir, safe_filename(f"{tcode}_{tname}{ext}"))
+                missing_path = os.path.join(
+                    missing_dir, safe_filename(f"{tcode}_{tname}{ext}")
+                )
                 with open(missing_path, "wb") as out_f:
                     out_f.write(data)
                 ref_direct_path = os.path.join(ref_root, missing_fname)
@@ -167,7 +177,9 @@ def main():
             failed.append((tcode, tname, url, str(e)))
 
     print(f"Downloaded {downloaded_all}/78 official templates into {all_cat_dir}")
-    print(f"Downloaded {downloaded_missing}/52 missing templates into {missing_dir} and {ref_root}")
+    print(
+        f"Downloaded {downloaded_missing}/52 missing templates into {missing_dir} and {ref_root}"
+    )
     if failed:
         print(f"Failed ({len(failed)}):")
         for item in failed:

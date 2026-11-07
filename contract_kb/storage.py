@@ -582,7 +582,10 @@ class Storage:
                         or doc.get("status") == "ACTIVE"
                     )
                     default_appr = "APPROVED" if is_std_template else "PENDING_REVIEW"
-                    if is_std_template and (not c.get("approval_status") or c.get("approval_status") == "PENDING_REVIEW"):
+                    if is_std_template and (
+                        not c.get("approval_status")
+                        or c.get("approval_status") == "PENDING_REVIEW"
+                    ):
                         clause_appr = "APPROVED"
                     else:
                         clause_appr = c.get("approval_status", default_appr)
@@ -657,7 +660,11 @@ class Storage:
                     and r["knowledge_type"] != "LAYER_A_RAW_CLAUSE"
                     else "TEMPLATE"
                 )
-                appr_status = "APPROVED" if (r["approval_status"] in (None, "", "PENDING_REVIEW")) else r["approval_status"]
+                appr_status = (
+                    "APPROVED"
+                    if (r["approval_status"] in (None, "", "PENDING_REVIEW"))
+                    else r["approval_status"]
+                )
                 self.conn.execute(
                     "INSERT OR REPLACE INTO embeddings VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (
@@ -1204,6 +1211,23 @@ class Storage:
         return sorted(hits, key=lambda h: -h["rerank_score"])
 
     # ---------- 查询辅助 ----------
+    def find_clauses_by_category(
+        self, category: str, tenant_id: str | None = None
+    ) -> list[dict]:
+        with self._lock:
+            sql = (
+                "SELECT c.clause_id, c.original_text, c.clause_category "
+                "FROM clauses c "
+                "JOIN documents d ON d.document_id = c.document_id "
+                "WHERE c.clause_category = ?"
+            )
+            params: list[Any] = [category]
+            if tenant_id is not None:
+                sql += " AND d.tenant_id = ?"
+                params.append(tenant_id)
+            rows = self.conn.execute(sql, params).fetchall()
+            return [dict(r) for r in rows]
+
     def get_clause(self, clause_id: str) -> Any:
         with self._lock:
             return self.conn.execute(

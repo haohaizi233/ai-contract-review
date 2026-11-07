@@ -26,9 +26,9 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from contract_kb import config
-from contract_kb.storage import Storage, create_storage
-from contract_kb.ingest import import_template_file, security_check_file
+from contract_kb import config  # noqa: E402
+from contract_kb.storage import Storage, create_storage  # noqa: E402
+from contract_kb.ingest import import_template_file, security_check_file  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,9 +43,7 @@ class WeDriveSyncManager:
 
     def __init__(self, db_path: str | Path | None = None):
         self.db_path = db_path
-        self.storage = (
-            Storage(db_path) if db_path is not None else create_storage()
-        )
+        self.storage = Storage(db_path) if db_path is not None else create_storage()
 
     def get_existing_hashes(self) -> dict[str, str]:
         """从知识库读取所有已激活母本的 SHA-256 与文件路径。"""
@@ -63,7 +61,8 @@ class WeDriveSyncManager:
 
         # 扫描所有 .docx 文件
         docx_files = [
-            f for f in watch_path.rglob("*.docx")
+            f
+            for f in watch_path.rglob("*.docx")
             if not f.name.startswith("~$") and not f.name.startswith(".")
         ]
 
@@ -89,7 +88,9 @@ class WeDriveSyncManager:
                     stats["skipped_identical"] += 1
                     continue
 
-                logger.info(f"⚡ 检测到微盘模板更新: {file_path.name} (SHA: {sha256[:10]}...)")
+                logger.info(
+                    f"⚡ 检测到微盘模板更新: {file_path.name} (SHA: {sha256[:10]}...)"
+                )
 
                 # 3. 安全检查与解析
                 sec = security_check_file(file_path)
@@ -116,13 +117,15 @@ class WeDriveSyncManager:
                 else:
                     stats["updated"] += 1
 
-                stats["details"].append({
-                    "file": file_path.name,
-                    "document_id": doc_id,
-                    "action": action,
-                    "clause_count": len(rec.clauses or []),
-                    "timestamp": time.time(),
-                })
+                stats["details"].append(
+                    {
+                        "file": file_path.name,
+                        "document_id": doc_id,
+                        "action": action,
+                        "clause_count": len(rec.clauses or []),
+                        "timestamp": time.time(),
+                    }
+                )
 
             except Exception as e:
                 logger.error(f"处理文件异常: {file_path.name} - {e}", exc_info=True)
@@ -146,10 +149,18 @@ class WeDriveSyncManager:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="企业微信微盘 RAG 增量热更新自动化工具")
-    parser.add_argument("--local-dir", default=str(config.TEMPLATE_DIR), help="微盘本地映射目录路径")
-    parser.add_argument("--daemon", action="store_true", help="以常驻守护进程模式运行定时轮询")
-    parser.add_argument("--interval", type=int, default=300, help="轮询间隔秒数（默认 300 秒）")
+    parser = argparse.ArgumentParser(
+        description="企业微信微盘 RAG 增量热更新自动化工具"
+    )
+    parser.add_argument(
+        "--local-dir", default=str(config.TEMPLATE_DIR), help="微盘本地映射目录路径"
+    )
+    parser.add_argument(
+        "--daemon", action="store_true", help="以常驻守护进程模式运行定时轮询"
+    )
+    parser.add_argument(
+        "--interval", type=int, default=300, help="轮询间隔秒数（默认 300 秒）"
+    )
     args = parser.parse_args()
 
     manager = WeDriveSyncManager()

@@ -9,6 +9,7 @@
   独立运行: python tools/tender_case_web.py [--port 8771] [--progress data/tender-case-export/_progress.json]
   内嵌运行: tender_case_export.py 自动后台启动（start_in_thread）
 """
+
 import argparse
 import json
 import os
@@ -258,7 +259,14 @@ setInterval(()=>{ if(!fallback) tick(); }, 2000);
 </html>
 """
 
-STATE_TEXT = {"running": "运行中", "done": "已完成", "stopped": "已中断", "error": "异常", "init": "初始化"}
+STATE_TEXT = {
+    "running": "运行中",
+    "done": "已完成",
+    "stopped": "已中断",
+    "error": "异常",
+    "init": "初始化",
+}
+
 
 def _fmt_dur(s):
     if s is None:
@@ -266,6 +274,7 @@ def _fmt_dur(s):
     s = max(0, int(s))
     h, m, x = s // 3600, s % 3600 // 60, s % 60
     return ("%d时%d分" % (h, m)) if h else (("%d分%d秒" % (m, x)) if m else "%d秒" % x)
+
 
 def render_html(status):
     c = status.get("cases") or {}
@@ -275,8 +284,15 @@ def render_html(status):
 
     steps_html = "".join(
         '<div class="step-chip %s"><span>%s</span> <b>%d. %s</b> <span style="color:var(--ink-soft)">%s</span></div>'
-        % (s.get("status", ""), "✔" if s.get("status") == "done" else ("⏳" if s.get("status") == "running" else "○"),
-           i + 1, s.get("name", ""), s.get("detail", "") or "")
+        % (
+            s.get("status", ""),
+            "✔"
+            if s.get("status") == "done"
+            else ("⏳" if s.get("status") == "running" else "○"),
+            i + 1,
+            s.get("name", ""),
+            s.get("detail", "") or "",
+        )
         for i, s in enumerate(status.get("steps") or [])
     )
 
@@ -291,59 +307,106 @@ def render_html(status):
         ("补抓附件/图片", "%s 成功 / %s 失败" % (f.get("ok", 0), f.get("fail", 0))),
     ]
     stats_html = "".join(
-        '<div class="stat"><div class="k">%s</div><div class="v">%s</div></div>' % (k, v)
-        for k, v in stats)
+        '<div class="stat"><div class="k">%s</div><div class="v">%s</div></div>'
+        % (k, v)
+        for k, v in stats
+    )
 
-    statline = ("阶段: %s ｜ 案件 %s/%s ｜ 补抓 %s/%s ｜ 速度 %s 案/分 ｜ ETA %s"
-                % (status.get("phase") or "–", c.get("done", 0), c.get("total", 0),
-                   f.get("done", 0), f.get("total", 0), c.get("speed_per_min", 0) or 0, _fmt_dur(c.get("eta_s"))))
+    statline = "阶段: %s ｜ 案件 %s/%s ｜ 补抓 %s/%s ｜ 速度 %s 案/分 ｜ ETA %s" % (
+        status.get("phase") or "–",
+        c.get("done", 0),
+        c.get("total", 0),
+        f.get("done", 0),
+        f.get("total", 0),
+        c.get("speed_per_min", 0) or 0,
+        _fmt_dur(c.get("eta_s")),
+    )
 
     cmeta = "done %s · written %s · unchanged %s · fail %s / total %s" % (
-        c.get("done", 0), c.get("written", 0), c.get("unchanged", 0), c.get("fail", 0), c.get("total", 0))
+        c.get("done", 0),
+        c.get("written", 0),
+        c.get("unchanged", 0),
+        c.get("fail", 0),
+        c.get("total", 0),
+    )
     fmeta = "ok %s · skip %s · fail %s / total %s" % (
-        f.get("ok", 0), f.get("skip", 0), f.get("fail", 0), f.get("total", 0))
+        f.get("ok", 0),
+        f.get("skip", 0),
+        f.get("fail", 0),
+        f.get("total", 0),
+    )
 
     cv = status.get("cover") or {}
     cover_html = ""
     if cv.get("totals"):
         tot = cv["totals"]
-        cover_html += "<div><b>汇总指标：</b>审批意见共 %s 条 ｜ 事件记录 %s 条 ｜ 关联附件 %s 个 (已落盘 %s) ｜ 审批图片 %s 张 (已本地化 %s)</div>" % (
-            tot.get("comments", 0), tot.get("events", 0), tot.get("files", 0), tot.get("files_local", 0), tot.get("images", 0), tot.get("images_local", 0))
+        cover_html += (
+            "<div><b>汇总指标：</b>审批意见共 %s 条 ｜ 事件记录 %s 条 ｜ 关联附件 %s 个 (已落盘 %s) ｜ 审批图片 %s 张 (已本地化 %s)</div>"
+            % (
+                tot.get("comments", 0),
+                tot.get("events", 0),
+                tot.get("files", 0),
+                tot.get("files_local", 0),
+                tot.get("images", 0),
+                tot.get("images_local", 0),
+            )
+        )
 
-    recent_html = "".join(
-        '<tr><td>%s</td><td>%s</td><td>%s</td><td class="%s">%s</td></tr>' % (
-            r.get("ts", ""), r.get("unit", ""), r.get("key", ""),
-            "ok" if r.get("status") in ("ok", "written") else ("skip" if r.get("status") == "skip" else "fail"),
-            r.get("status", ""))
-        for r in (status.get("recent") or [])[-20:][::-1]
-    ) or "<tr><td colspan=\"4\" class=\"skip\">暂无</td></tr>"
+    recent_html = (
+        "".join(
+            '<tr><td>%s</td><td>%s</td><td>%s</td><td class="%s">%s</td></tr>'
+            % (
+                r.get("ts", ""),
+                r.get("unit", ""),
+                r.get("key", ""),
+                "ok"
+                if r.get("status") in ("ok", "written")
+                else ("skip" if r.get("status") == "skip" else "fail"),
+                r.get("status", ""),
+            )
+            for r in (status.get("recent") or [])[-20:][::-1]
+        )
+        or '<tr><td colspan="4" class="skip">暂无</td></tr>'
+    )
 
-    errors_html = "".join(
-        '<tr><td>%s</td><td>%s</td><td>%s</td><td class=\"fail\">%s</td></tr>' % (
-            r.get("ts", ""), r.get("unit", ""), r.get("key", ""), (r.get("error", "") or "").replace("<", "&lt;"))
-        for r in (status.get("errors") or [])[-20:][::-1]
-    ) or "<tr><td colspan=\"4\" class=\"ok\">无错误</td></tr>"
+    errors_html = (
+        "".join(
+            '<tr><td>%s</td><td>%s</td><td>%s</td><td class="fail">%s</td></tr>'
+            % (
+                r.get("ts", ""),
+                r.get("unit", ""),
+                r.get("key", ""),
+                (r.get("error", "") or "").replace("<", "&lt;"),
+            )
+            for r in (status.get("errors") or [])[-20:][::-1]
+        )
+        or '<tr><td colspan="4" class="ok">无错误</td></tr>'
+    )
 
     status_json = json.dumps(status, ensure_ascii=False).replace("</", "<\\/")
-    return (HTML
-            .replace("__STATUS_JSON__", status_json)
-            .replace("__STATE_TEXT__", STATE_TEXT.get(status.get("state"), "初始化"))
-            .replace("__UPDATED__", status.get("updated_at") or "–")
-            .replace("__ELAPSED__", _fmt_dur(status.get("elapsed_s")))
-            .replace("__STATLINE__", statline)
-            .replace("__STEPS_HTML__", steps_html)
-            .replace("__STATS_HTML__", stats_html)
-            .replace("__CPCT__", "%.1f" % cp)
-            .replace("__FPCT__", "%.1f" % fp)
-            .replace("__CMETA__", cmeta)
-            .replace("__FMETA__", fmeta)
-            .replace("__COVER_HTML__", cover_html or "正在统计中…")
-            .replace("__RECENT_HTML__", recent_html)
-            .replace("__ERRORS_HTML__", errors_html))
+    return (
+        HTML.replace("__STATUS_JSON__", status_json)
+        .replace("__STATE_TEXT__", STATE_TEXT.get(status.get("state"), "初始化"))
+        .replace("__UPDATED__", status.get("updated_at") or "–")
+        .replace("__ELAPSED__", _fmt_dur(status.get("elapsed_s")))
+        .replace("__STATLINE__", statline)
+        .replace("__STEPS_HTML__", steps_html)
+        .replace("__STATS_HTML__", stats_html)
+        .replace("__CPCT__", "%.1f" % cp)
+        .replace("__FPCT__", "%.1f" % fp)
+        .replace("__CMETA__", cmeta)
+        .replace("__FMETA__", fmeta)
+        .replace("__COVER_HTML__", cover_html or "正在统计中…")
+        .replace("__RECENT_HTML__", recent_html)
+        .replace("__ERRORS_HTML__", errors_html)
+    )
+
 
 class Handler(BaseHTTPRequestHandler):
     progress_path = DEFAULT_PROGRESS
-    def log_message(self, *a): pass
+
+    def log_message(self, *a):
+        pass
 
     def _send(self, code, ctype, payload):
         self.send_response(code)
@@ -376,6 +439,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, "text/plain", b"not found")
 
+
 def start_in_thread(progress_path=DEFAULT_PROGRESS, port=8771, host="127.0.0.1"):
     Handler.progress_path = progress_path
     httpd = None
@@ -389,6 +453,7 @@ def start_in_thread(progress_path=DEFAULT_PROGRESS, port=8771, host="127.0.0.1")
         raise RuntimeError("端口 %d-%d 全部被占用" % (port, port + 19))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd.server_address[1]
+
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()

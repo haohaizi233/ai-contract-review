@@ -18,6 +18,7 @@ import re
 import secrets
 from abc import ABC, abstractmethod
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -160,12 +161,14 @@ class MockLLMProvider(LLMProvider):
     ) -> dict:
         if timeout <= 0:
             raise TimeoutError(f"LLM 调用截止时间已过期 (timeout={timeout}s)")
-        self.calls.append({
-            "system_len": len(system),
-            "user_len": len(user),
-            "timeout": timeout,
-            "max_tokens": max_tokens,
-        })
+        self.calls.append(
+            {
+                "system_len": len(system),
+                "user_len": len(user),
+                "timeout": timeout,
+                "max_tokens": max_tokens,
+            }
+        )
         if self.canned.get("mode") == "refuse":
             return {"text": "我不能处理该请求。", "model": "mock", "usage": {}}
         if self.canned.get("mode") == "bad_json":
@@ -239,7 +242,10 @@ class OpenAICompatProvider(LLMProvider):
         except TimeoutError as e:
             raise TimeoutError("LLM 调用超时") from e
         except urllib.error.URLError as e:
-            if isinstance(e.reason, socket.timeout) or "timed out" in str(e.reason).lower():
+            if (
+                isinstance(e.reason, socket.timeout)
+                or "timed out" in str(e.reason).lower()
+            ):
                 raise TimeoutError("LLM 调用超时") from e
             raise
         except Exception as e:
@@ -286,9 +292,7 @@ class LLMSemanticReviewer:
             )
         if timeout is not None and timeout <= 0:
             self._record_metric("timeout")
-            return LLMReviewResult(
-                status="FAILED", failure=LLMFailure.TIMEOUT.value
-            )
+            return LLMReviewResult(status="FAILED", failure=LLMFailure.TIMEOUT.value)
         if len(contract_text) > self.max_prompt_chars * 2:
             return LLMReviewResult(
                 status="FAILED", failure=LLMFailure.CONTEXT_TOO_LONG.value
@@ -309,10 +313,14 @@ class LLMSemanticReviewer:
                 out = self.provider.complete(PROMPT_SYSTEM, prompt)
             except TimeoutError:
                 self._record_metric("timeout")
-                return LLMReviewResult(status="FAILED", failure=LLMFailure.TIMEOUT.value)
+                return LLMReviewResult(
+                    status="FAILED", failure=LLMFailure.TIMEOUT.value
+                )
             except Exception:
                 self._record_metric("error")
-                return LLMReviewResult(status="FAILED", failure=LLMFailure.UNKNOWN.value)
+                return LLMReviewResult(
+                    status="FAILED", failure=LLMFailure.UNKNOWN.value
+                )
         except TimeoutError:
             self._record_metric("timeout")
             return LLMReviewResult(status="FAILED", failure=LLMFailure.TIMEOUT.value)

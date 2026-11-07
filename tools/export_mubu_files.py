@@ -11,16 +11,30 @@
 """
 
 import html
-import json
 import os
 import urllib.parse
-from template_5th_layer_data import TEMPLATE_5TH_LAYER_RULES, DISAMBIGUATION_GROUPS
+from template_5th_layer_data import DISAMBIGUATION_GROUPS
 from build_knowledge_graph_html import build_hierarchy_data
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT_MD_CLEAN = os.path.join(BASE_DIR, "data", "contract_merged", "合同分类与78套模板五级思维导图_幕布精简导图版.md")
-OUT_MD_FULL = os.path.join(BASE_DIR, "data", "contract_merged", "合同分类与78套模板五级思维导图_幕布全量产品版.md")
-OUT_OPML = os.path.join(BASE_DIR, "data", "contract_merged", "合同分类与78套模板五级思维导图_幕布满血备注版.opml")
+OUT_MD_CLEAN = os.path.join(
+    BASE_DIR,
+    "data",
+    "contract_merged",
+    "合同分类与78套模板五级思维导图_幕布精简导图版.md",
+)
+OUT_MD_FULL = os.path.join(
+    BASE_DIR,
+    "data",
+    "contract_merged",
+    "合同分类与78套模板五级思维导图_幕布全量产品版.md",
+)
+OUT_OPML = os.path.join(
+    BASE_DIR,
+    "data",
+    "contract_merged",
+    "合同分类与78套模板五级思维导图_幕布满血备注版.opml",
+)
 
 
 def mubu_encode(s: str) -> str:
@@ -42,7 +56,9 @@ def export_mubu_markdown(data_obj, include_all_products=False):
     lines = []
 
     for l1 in tree_root["children"]:
-        l1_tpl_cnt = sum(len(l3["children"]) for l2 in l1["children"] for l3 in l2["children"])
+        l1_tpl_cnt = sum(
+            len(l3["children"]) for l2 in l1["children"] for l3 in l2["children"]
+        )
         lines.append(f"# 【第1级】{l1['name']}（共 {l1_tpl_cnt} 套标准模板）")
 
         for l2 in l1["children"]:
@@ -64,21 +80,29 @@ def export_mubu_markdown(data_obj, include_all_products=False):
                         f"  - **【第5级·唯一模板】** `{leaf['code']}` **《{leaf['template_name']}》**（版本 `{leaf['version']}` · 绑定新产品 **{len(leaf['new_products'])}** 个 · 历史合同 **{leaf['hist_cnt']}** 单）"
                     )
                     # Level 6 details under Level 5: 4 spaces before '-'
-                    lines.append(f"    - **排他触发红线**：{leaf['disambiguation_rule']}")
+                    lines.append(
+                        f"    - **排他触发红线**：{leaf['disambiguation_rule']}"
+                    )
                     if leaf.get("clause1"):
                         lines.append(f"    - **合同第一条摘要**：{leaf['clause1']}")
                     if leaf.get("payment"):
                         lines.append(f"    - **付款与风险条款**：{leaf['payment']}")
 
-                    prods = [f"{p['code']} {p['name']}".strip() for p in leaf["new_products"]]
+                    prods = [
+                        f"{p['code']} {p['name']}".strip() for p in leaf["new_products"]
+                    ]
                     if include_all_products:
-                        lines.append(f"    - **新系统绑定产品编码（共 {len(prods)} 个）**：")
+                        lines.append(
+                            f"    - **新系统绑定产品编码（共 {len(prods)} 个）**："
+                        )
                         for p_str in prods:
                             lines.append(f"      - `{p_str}`")
                     else:
                         preview = "、".join(f"`{p}`" for p in prods[:6])
                         more = f" 等共 {len(prods)} 个产品" if len(prods) > 6 else ""
-                        lines.append(f"    - **新系统代表产品（共 {len(prods)} 个）**：{preview}{more}")
+                        lines.append(
+                            f"    - **新系统代表产品（共 {len(prods)} 个）**：{preview}{more}"
+                        )
 
                     if leaf.get("erp_products"):
                         erp_str = "、".join(leaf["erp_products"][:8])
@@ -89,7 +113,9 @@ def export_mubu_markdown(data_obj, include_all_products=False):
     lines.append("# 【附：12组同分类易混模板 · 第4~5级排他决策树】")
     for grp in DISAMBIGUATION_GROUPS:
         lines.append(f"## `{grp['group_id']}` {grp['group_name']}")
-        lines.append(f"### 数据库共用粗分类：`{grp['shared_db_mapping']}` ｜ 涉及模板：`{grp['conflict_templates']}`")
+        lines.append(
+            f"### 数据库共用粗分类：`{grp['shared_db_mapping']}` ｜ 涉及模板：`{grp['conflict_templates']}`"
+        )
         for logic_line in grp["decision_logic"].split("\n"):
             s = logic_line.strip()
             if not s:
@@ -101,7 +127,15 @@ def export_mubu_markdown(data_obj, include_all_products=False):
     return "\n".join(lines)
 
 
-def make_outline_xml(text_plain, text_html=None, note_plain="", note_html="", heading=None, color=None, children_xml=""):
+def make_outline_xml(
+    text_plain,
+    text_html=None,
+    note_plain="",
+    note_html="",
+    heading=None,
+    color=None,
+    children_xml="",
+):
     attrs = [f'text="{html.escape(text_plain, quote=True)}"']
     if text_html:
         attrs.append(f'_mubu_text="{mubu_encode(text_html)}"')
@@ -109,7 +143,9 @@ def make_outline_xml(text_plain, text_html=None, note_plain="", note_html="", he
         attrs.append(f'_mubu_text="{mubu_encode(html.escape(text_plain))}"')
     if note_plain:
         attrs.append(f'_note="{html.escape(note_plain, quote=True)}"')
-        attrs.append(f'_mubu_note="{mubu_encode(note_html or html.escape(note_plain))}"')
+        attrs.append(
+            f'_mubu_note="{mubu_encode(note_html or html.escape(note_plain))}"'
+        )
     if heading:
         attrs.append(f'_heading="{heading}"')
     if color:
@@ -135,7 +171,9 @@ def export_mubu_opml(data_obj):
 
     for idx, l1 in enumerate(tree_root["children"]):
         color = l1_colors[idx % len(l1_colors)]
-        l1_tpl_cnt = sum(len(l3["children"]) for l2 in l1["children"] for l3 in l2["children"])
+        l1_tpl_cnt = sum(
+            len(l3["children"]) for l2 in l1["children"] for l3 in l2["children"]
+        )
         l2_xml_list = []
 
         for l2 in l1["children"]:
@@ -147,13 +185,15 @@ def export_mubu_opml(data_obj):
 
                 for l4 in l3["children"]:
                     leaf = l4["children"][0]["leaf"]
-                    prods = [f"{p['code']} {p['name']}".strip() for p in leaf["new_products"]]
+                    prods = [
+                        f"{p['code']} {p['name']}".strip() for p in leaf["new_products"]
+                    ]
 
                     # Level 5 leaf node with full rich note
                     t_plain = f"【第5级·唯一模板】{leaf['code']} 《{leaf['template_name']}》（{len(prods)}个产品 / {leaf['hist_cnt']}单）"
                     t_html = (
                         f"<b>【第5级·唯一模板】</b>"
-                        f"<span class=\"codespan\">{html.escape(leaf['code'])}</span> "
+                        f'<span class="codespan">{html.escape(leaf["code"])}</span> '
                         f"<b>《{html.escape(leaf['template_name'])}》</b>"
                         f"（<b>{len(prods)}</b>个产品 / {leaf['hist_cnt']}单）"
                     )
@@ -168,11 +208,17 @@ def export_mubu_opml(data_obj):
                     if leaf.get("payment"):
                         note_lines_plain.append(f"【付款与风险条款】{leaf['payment']}")
                     if leaf.get("erp_products"):
-                        note_lines_plain.append(f"【老ERP产品映射】{'、'.join(leaf['erp_products'])}")
-                    note_lines_plain.append(f"【新系统绑定产品明细（共{len(prods)}个）】" + "；".join(prods))
+                        note_lines_plain.append(
+                            f"【老ERP产品映射】{'、'.join(leaf['erp_products'])}"
+                        )
+                    note_lines_plain.append(
+                        f"【新系统绑定产品明细（共{len(prods)}个）】" + "；".join(prods)
+                    )
 
                     note_plain = "\n".join(note_lines_plain)
-                    note_html = "<br/>".join(html.escape(line) for line in note_lines_plain)
+                    note_html = "<br/>".join(
+                        html.escape(line) for line in note_lines_plain
+                    )
 
                     l5_xml = make_outline_xml(
                         text_plain=t_plain,
@@ -231,21 +277,25 @@ def export_mubu_opml(data_obj):
     disamb_children = []
     for grp in DISAMBIGUATION_GROUPS:
         g_plain = f"{grp['group_id']} {grp['group_name']}"
-        g_html = f"<span class=\"codespan\">{html.escape(grp['group_id'])}</span> <b>{html.escape(grp['group_name'])}</b>"
+        g_html = f'<span class="codespan">{html.escape(grp["group_id"])}</span> <b>{html.escape(grp["group_name"])}</b>'
         g_note = f"【数据库共用粗分类】{grp['shared_db_mapping']}\n【涉及易混模板】{grp['conflict_templates']}\n【排他决策树规则】\n{grp['decision_logic']}"
-        disamb_children.append(make_outline_xml(
-            text_plain=g_plain,
-            text_html=g_html,
-            note_plain=g_note,
-            heading=2,
-        ))
-    body_outlines.append(make_outline_xml(
-        text_plain="【附】12组同分类易混模板 · 排他决策速查表",
-        text_html="<b>【附】12组同分类易混模板 · 排他决策速查表</b>",
-        heading=1,
-        color="red",
-        children_xml="\n".join(disamb_children),
-    ))
+        disamb_children.append(
+            make_outline_xml(
+                text_plain=g_plain,
+                text_html=g_html,
+                note_plain=g_note,
+                heading=2,
+            )
+        )
+    body_outlines.append(
+        make_outline_xml(
+            text_plain="【附】12组同分类易混模板 · 排他决策速查表",
+            text_html="<b>【附】12组同分类易混模板 · 排他决策速查表</b>",
+            heading=1,
+            color="red",
+            children_xml="\n".join(disamb_children),
+        )
+    )
 
     body_str = "\n".join(body_outlines)
     opml = f"""<?xml version="1.0" encoding="UTF-8"?>

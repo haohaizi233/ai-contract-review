@@ -8,13 +8,13 @@ from pathlib import Path
 from contract_kb.storage import Storage
 from contract_kb.modules.integrations.adapters import (
     ContractIntegrationOrchestrator,
-    E9SqlServerAdapter,
-    TenderMysqlAdapter,
     SyncWatermarkStore,
 )
 
 
-def test_multi_source_incremental_sync_preserves_mappings_and_increments_version(tmp_path: Path):
+def test_multi_source_incremental_sync_preserves_mappings_and_increments_version(
+    tmp_path: Path,
+):
     """
     验证三批增量数据合流：
     - Batch 1: 写入双来源数据（WEAVER_E9 与 TENDER_MYSQL 关联同一合同编号）；
@@ -31,6 +31,7 @@ def test_multi_source_incremental_sync_preserves_mappings_and_increments_version
         def __init__(self, batches):
             self.batches = batches
             self.call_count = 0
+
         def fetch_contracts_since(self, cursor: int, limit: int = 100):
             if self.call_count < len(self.batches):
                 res = self.batches[self.call_count]
@@ -42,6 +43,7 @@ def test_multi_source_incremental_sync_preserves_mappings_and_increments_version
         def __init__(self, batches):
             self.batches = batches
             self.call_count = 0
+
         def fetch_contracts_since(self, cursor: int, limit: int = 100):
             if self.call_count < len(self.batches):
                 res = self.batches[self.call_count]
@@ -49,13 +51,49 @@ def test_multi_source_incremental_sync_preserves_mappings_and_increments_version
                 return res
             return []
 
-    e9_b1 = [{"requestid": 101, "contract_no": "HT-2026-MULTI-01", "title": "E9 Service Contract", "party_a": "Alpha", "party_b": "Beta", "total_amt": "100000"}]
-    td_b1 = [{"id": 501, "contract_no": "HT-2026-MULTI-01", "contract_name": "Tender Service Contract", "customer_name": "Alpha Corp", "company_name": "Beta LLC", "total_amount": "100000"}]
+    e9_b1 = [
+        {
+            "requestid": 101,
+            "contract_no": "HT-2026-MULTI-01",
+            "title": "E9 Service Contract",
+            "party_a": "Alpha",
+            "party_b": "Beta",
+            "total_amt": "100000",
+        }
+    ]
+    td_b1 = [
+        {
+            "id": 501,
+            "contract_no": "HT-2026-MULTI-01",
+            "contract_name": "Tender Service Contract",
+            "customer_name": "Alpha Corp",
+            "company_name": "Beta LLC",
+            "total_amount": "100000",
+        }
+    ]
 
     e9_b2 = []  # Batch 2: E9 无新数据
-    td_b2 = [{"id": 502, "contract_no": "HT-2026-MULTI-01", "contract_name": "Tender Service Contract Updated", "customer_name": "Alpha Corp", "company_name": "Beta LLC", "total_amount": "120000"}]
+    td_b2 = [
+        {
+            "id": 502,
+            "contract_no": "HT-2026-MULTI-01",
+            "contract_name": "Tender Service Contract Updated",
+            "customer_name": "Alpha Corp",
+            "company_name": "Beta LLC",
+            "total_amount": "120000",
+        }
+    ]
 
-    e9_b3 = [{"requestid": 102, "contract_no": "HT-2026-MULTI-01", "title": "E9 Service Contract Final", "party_a": "Alpha Group", "party_b": "Beta LLC", "total_amt": "120000"}]
+    e9_b3 = [
+        {
+            "requestid": 102,
+            "contract_no": "HT-2026-MULTI-01",
+            "title": "E9 Service Contract Final",
+            "party_a": "Alpha Group",
+            "party_b": "Beta LLC",
+            "total_amt": "120000",
+        }
+    ]
     td_b3 = []  # Batch 3: Tender 无新数据
 
     e9_adapter = MockE9Adapter([e9_b1, e9_b2, e9_b3])
@@ -87,7 +125,9 @@ def test_multi_source_incremental_sync_preserves_mappings_and_increments_version
     assert c2 is not None
     # 关键断言：WEAVER_E9 来源绝对不能丢失！
     sources2 = {m["source_system"] for m in c2.get("source_mappings", [])}
-    assert "WEAVER_E9" in sources2, f"Batch 2 增量合流导致旧 WEAVER_E9 来源映射丢失！当前 sources: {sources2}"
+    assert "WEAVER_E9" in sources2, (
+        f"Batch 2 增量合流导致旧 WEAVER_E9 来源映射丢失！当前 sources: {sources2}"
+    )
     assert "TENDER_NEW" in sources2
     assert c2["version"] == 2, f"Batch 2 更新后版本号应为 2，实际为: {c2['version']}"
 
@@ -99,7 +139,9 @@ def test_multi_source_incremental_sync_preserves_mappings_and_increments_version
     assert c3 is not None
     sources3 = {m["source_system"] for m in c3.get("source_mappings", [])}
     assert "WEAVER_E9" in sources3
-    assert "TENDER_NEW" in sources3, f"Batch 3 增量合流导致 TENDER_NEW 来源映射丢失！当前 sources: {sources3}"
+    assert "TENDER_NEW" in sources3, (
+        f"Batch 3 增量合流导致 TENDER_NEW 来源映射丢失！当前 sources: {sources3}"
+    )
     assert c3["version"] == 3, f"Batch 3 更新后版本号应为 3，实际为: {c3['version']}"
 
     st.close()

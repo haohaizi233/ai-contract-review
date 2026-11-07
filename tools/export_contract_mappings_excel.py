@@ -4,6 +4,7 @@ Export all contract classification, dictionary, business segment, mainbody,
 prefix, old-OA select item, and contract template mappings to a multi-sheet Excel (.xlsx) file.
 Uses standard library zipfile + xml.sax.saxutils to generate a styled OpenXML Workbook.
 """
+
 import csv
 import datetime
 import io
@@ -47,8 +48,11 @@ def clean_xml_str(val) -> str:
     else:
         val = str(val)
     return "".join(
-        ch for ch in val
-        if ch in ("\t", "\n", "\r") or (0x20 <= ord(ch) <= 0xD7FF) or (0xE000 <= ord(ch) <= 0xFFFD)
+        ch
+        for ch in val
+        if ch in ("\t", "\n", "\r")
+        or (0x20 <= ord(ch) <= 0xD7FF)
+        or (0xE000 <= ord(ch) <= 0xFFFD)
     )
 
 
@@ -75,7 +79,7 @@ def write_styled_xlsx(filepath: str, sheets: list[tuple[str, list[str], list[lis
         ]
         for i in range(len(sheets)):
             ct_parts.append(
-                f'  <Override PartName="/xl/worksheets/sheet{i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                f'  <Override PartName="/xl/worksheets/sheet{i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
             )
         ct_parts.append("</Types>")
         zf.writestr("[Content_Types].xml", "\n".join(ct_parts))
@@ -94,10 +98,10 @@ def write_styled_xlsx(filepath: str, sheets: list[tuple[str, list[str], list[lis
         ]
         for i in range(len(sheets)):
             wb_rels.append(
-                f'  <Relationship Id="rId{i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i+1}.xml"/>'
+                f'  <Relationship Id="rId{i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i + 1}.xml"/>'
             )
         wb_rels.append(
-            f'  <Relationship Id="rId{len(sheets)+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+            f'  <Relationship Id="rId{len(sheets) + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
         )
         wb_rels.append("</Relationships>")
         zf.writestr("xl/_rels/workbook.xml.rels", "\n".join(wb_rels))
@@ -106,11 +110,13 @@ def write_styled_xlsx(filepath: str, sheets: list[tuple[str, list[str], list[lis
         wb_xml = [
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
             '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
-            '  <sheets>',
+            "  <sheets>",
         ]
         for i, (sheet_name, _, _) in enumerate(sheets):
             safe_name = escape(sheet_name[:31])
-            wb_xml.append(f'    <sheet name="{safe_name}" sheetId="{i+1}" r:id="rId{i+1}"/>')
+            wb_xml.append(
+                f'    <sheet name="{safe_name}" sheetId="{i + 1}" r:id="rId{i + 1}"/>'
+            )
         wb_xml.append("  </sheets>")
         wb_xml.append("</workbook>")
         zf.writestr("xl/workbook.xml", "\n".join(wb_xml))
@@ -190,27 +196,35 @@ def write_styled_xlsx(filepath: str, sheets: list[tuple[str, list[str], list[lis
 
             ws = io.StringIO()
             ws.write('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n')
-            ws.write('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">\n')
+            ws.write(
+                '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">\n'
+            )
             ws.write(f'  <dimension ref="A1:{last_col_letter}{total_rows}"/>\n')
-            ws.write('  <sheetViews>\n')
+            ws.write("  <sheetViews>\n")
             ws.write('    <sheetView workbookViewId="0">\n')
-            ws.write('      <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>\n')
-            ws.write('    </sheetView>\n')
-            ws.write('  </sheetViews>\n')
+            ws.write(
+                '      <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>\n'
+            )
+            ws.write("    </sheetView>\n")
+            ws.write("  </sheetViews>\n")
             ws.write('  <sheetFormatPr defaultRowHeight="20"/>\n')
-            ws.write('  <cols>\n')
+            ws.write("  <cols>\n")
             for c_idx, width in enumerate(col_widths):
-                ws.write(f'    <col min="{c_idx+1}" max="{c_idx+1}" width="{width:.1f}" customWidth="1"/>\n')
-            ws.write('  </cols>\n')
-            ws.write('  <sheetData>\n')
+                ws.write(
+                    f'    <col min="{c_idx + 1}" max="{c_idx + 1}" width="{width:.1f}" customWidth="1"/>\n'
+                )
+            ws.write("  </cols>\n")
+            ws.write("  <sheetData>\n")
 
             # Header row (row 1)
             ws.write('    <row r="1" ht="26" customHeight="1">\n')
             for c_idx, h in enumerate(headers):
                 cell_ref = f"{col_letter(c_idx)}1"
                 text = escape(clean_xml_str(h))
-                ws.write(f'      <c r="{cell_ref}" s="1" t="inlineStr"><is><t>{text}</t></is></c>\n')
-            ws.write('    </row>\n')
+                ws.write(
+                    f'      <c r="{cell_ref}" s="1" t="inlineStr"><is><t>{text}</t></is></c>\n'
+                )
+            ws.write("    </row>\n")
 
             # Data rows
             for r_idx, row_vals in enumerate(rows, start=2):
@@ -222,13 +236,15 @@ def write_styled_xlsx(filepath: str, sheets: list[tuple[str, list[str], list[lis
                         ws.write(f'      <c r="{cell_ref}" s="3"><v>{val}</v></c>\n')
                     else:
                         text = escape(clean_xml_str(val))
-                        ws.write(f'      <c r="{cell_ref}" s="2" t="inlineStr"><is><t>{text}</t></is></c>\n')
-                ws.write('    </row>\n')
+                        ws.write(
+                            f'      <c r="{cell_ref}" s="2" t="inlineStr"><is><t>{text}</t></is></c>\n'
+                        )
+                ws.write("    </row>\n")
 
-            ws.write('  </sheetData>\n')
+            ws.write("  </sheetData>\n")
             ws.write(f'  <autoFilter ref="A1:{last_col_letter}{total_rows}"/>\n')
-            ws.write('</worksheet>')
-            zf.writestr(f"xl/worksheets/sheet{i+1}.xml", ws.getvalue())
+            ws.write("</worksheet>")
+            zf.writestr(f"xl/worksheets/sheet{i + 1}.xml", ws.getvalue())
 
 
 def main():
@@ -260,14 +276,24 @@ def main():
 
     with conn_contract.cursor() as cur:
         cols = [
-            "contract_category", "contract_type", "business_type", "business_sub_type",
-            "draft_type", "contract_nature", "contract_version", "auth_item",
-            "contract_flow_type", "pay_scheme", "contract_status", "data_source", "oa_source",
-            "my_main_body"
+            "contract_category",
+            "contract_type",
+            "business_type",
+            "business_sub_type",
+            "draft_type",
+            "contract_nature",
+            "contract_version",
+            "auth_item",
+            "contract_flow_type",
+            "pay_scheme",
+            "contract_status",
+            "data_source",
+            "oa_source",
+            "my_main_body",
         ]
         for c in cols:
             cur.execute(f"""
-                SELECT 
+                SELECT
                     CASE WHEN oa_source IS NULL OR oa_source = '' THEN 'native' ELSE 'oa' END as src,
                     `{c}` as val,
                     COUNT(*) as cnt
@@ -283,16 +309,29 @@ def main():
                 else:
                     apply_oa_counts[c][k] += r["cnt"]
 
-        for c in ["contract_category", "contract_type", "business_type", "draft_type", "contract_nature", "auth_item", "contract_status", "archive_type"]:
+        for c in [
+            "contract_category",
+            "contract_type",
+            "business_type",
+            "draft_type",
+            "contract_nature",
+            "auth_item",
+            "contract_status",
+            "archive_type",
+        ]:
             try:
-                cur.execute(f"SELECT `{c}` as val, COUNT(*) as cnt FROM contract_archive WHERE deleted = 0 GROUP BY `{c}`")
+                cur.execute(
+                    f"SELECT `{c}` as val, COUNT(*) as cnt FROM contract_archive WHERE deleted = 0 GROUP BY `{c}`"
+                )
                 for r in cur.fetchall():
                     k = str(r["val"]) if r["val"] is not None else "NULL"
                     archive_counts[c][k] += r["cnt"]
             except Exception:
                 pass
 
-        cur.execute("SELECT repayment_type, COUNT(*) as cnt FROM contract_apply_performance_item WHERE deleted = 0 GROUP BY repayment_type")
+        cur.execute(
+            "SELECT repayment_type, COUNT(*) as cnt FROM contract_apply_performance_item WHERE deleted = 0 GROUP BY repayment_type"
+        )
         for r in cur.fetchall():
             k = str(r["repayment_type"]) if r["repayment_type"] is not None else "NULL"
             repayment_counts[k] += r["cnt"]
@@ -301,74 +340,538 @@ def main():
     # SHEET 1: 01_核心分类字段枚举总表
     # =========================================================================
     s1_headers = [
-        "字段英文名", "字段中文名", "所在核心表", "字典/配置表来源", "枚举值 (Value)",
-        "标准中文含义 (Label)", "对应旧OA字段与原值", "申请表总数 (contract_apply)",
-        "其中: 新系统原生数", "其中: 旧OA迁移数", "归档表总数 (contract_archive)", "RAG与业务使用核心说明"
+        "字段英文名",
+        "字段中文名",
+        "所在核心表",
+        "字典/配置表来源",
+        "枚举值 (Value)",
+        "标准中文含义 (Label)",
+        "对应旧OA字段与原值",
+        "申请表总数 (contract_apply)",
+        "其中: 新系统原生数",
+        "其中: 旧OA迁移数",
+        "归档表总数 (contract_archive)",
+        "RAG与业务使用核心说明",
     ]
     core_enum_defs = [
         # contract_type
-        ("contract_type", "合同类型", "contract_apply / contract_archive / contract_template", "物理表 tender_contract.contract_type", "1", "销售合同 (XSHT)", "formtable_main_130 (产品合同) / -474 (htlx=0总委)", "contract_type", "客户签单业务主类型（覆盖普通产品合同与总委框架合同）"),
-        ("contract_type", "合同类型", "contract_apply / contract_archive / contract_template", "物理表 tender_contract.contract_type", "2", "采购合同 (CGHT - 已停用)", "无", "contract_type", "物理配置表标记已删除；注意勿与字典表id=2021(1内部/2外部)混淆"),
-        ("contract_type", "合同类型", "contract_apply / contract_archive / contract_template", "物理表 tender_contract.contract_type", "3", "服务协议 (FWXY)", "formtable_main_474 (htlx=1保密/2合作/3生态合作)", "contract_type", "涵盖保密协议、生态合作伙伴协议、渠道合作协议"),
-        ("contract_type", "合同类型", "contract_apply / contract_archive / contract_template", "物理表 tender_contract.contract_type", "5", "律所合同 (LSHT - 已停用)", "无", "contract_type", "已并入销售合同下的法律服务(auth_item=7)"),
+        (
+            "contract_type",
+            "合同类型",
+            "contract_apply / contract_archive / contract_template",
+            "物理表 tender_contract.contract_type",
+            "1",
+            "销售合同 (XSHT)",
+            "formtable_main_130 (产品合同) / -474 (htlx=0总委)",
+            "contract_type",
+            "客户签单业务主类型（覆盖普通产品合同与总委框架合同）",
+        ),
+        (
+            "contract_type",
+            "合同类型",
+            "contract_apply / contract_archive / contract_template",
+            "物理表 tender_contract.contract_type",
+            "2",
+            "采购合同 (CGHT - 已停用)",
+            "无",
+            "contract_type",
+            "物理配置表标记已删除；注意勿与字典表id=2021(1内部/2外部)混淆",
+        ),
+        (
+            "contract_type",
+            "合同类型",
+            "contract_apply / contract_archive / contract_template",
+            "物理表 tender_contract.contract_type",
+            "3",
+            "服务协议 (FWXY)",
+            "formtable_main_474 (htlx=1保密/2合作/3生态合作)",
+            "contract_type",
+            "涵盖保密协议、生态合作伙伴协议、渠道合作协议",
+        ),
+        (
+            "contract_type",
+            "合同类型",
+            "contract_apply / contract_archive / contract_template",
+            "物理表 tender_contract.contract_type",
+            "5",
+            "律所合同 (LSHT - 已停用)",
+            "无",
+            "contract_type",
+            "已并入销售合同下的法律服务(auth_item=7)",
+        ),
         # business_type
-        ("business_type", "业务类型", "contract_apply / contract_archive / contract_template", "物理表 tender_contract.contract_business_type", "6", "普通新增产品 (ptxzcp)", "formtable_main_130.htlx = 0 (产品合同)", "business_type", "【最核心】单项/标准销售合同，归属 contract_type=1，绑定 67 个标准模板"),
-        ("business_type", "业务类型", "contract_apply / contract_archive / contract_template", "物理表 tender_contract.contract_business_type", "7", "总委托业务 (zwht)", "formtable_main_474.htlx = 0 (总委合同)", "business_type", "【最核心】框架/总委销售合同，归属 contract_type=1，绑定 7 个总委标准模板"),
-        ("business_type", "业务类型", "contract_apply / contract_archive / contract_template", "物理表 tender_contract.contract_business_type", "8", "保密协议 (bmxy)", "formtable_main_474.htlx = 1 (保密协议)", "business_type", "归属 contract_type=3 (服务协议)，绑定 MB20251205011 保密协议模板"),
-        ("business_type", "业务类型", "contract_apply / contract_archive / contract_template", "物理表 tender_contract.contract_business_type", "9", "合作协议 (hzxy)", "formtable_main_474.htlx = 2 (合作协议)", "business_type", "归属 contract_type=3 (服务协议)，主要为历史渠道/外部合作协议"),
-        ("business_type", "业务类型", "contract_apply / contract_archive / contract_template", "物理表 tender_contract.contract_business_type", "3", "生态合作伙伴协议", "formtable_main_474.htlx = 3 (生态合作伙伴协议)", "business_type", "归属 contract_type=3 (服务协议)，生态渠道合作专用"),
+        (
+            "business_type",
+            "业务类型",
+            "contract_apply / contract_archive / contract_template",
+            "物理表 tender_contract.contract_business_type",
+            "6",
+            "普通新增产品 (ptxzcp)",
+            "formtable_main_130.htlx = 0 (产品合同)",
+            "business_type",
+            "【最核心】单项/标准销售合同，归属 contract_type=1，绑定 67 个标准模板",
+        ),
+        (
+            "business_type",
+            "业务类型",
+            "contract_apply / contract_archive / contract_template",
+            "物理表 tender_contract.contract_business_type",
+            "7",
+            "总委托业务 (zwht)",
+            "formtable_main_474.htlx = 0 (总委合同)",
+            "business_type",
+            "【最核心】框架/总委销售合同，归属 contract_type=1，绑定 7 个总委标准模板",
+        ),
+        (
+            "business_type",
+            "业务类型",
+            "contract_apply / contract_archive / contract_template",
+            "物理表 tender_contract.contract_business_type",
+            "8",
+            "保密协议 (bmxy)",
+            "formtable_main_474.htlx = 1 (保密协议)",
+            "business_type",
+            "归属 contract_type=3 (服务协议)，绑定 MB20251205011 保密协议模板",
+        ),
+        (
+            "business_type",
+            "业务类型",
+            "contract_apply / contract_archive / contract_template",
+            "物理表 tender_contract.contract_business_type",
+            "9",
+            "合作协议 (hzxy)",
+            "formtable_main_474.htlx = 2 (合作协议)",
+            "business_type",
+            "归属 contract_type=3 (服务协议)，主要为历史渠道/外部合作协议",
+        ),
+        (
+            "business_type",
+            "业务类型",
+            "contract_apply / contract_archive / contract_template",
+            "物理表 tender_contract.contract_business_type",
+            "3",
+            "生态合作伙伴协议",
+            "formtable_main_474.htlx = 3 (生态合作伙伴协议)",
+            "business_type",
+            "归属 contract_type=3 (服务协议)，生态渠道合作专用",
+        ),
         # business_sub_type
-        ("business_sub_type", "业务子类型", "contract_apply", "系统字典 contract_business_sub_type", "1", "普通合同", "对应 business_type = 6", "business_sub_type", "单项普通合同"),
-        ("business_sub_type", "业务子类型", "contract_apply", "系统字典 contract_business_sub_type", "2", "总委合同", "对应 business_type = 7, 3, 9", "business_sub_type", "总委/合作框架类合同"),
-        ("business_sub_type", "业务子类型", "contract_apply", "系统字典 contract_business_sub_type (扩展)", "3", "保密协议", "对应 business_type = 8", "business_sub_type", "后端代码自动将保密协议赋值为 3"),
+        (
+            "business_sub_type",
+            "业务子类型",
+            "contract_apply",
+            "系统字典 contract_business_sub_type",
+            "1",
+            "普通合同",
+            "对应 business_type = 6",
+            "business_sub_type",
+            "单项普通合同",
+        ),
+        (
+            "business_sub_type",
+            "业务子类型",
+            "contract_apply",
+            "系统字典 contract_business_sub_type",
+            "2",
+            "总委合同",
+            "对应 business_type = 7, 3, 9",
+            "business_sub_type",
+            "总委/合作框架类合同",
+        ),
+        (
+            "business_sub_type",
+            "业务子类型",
+            "contract_apply",
+            "系统字典 contract_business_sub_type (扩展)",
+            "3",
+            "保密协议",
+            "对应 business_type = 8",
+            "business_sub_type",
+            "后端代码自动将保密协议赋值为 3",
+        ),
         # draft_type
-        ("draft_type", "起草方式", "contract_apply / contract_archive", "系统字典 contract_write_type (id=2022)", "1", "固定合同模板", "新系统2025-12上线模板引擎后产生", "draft_type", "调用系统模板在线填充生成，必有 contract_template_id 及事项明细"),
-        ("draft_type", "起草方式", "contract_apply / contract_archive", "系统字典 contract_write_type (id=2022)", "2", "非固定合同模板", "全部旧OA迁移合同 + 新系统上传自定义Word/PDF合同", "draft_type", "注意：历史迁移合同全部为 2，判断其适用模板需通过 (business_type + auth_item) 路由"),
+        (
+            "draft_type",
+            "起草方式",
+            "contract_apply / contract_archive",
+            "系统字典 contract_write_type (id=2022)",
+            "1",
+            "固定合同模板",
+            "新系统2025-12上线模板引擎后产生",
+            "draft_type",
+            "调用系统模板在线填充生成，必有 contract_template_id 及事项明细",
+        ),
+        (
+            "draft_type",
+            "起草方式",
+            "contract_apply / contract_archive",
+            "系统字典 contract_write_type (id=2022)",
+            "2",
+            "非固定合同模板",
+            "全部旧OA迁移合同 + 新系统上传自定义Word/PDF合同",
+            "draft_type",
+            "注意：历史迁移合同全部为 2，判断其适用模板需通过 (business_type + auth_item) 路由",
+        ),
         # contract_nature
-        ("contract_nature", "合同性质", "contract_apply / contract_archive", "系统字典 contract_nature (id=2023)", "1", "正常合同", "formtable_main_130.sfwbkbht = 1 (否)", "contract_nature", "全库有效记录均为 1"),
-        ("contract_nature", "合同性质", "contract_apply / contract_archive", "系统字典 contract_nature (id=2023)", "2", "背靠背合同", "formtable_main_130.sfwbkbht = 0 (是)", "contract_nature", "涉及第三方背靠背付款条款"),
+        (
+            "contract_nature",
+            "合同性质",
+            "contract_apply / contract_archive",
+            "系统字典 contract_nature (id=2023)",
+            "1",
+            "正常合同",
+            "formtable_main_130.sfwbkbht = 1 (否)",
+            "contract_nature",
+            "全库有效记录均为 1",
+        ),
+        (
+            "contract_nature",
+            "合同性质",
+            "contract_apply / contract_archive",
+            "系统字典 contract_nature (id=2023)",
+            "2",
+            "背靠背合同",
+            "formtable_main_130.sfwbkbht = 0 (是)",
+            "contract_nature",
+            "涉及第三方背靠背付款条款",
+        ),
         # contract_version
-        ("contract_version", "合同版本", "contract_apply", "系统字典 contract_version (id=2025)", "1", "标准版", "formtable_main_130.htbb = 0 (标准版)", "contract_version", "常规不退费标准条款版"),
-        ("contract_version", "合同版本", "contract_apply", "系统字典 contract_version (id=2025)", "2", "可退款版", "formtable_main_130.htbb = 1 (可退款版)", "contract_version", "含未授权/未通过退费条款（如风险代理、授权宝等）"),
+        (
+            "contract_version",
+            "合同版本",
+            "contract_apply",
+            "系统字典 contract_version (id=2025)",
+            "1",
+            "标准版",
+            "formtable_main_130.htbb = 0 (标准版)",
+            "contract_version",
+            "常规不退费标准条款版",
+        ),
+        (
+            "contract_version",
+            "合同版本",
+            "contract_apply",
+            "系统字典 contract_version (id=2025)",
+            "2",
+            "可退款版",
+            "formtable_main_130.htbb = 1 (可退款版)",
+            "contract_version",
+            "含未授权/未通过退费条款（如风险代理、授权宝等）",
+        ),
         # contract_flow_type
-        ("contract_flow_type", "合同流转类型", "contract_apply", "系统字典 fllow_type (id=2031)", "0", "正常合同（旧OA原值遗留）", "旧OA yclx / htlzlx = 0 (正常合同)", "contract_flow_type", "迁移时部分记录保留了旧OA原值 0，等同于 1(正常)"),
-        ("contract_flow_type", "合同流转类型", "contract_apply", "系统字典 fllow_type (id=2031)", "1", "正常", "旧OA yclx / htlzlx = 0 (正常合同)", "contract_flow_type", "标准价格与标准条款流转"),
-        ("contract_flow_type", "合同流转类型", "contract_apply", "系统字典 fllow_type (id=2031)", "2", "低于底价", "旧OA yclx / htlzlx = 1 (异常合同-价格偏低)", "contract_flow_type", "触发低价特批流程"),
-        ("contract_flow_type", "合同流转类型", "contract_apply", "系统字典 fllow_type (id=2031)", "3", "条款变更", "旧OA yclx / htlzlx = 2 (异常合同-条款变更)", "contract_flow_type", "【重要】代表修改了标准模板的核心风险条款（违约/时限/收款），触发法务审批"),
+        (
+            "contract_flow_type",
+            "合同流转类型",
+            "contract_apply",
+            "系统字典 fllow_type (id=2031)",
+            "0",
+            "正常合同（旧OA原值遗留）",
+            "旧OA yclx / htlzlx = 0 (正常合同)",
+            "contract_flow_type",
+            "迁移时部分记录保留了旧OA原值 0，等同于 1(正常)",
+        ),
+        (
+            "contract_flow_type",
+            "合同流转类型",
+            "contract_apply",
+            "系统字典 fllow_type (id=2031)",
+            "1",
+            "正常",
+            "旧OA yclx / htlzlx = 0 (正常合同)",
+            "contract_flow_type",
+            "标准价格与标准条款流转",
+        ),
+        (
+            "contract_flow_type",
+            "合同流转类型",
+            "contract_apply",
+            "系统字典 fllow_type (id=2031)",
+            "2",
+            "低于底价",
+            "旧OA yclx / htlzlx = 1 (异常合同-价格偏低)",
+            "contract_flow_type",
+            "触发低价特批流程",
+        ),
+        (
+            "contract_flow_type",
+            "合同流转类型",
+            "contract_apply",
+            "系统字典 fllow_type (id=2031)",
+            "3",
+            "条款变更",
+            "旧OA yclx / htlzlx = 2 (异常合同-条款变更)",
+            "contract_flow_type",
+            "【重要】代表修改了标准模板的核心风险条款（违约/时限/收款），触发法务审批",
+        ),
         # pay_scheme
-        ("pay_scheme", "付款方案", "contract_apply", "系统字典 contract_payment_plantype", "1", "先付全款后服务", "formtable_main_130.fkfa = 0", "pay_scheme", "对应【包干费版】或全款标准模板"),
-        ("pay_scheme", "付款方案", "contract_apply", "系统字典 contract_payment_plantype", "2", "先付部分款项后开始服务，递交前/收到凭证/项目成功后付尾款", "formtable_main_130.fkfa = 1", "pay_scheme", "对应【分阶段费用版】模板或分期收款条款"),
-        ("pay_scheme", "付款方案", "contract_apply", "系统字典 contract_payment_plantype", "3", "前期收款0，成功后付费", "formtable_main_130.fkfa = 2", "pay_scheme", "对应【全风险】代理服务合同模板"),
-        ("pay_scheme", "付款方案", "contract_apply", "系统字典 contract_payment_plantype", "4", "先付款，不成功后退款", "formtable_main_130.fkfa = 3", "pay_scheme", "对应可退款版/风险代理申请模板"),
-        ("pay_scheme", "付款方案", "contract_apply", "系统字典 contract_payment_plantype", "5", "其他付款方案", "formtable_main_130.fkfa = 4", "pay_scheme", "特殊约定付款节点"),
+        (
+            "pay_scheme",
+            "付款方案",
+            "contract_apply",
+            "系统字典 contract_payment_plantype",
+            "1",
+            "先付全款后服务",
+            "formtable_main_130.fkfa = 0",
+            "pay_scheme",
+            "对应【包干费版】或全款标准模板",
+        ),
+        (
+            "pay_scheme",
+            "付款方案",
+            "contract_apply",
+            "系统字典 contract_payment_plantype",
+            "2",
+            "先付部分款项后开始服务，递交前/收到凭证/项目成功后付尾款",
+            "formtable_main_130.fkfa = 1",
+            "pay_scheme",
+            "对应【分阶段费用版】模板或分期收款条款",
+        ),
+        (
+            "pay_scheme",
+            "付款方案",
+            "contract_apply",
+            "系统字典 contract_payment_plantype",
+            "3",
+            "前期收款0，成功后付费",
+            "formtable_main_130.fkfa = 2",
+            "pay_scheme",
+            "对应【全风险】代理服务合同模板",
+        ),
+        (
+            "pay_scheme",
+            "付款方案",
+            "contract_apply",
+            "系统字典 contract_payment_plantype",
+            "4",
+            "先付款，不成功后退款",
+            "formtable_main_130.fkfa = 3",
+            "pay_scheme",
+            "对应可退款版/风险代理申请模板",
+        ),
+        (
+            "pay_scheme",
+            "付款方案",
+            "contract_apply",
+            "系统字典 contract_payment_plantype",
+            "5",
+            "其他付款方案",
+            "formtable_main_130.fkfa = 4",
+            "pay_scheme",
+            "特殊约定付款节点",
+        ),
         # contract_category
-        ("contract_category", "合同大类", "contract_apply / contract_archive", "系统字典 contract_category (id=2018)", "1", "销售合同", "OA迁移数据默认赋 1", "contract_category", "【避坑】OA迁移全部为1；新系统原生部分为1"),
-        ("contract_category", "合同大类", "contract_apply / contract_archive", "系统字典 contract_category (id=2018)", "2", "采购合同(字典) / 新系统普通销售合同实际落值", "新系统原生流程赋 2", "contract_category", "【避坑】新系统原生1816单普通销售合同被写入2，切勿用 contract_category=2 过滤采购合同！"),
+        (
+            "contract_category",
+            "合同大类",
+            "contract_apply / contract_archive",
+            "系统字典 contract_category (id=2018)",
+            "1",
+            "销售合同",
+            "OA迁移数据默认赋 1",
+            "contract_category",
+            "【避坑】OA迁移全部为1；新系统原生部分为1",
+        ),
+        (
+            "contract_category",
+            "合同大类",
+            "contract_apply / contract_archive",
+            "系统字典 contract_category (id=2018)",
+            "2",
+            "采购合同(字典) / 新系统普通销售合同实际落值",
+            "新系统原生流程赋 2",
+            "contract_category",
+            "【避坑】新系统原生1816单普通销售合同被写入2，切勿用 contract_category=2 过滤采购合同！",
+        ),
         # contract_status
-        ("contract_status", "合同状态", "contract_apply / contract_archive", "系统字典 contract_status (id=2026)", "0", "退回 / 草稿", "旧OA退回/草稿", "contract_status", "流程未提交或被退回"),
-        ("contract_status", "合同状态", "contract_apply / contract_archive", "系统字典 contract_status (id=2026)", "1", "审批中", "旧OA htzt = 0 (签署/执行中)", "contract_status", "流程流转审批中"),
-        ("contract_status", "合同状态", "contract_apply / contract_archive", "系统字典 contract_status (id=2026)", "2", "待归档", "审批通过待归档", "contract_status", "已签字盖章待归档"),
-        ("contract_status", "合同状态", "contract_apply / contract_archive", "系统字典 contract_status (id=2026)", "3", "已归档", "旧OA htzt = 2(-130) / 1(-474) 归档", "contract_status", "【RAG核心范围】正式生效并完成归档的合同"),
-        ("contract_status", "合同状态", "contract_apply / contract_archive", "系统字典 contract_status (id=2026)", "4", "异常归档", "旧OA htzt = 4(-130) / 3(-474) 异常归档", "contract_status", "扫描件归档或无纸质原件归档"),
-        ("contract_status", "合同状态", "contract_apply / contract_archive", "系统字典 contract_status (id=2026)", "5", "作废", "旧OA htzt = 3(-130) / 2(-474) 作废", "contract_status", "已作废合同"),
-        ("contract_status", "合同状态", "contract_apply / contract_archive", "系统字典 contract_status (id=2026)", "6", "已变更", "合同变更完成", "contract_status", "注意：表注释写6=变更中/7=已变更，实际以字典表id=2026为准"),
-        ("contract_status", "合同状态", "contract_apply / contract_archive", "系统字典 contract_status (id=2026)", "7", "已终止", "合同终止", "contract_status", "以字典表id=2026为准"),
-        ("contract_status", "合同状态", "contract_apply / contract_archive", "系统字典 contract_status (id=2026)", "8", "被驳回", "审批驳回", "contract_status", "以字典表id=2026为准"),
-        ("contract_status", "合同状态", "contract_apply / contract_archive", "系统字典 contract_status (id=2026)", "10", "暂存", "草稿暂存", "contract_status", "未正式提交"),
+        (
+            "contract_status",
+            "合同状态",
+            "contract_apply / contract_archive",
+            "系统字典 contract_status (id=2026)",
+            "0",
+            "退回 / 草稿",
+            "旧OA退回/草稿",
+            "contract_status",
+            "流程未提交或被退回",
+        ),
+        (
+            "contract_status",
+            "合同状态",
+            "contract_apply / contract_archive",
+            "系统字典 contract_status (id=2026)",
+            "1",
+            "审批中",
+            "旧OA htzt = 0 (签署/执行中)",
+            "contract_status",
+            "流程流转审批中",
+        ),
+        (
+            "contract_status",
+            "合同状态",
+            "contract_apply / contract_archive",
+            "系统字典 contract_status (id=2026)",
+            "2",
+            "待归档",
+            "审批通过待归档",
+            "contract_status",
+            "已签字盖章待归档",
+        ),
+        (
+            "contract_status",
+            "合同状态",
+            "contract_apply / contract_archive",
+            "系统字典 contract_status (id=2026)",
+            "3",
+            "已归档",
+            "旧OA htzt = 2(-130) / 1(-474) 归档",
+            "contract_status",
+            "【RAG核心范围】正式生效并完成归档的合同",
+        ),
+        (
+            "contract_status",
+            "合同状态",
+            "contract_apply / contract_archive",
+            "系统字典 contract_status (id=2026)",
+            "4",
+            "异常归档",
+            "旧OA htzt = 4(-130) / 3(-474) 异常归档",
+            "contract_status",
+            "扫描件归档或无纸质原件归档",
+        ),
+        (
+            "contract_status",
+            "合同状态",
+            "contract_apply / contract_archive",
+            "系统字典 contract_status (id=2026)",
+            "5",
+            "作废",
+            "旧OA htzt = 3(-130) / 2(-474) 作废",
+            "contract_status",
+            "已作废合同",
+        ),
+        (
+            "contract_status",
+            "合同状态",
+            "contract_apply / contract_archive",
+            "系统字典 contract_status (id=2026)",
+            "6",
+            "已变更",
+            "合同变更完成",
+            "contract_status",
+            "注意：表注释写6=变更中/7=已变更，实际以字典表id=2026为准",
+        ),
+        (
+            "contract_status",
+            "合同状态",
+            "contract_apply / contract_archive",
+            "系统字典 contract_status (id=2026)",
+            "7",
+            "已终止",
+            "合同终止",
+            "contract_status",
+            "以字典表id=2026为准",
+        ),
+        (
+            "contract_status",
+            "合同状态",
+            "contract_apply / contract_archive",
+            "系统字典 contract_status (id=2026)",
+            "8",
+            "被驳回",
+            "审批驳回",
+            "contract_status",
+            "以字典表id=2026为准",
+        ),
+        (
+            "contract_status",
+            "合同状态",
+            "contract_apply / contract_archive",
+            "系统字典 contract_status (id=2026)",
+            "10",
+            "暂存",
+            "草稿暂存",
+            "contract_status",
+            "未正式提交",
+        ),
         # data_source & oa_source
-        ("data_source", "数据来源", "contract_apply", "系统内置枚举", "1", "新系统原生创建", "oa_source IS NULL", "data_source", "2025年底新系统上线后原生发起的合同"),
-        ("data_source", "数据来源", "contract_apply", "系统内置枚举", "2", "旧OA系统迁移", "oa_source = 1(-130) 或 2(-474)", "data_source", "从 ecologyE9 迁移的历史及并行期合同"),
-        ("oa_source", "旧OA来源表单", "contract_apply", "迁移脚本标记", "1", "旧OA产品合同流程 (formtable_main_130)", "workflow_bill id = -130", "oa_source", "对应普通新增产品合同 (business_type=6)"),
-        ("oa_source", "旧OA来源表单", "contract_apply", "迁移脚本标记", "2", "旧OA总委/保密/合作流程 (formtable_main_474)", "workflow_bill id = -474", "oa_source", "对应总委(7)/保密(8)/合作(9)/生态合作(3)"),
+        (
+            "data_source",
+            "数据来源",
+            "contract_apply",
+            "系统内置枚举",
+            "1",
+            "新系统原生创建",
+            "oa_source IS NULL",
+            "data_source",
+            "2025年底新系统上线后原生发起的合同",
+        ),
+        (
+            "data_source",
+            "数据来源",
+            "contract_apply",
+            "系统内置枚举",
+            "2",
+            "旧OA系统迁移",
+            "oa_source = 1(-130) 或 2(-474)",
+            "data_source",
+            "从 ecologyE9 迁移的历史及并行期合同",
+        ),
+        (
+            "oa_source",
+            "旧OA来源表单",
+            "contract_apply",
+            "迁移脚本标记",
+            "1",
+            "旧OA产品合同流程 (formtable_main_130)",
+            "workflow_bill id = -130",
+            "oa_source",
+            "对应普通新增产品合同 (business_type=6)",
+        ),
+        (
+            "oa_source",
+            "旧OA来源表单",
+            "contract_apply",
+            "迁移脚本标记",
+            "2",
+            "旧OA总委/保密/合作流程 (formtable_main_474)",
+            "workflow_bill id = -474",
+            "oa_source",
+            "对应总委(7)/保密(8)/合作(9)/生态合作(3)",
+        ),
     ]
 
     s1_rows = []
-    for f_en, f_cn, tbl, src_dict, val, label, oa_map, count_col, note in core_enum_defs:
+    for (
+        f_en,
+        f_cn,
+        tbl,
+        src_dict,
+        val,
+        label,
+        oa_map,
+        count_col,
+        note,
+    ) in core_enum_defs:
         c_app = apply_counts[count_col].get(val, 0)
         c_nat = apply_native_counts[count_col].get(val, 0)
         c_oa = apply_oa_counts[count_col].get(val, 0)
         c_arc = archive_counts[count_col].get(val, 0)
-        s1_rows.append([f_en, f_cn, tbl, src_dict, val, label, oa_map, c_app, c_nat, c_oa, c_arc, note])
+        s1_rows.append(
+            [
+                f_en,
+                f_cn,
+                tbl,
+                src_dict,
+                val,
+                label,
+                oa_map,
+                c_app,
+                c_nat,
+                c_oa,
+                c_arc,
+                note,
+            ]
+        )
 
     repayment_defs = [
         ("0", "国内专利", "旧OA hklx/hklxa = 0", "对应 auth_item = 1"),
@@ -376,14 +879,39 @@ def main():
         ("2", "国内商标", "旧OA hklx/hklxa = 2", "对应 auth_item = 2"),
         ("3", "国际商标", "旧OA hklx/hklxa = 3", "对应 auth_item = 9"),
         ("4", "著作权", "旧OA hklx/hklxa = 4", "对应 auth_item = 3"),
-        ("5", "交易", "旧OA hklx/hklxa = 5(hklxa)/6(hklx)", "对应 auth_item = 13 (IP运营/交易)"),
+        (
+            "5",
+            "交易",
+            "旧OA hklx/hklxa = 5(hklxa)/6(hklx)",
+            "对应 auth_item = 13 (IP运营/交易)",
+        ),
         ("6", "合作", "旧OA hklx/hklxa = 6(hklxa)/9(hklx)", "对应 auth_item = 14"),
-        ("7", "法律业务", "旧OA hklx/hklxa = 7(hklxa)/5(hklx)", "对应 auth_item = 7 (法律服务)"),
+        (
+            "7",
+            "法律业务",
+            "旧OA hklx/hklxa = 7(hklxa)/5(hklx)",
+            "对应 auth_item = 7 (法律服务)",
+        ),
         ("8", "项目", "旧OA hklx/hklxa = 8", "对应 auth_item = 4 (科创项目)"),
-        ("9", "高价值业务", "旧OA hklx/hklxa = 9(hklxa)/7(hklx)", "对应 auth_item = 6 (数据与咨询)"),
+        (
+            "9",
+            "高价值业务",
+            "旧OA hklx/hklxa = 9(hklxa)/7(hklx)",
+            "对应 auth_item = 6 (数据与咨询)",
+        ),
         ("10", "工商财会", "旧OA hklx/hklxa = 10", "对应 auth_item = 5 / 15"),
-        ("11", "发明专利授权宝", "旧OA hklx/hklxa = 11", "对应 auth_item = 1 / 16 (风险代理/授权宝)"),
-        ("12", "知识产权风险代理产权", "旧OA hklx/hklxa = 12", "对应 auth_item = 1 / 17"),
+        (
+            "11",
+            "发明专利授权宝",
+            "旧OA hklx/hklxa = 11",
+            "对应 auth_item = 1 / 16 (风险代理/授权宝)",
+        ),
+        (
+            "12",
+            "知识产权风险代理产权",
+            "旧OA hklx/hklxa = 12",
+            "对应 auth_item = 1 / 17",
+        ),
         ("13", "数据分析", "旧OA hklx/hklxa = 13", "对应 auth_item = 6 (数据与咨询)"),
         ("14", "商标复审包", "旧OA hklx/hklxa = 14", "对应 auth_item = 2 (国内商标)"),
         ("20", "审计业务", "新系统扩展", "对应 auth_item = 5 (财税审计)"),
@@ -394,11 +922,22 @@ def main():
     ]
     for val, label, oa_map, note in repayment_defs:
         cnt = repayment_counts.get(val, 0)
-        s1_rows.append([
-            "repayment_type", "业绩/回款业务类型", "contract_apply_performance_item",
-            "系统字典 finance_repayment_status", val, label, oa_map,
-            cnt, "-", "-", "-", f"【注意与auth_item编码不同】{note}"
-        ])
+        s1_rows.append(
+            [
+                "repayment_type",
+                "业绩/回款业务类型",
+                "contract_apply_performance_item",
+                "系统字典 finance_repayment_status",
+                val,
+                label,
+                oa_map,
+                cnt,
+                "-",
+                "-",
+                "-",
+                f"【注意与auth_item编码不同】{note}",
+            ]
+        )
 
     # =========================================================================
     # SHEET 2: 02_委托事项与业务板块映射 (1级 -> 2级 -> 3级 -> 4级 -> 5级 -> O列唯一标准模板)
@@ -423,8 +962,10 @@ def main():
     ]
 
     with conn_contract.cursor() as cur:
-        cur.execute("SELECT id, pid, name, code, value, sort FROM contract_config_business_segment WHERE deleted = 0 ORDER BY pid, sort, id")
-        seg_rows = cur.fetchall()
+        cur.execute(
+            "SELECT id, pid, name, code, value, sort FROM contract_config_business_segment WHERE deleted = 0 ORDER BY pid, sort, id"
+        )
+        cur.fetchall()
         cur.execute("""
             SELECT template_code, template_name, contract_type, business_type, auth_item, match_body_id,
                    MAX(version_no) as latest_ver, COUNT(*) as ver_cnt, MAX(update_time) as last_upd
@@ -443,11 +984,20 @@ def main():
         tpl_use_cnt = {r["contract_template_code"]: r["cnt"] for r in cur.fetchall()}
 
     from template_5th_layer_data import TEMPLATE_5TH_LAYER_RULES, DISAMBIGUATION_GROUPS
+
     _scratch_dir = os.environ.get(
         "CONTRACT_KB_SCRATCH_DIR",
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "scratch"),
+        os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data",
+            "scratch",
+        ),
     )
-    with open(os.path.join(_scratch_dir, "all_new_products_with_ids.json"), "r", encoding="utf-8") as f:
+    with open(
+        os.path.join(_scratch_dir, "all_new_products_with_ids.json"),
+        "r",
+        encoding="utf-8",
+    ) as f:
         all_new_prods_meta = json.load(f)
 
     ref_existing_map = {}
@@ -463,7 +1013,16 @@ def main():
     # Helper to determine Level 1, Level 2, Level 3 for each of the 78 templates
     def get_l1_l2_l3_for_template(tcode, ai_raw, ct_val, bt_val):
         # Level 1 & Level 2
-        if tcode in ("MB20251205020", "MB20251205022", "MB20251205023", "MB20251205025", "MB20251205026", "MB20251205028", "MB20251205029", "MB20251229002"):
+        if tcode in (
+            "MB20251205020",
+            "MB20251205022",
+            "MB20251205023",
+            "MB20251205025",
+            "MB20251205026",
+            "MB20251205028",
+            "MB20251205029",
+            "MB20251229002",
+        ):
             l1_name, l1_code = "I (知识产权) / S (高端咨询)", "I / S"
             l2_name, l2_code = "国内专利(库标1) / 数据与咨询(实属6)", "I-P / S-C"
             oa_str = "旧OA wtsx=0(专利)/10(高价值)/13(数据分析)"
@@ -605,21 +1164,45 @@ def main():
             "MB20251225003": "总委合同(1+7) · 8.1 国内+国际全口径知识产权总委框架合同【含国际专利报价版】",
             "MB20251205011": "服务协议(3+8) · 8.2 商业秘密与技术交底保密协议(NDA)",
         }
-        return l1_name, l1_code, l2_name, l2_code, l3_map.get(tcode, "常规业务子类"), oa_str
+        return (
+            l1_name,
+            l1_code,
+            l2_name,
+            l2_code,
+            l3_map.get(tcode, "常规业务子类"),
+            oa_str,
+        )
 
     auth_cn_simple = {
-        "1": "国内专利", "2": "国内商标", "3": "国内著作权", "4": "科创项目",
-        "5": "财税审计", "6": "数据与咨询", "7": "法律服务", "8": "国际专利",
-        "9": "国际商标", "10": "非标准产品", "11": "第三方业务", "12": "IP运营",
-        "1,2": "国内专利+国内商标", "1,3": "国内专利+国内著作权", "2,3": "国内商标+国内著作权",
-        "1,2,3": "国内专利+商标+著作权", "1,2,3,4,5,6,7": "全业务总委(不含国际)",
-        "1,2,3,4,5,6,7,8": "全业务总委(含国际专利)", "": "空值(保密协议)"
+        "1": "国内专利",
+        "2": "国内商标",
+        "3": "国内著作权",
+        "4": "科创项目",
+        "5": "财税审计",
+        "6": "数据与咨询",
+        "7": "法律服务",
+        "8": "国际专利",
+        "9": "国际商标",
+        "10": "非标准产品",
+        "11": "第三方业务",
+        "12": "IP运营",
+        "1,2": "国内专利+国内商标",
+        "1,3": "国内专利+国内著作权",
+        "2,3": "国内商标+国内著作权",
+        "1,2,3": "国内专利+商标+著作权",
+        "1,2,3,4,5,6,7": "全业务总委(不含国际)",
+        "1,2,3,4,5,6,7,8": "全业务总委(含国际专利)",
+        "": "空值(保密协议)",
     }
 
     s2_rows = []
     # Sort the 78 active templates by folder then code so 1~5级 hierarchy is super clean
-    active_tpl_rows = [t for t in tpl_rows if t["template_code"] in TEMPLATE_5TH_LAYER_RULES]
-    active_tpl_rows.sort(key=lambda t: (ref_folder_map.get(t["template_code"], "99"), t["template_code"]))
+    active_tpl_rows = [
+        t for t in tpl_rows if t["template_code"] in TEMPLATE_5TH_LAYER_RULES
+    ]
+    active_tpl_rows.sort(
+        key=lambda t: (ref_folder_map.get(t["template_code"], "99"), t["template_code"])
+    )
 
     for t in active_tpl_rows:
         tcode = t["template_code"]
@@ -635,41 +1218,221 @@ def main():
         for npc in rule5.get("new_products", []):
             np_name = all_new_prods_meta.get(npc, {}).get("product_name", "")
             new_p_list.append(f"{npc}:{np_name}" if np_name else npc)
-        new_p_str = "；".join(new_p_list) if new_p_list else "无(非商品类协议，按合同类型直接触发)"
-        erp_p_str = "；".join(rule5.get("erp_products", [])) if rule5.get("erp_products") else "无"
+        new_p_str = (
+            "；".join(new_p_list)
+            if new_p_list
+            else "无(非商品类协议，按合同类型直接触发)"
+        )
+        erp_p_str = (
+            "；".join(rule5.get("erp_products", []))
+            if rule5.get("erp_products")
+            else "无"
+        )
         use_c = tpl_use_cnt.get(tcode, 0)
 
-        s2_rows.append([
-            ai_raw if ai_raw != "" else "(空)",
-            ai_name,
-            f"标准在用 ({folder_cat})",
-            l1_name,
-            l1_code,
-            l2_name,
-            l2_code,
-            l3_desc,
-            f"{rule5['sub_scene']} | 标的：{rule5['target_constraint']}",
-            rule5["fee_mode"],
-            new_p_str,
-            erp_p_str,
-            f"{oa_str} | 新系统已签 {use_c} 单",
-            1,
-            f"{tcode}({tname}) [{ref_existing_map.get(tcode, '')}]",
-            rule5["disambiguation_rule"],
-        ])
+        s2_rows.append(
+            [
+                ai_raw if ai_raw != "" else "(空)",
+                ai_name,
+                f"标准在用 ({folder_cat})",
+                l1_name,
+                l1_code,
+                l2_name,
+                l2_code,
+                l3_desc,
+                f"{rule5['sub_scene']} | 标的：{rule5['target_constraint']}",
+                rule5["fee_mode"],
+                new_p_str,
+                erp_p_str,
+                f"{oa_str} | 新系统已签 {use_c} 单",
+                1,
+                f"{tcode}({tname}) [{ref_existing_map.get(tcode, '')}]",
+                rule5["disambiguation_rule"],
+            ]
+        )
 
     # Append the historical OA compatibility & non-standard auth_item rows (10, 11, 12, 13~18) so zero dict items are lost
     oa_compat_rows = [
-        ("6", "数据与咨询(独立枚举)", "枚举映射说明", "S (高端咨询)", "S", "数据与咨询", "S-C", "单委咨询(1+6) · 高端咨询/检索/导航/FTO/无效类", "对应上方 auth_item=1 中实属 S-C 数据与咨询的8套专项报告/无效/顾问模板", "按咨询项目或固定费结算", "CNSC0001~CNSC0025 全系列数据与咨询产品", "010501~010508、010111", "旧OA wtsx=10/13 | 申请表30单/归档表27单", 8, "MB20251205020；MB20251205022；MB20251205023；MB20251205025；MB20251205026；MB20251205028；MB20251205029；MB20251229002", "数据库模板表将这些模板挂在 auth_item=1 下，但产品表属 S-C(数据与咨询)，按第5级产品编码 CNSC* 可1对1精准路由至上述8套模板"),
-        ("10", "非标准产品", "标准在用(非标)", "M (综合业务)", "M", "非标准产品", "-", "非固定模板起草 (draft_type=2)", "非标定制服务，无固定标准模板", "按定制合同约定", "非标手动报价产品", "-", "旧OA wtsx=14 | 申请表530单", 0, "采用 draft_type=2 上传自定义合同（或借用 MB20251205082 技术咨询 / MB20251205073 非诉专项）", "非标准产品不强制走固定模板，由法务审核自定义文本"),
-        ("11", "第三方业务(独立枚举)", "枚举映射说明", "P (政策辅导)", "P", "第三方业务", "P-R", "单委服务(1+6) · 科技查新/软件测试/ISO/贯标/评估", "对应上方 auth_item=4/1 中承担 P-R 第三方业务的3套模板", "固定收费或分阶段收费", "CNPR0001~CNPR0066 全系列第三方业务产品", "050101、050201", "新系统原生29单", 3, "MB20251205063(软件查新服务合同)；MB20251205082(技术咨询服务合同)；MB20251205024(专利评价报告)", "查新/软件测试走 063；ISO/贯标/绿色工厂/资产评估走 082；专利评价报告走 024"),
-        ("12", "IP运营(独立枚举)", "枚举映射说明", "O (IP运营)", "O", "IP运营", "O-P", "单委交易(1+6) · 专利/商标买卖交易与许可运营", "对应上方运营主体买方/卖方专利商标转让合同及许可备案合同", "按交易买卖价款或运营分成结算", "CNIP0019、CNIT0003、CNOP0001~0003", "010701~020702", "新系统原生9单", 6, "MB20251205045；MB20251205046；MB20251205043；MB20251205044；MB20251205015；MB20251205053", "买专利走045、卖专利走046；买商标走043、卖商标走044；许可走015/053"),
-        ("13", "交易(历史OA遗留)", "来源oa未映射字典", "C (合作) / O (IP运营)", "C / O", "知产交易(历史)", "C / O-P", "历史OA迁移数据兼容 (旧OA wtsx=6)", "历史OA知产买卖或转让代理合同", "按转让合同约定", "映射至 CNIP0019 / CNIP0023 / CNIT0003", "010402、020202", "旧OA迁移996单", 7, "MB20251205045；MB20251205046；MB20251205043；MB20251205044；MB20251205027；MB20251205058；MB20251205068", "RAG清洗时归一化至 IP运营(12) 或 专利/商标转让(1/2)"),
-        ("14", "合作(历史OA遗留)", "来源oa未映射字典", "D (电商) / H (渠道合作)", "D / H", "渠道/战略合作", "D / H-Q", "历史OA迁移数据兼容 (旧OA wtsx=8)", "外部渠道合作、战略合作框架", "按合作协议约定", "渠道合作协议", "-", "旧OA迁移434单", 2, "MB20251205070(知识产权战略保护合作协议)；MB20251205089(知识产权服务合同)", "外部渠道与战略合作协议"),
-        ("15", "工商财会(历史OA遗留)", "来源oa未映射字典", "P (政策辅导)", "P", "财税审计(历史)", "P-S", "历史OA迁移数据兼容 (旧OA wtsx=9)", "年度财审/专审/代理记账（注意排查2020年旧OA误选单）", "固定审计费", "映射至 CNPS0001~0024", "060101", "旧OA迁移1223单(归档修正后1034单)", 2, "MB20251205061(广东审计报告合同)；MB20251205062(非广东审计报告合同)", "【避坑】209单旧OA误选已由归档表修正，务必以 contract_archive.auth_item 为准"),
-        ("16", "发明专利授权宝(历史OA)", "来源oa未映射字典", "I (知识产权)", "I", "国内专利(授权宝)", "I-P", "历史OA迁移数据兼容 (旧OA wtsx=11)", "发明专利风险代理/不过退费产品", "风险代理收费", "映射至 CNIP0013~0015", "010101-风险", "旧OA迁移4475单", 1, "MB20251209001(国内专利风险代理服务合同（申请）)", "现统一归入 auth_item=1 下的 MB20251209001 风险代理模板"),
-        ("17", "知识产权风险代理产品(历史OA)", "来源oa未映射字典", "I (知识产权)", "I", "国内专利/商标(风险)", "I-P / I-T", "历史OA迁移数据兼容 (旧OA wtsx=12)", "专利/商标/诉讼风险代理产品", "风险代理收费", "映射至 CNIP0013~0015 / CNIT0040", "100126", "旧OA迁移1296单", 3, "MB20251209001(专利风险)；MB20251205059(商标风险包过)；MB20251205076(民事维权全风险)", "按专利/商标/诉讼细分归入对应风险模板"),
-        ("18", "农业项目(历史OA遗留)", "来源oa未映射字典", "P (政策辅导)", "P", "科创项目(农业)", "P-B", "历史OA迁移数据兼容 (旧OA wtsx=16)", "农业政策补贴与科创项目申报", "项目咨询费", "映射至 CNPB* 科创项目产品", "040101", "旧OA迁移4单", 1, "MB20251205082(技术咨询服务合同)", "现统一归入 auth_item=4 科创项目通用模板 MB20251205082"),
+        (
+            "6",
+            "数据与咨询(独立枚举)",
+            "枚举映射说明",
+            "S (高端咨询)",
+            "S",
+            "数据与咨询",
+            "S-C",
+            "单委咨询(1+6) · 高端咨询/检索/导航/FTO/无效类",
+            "对应上方 auth_item=1 中实属 S-C 数据与咨询的8套专项报告/无效/顾问模板",
+            "按咨询项目或固定费结算",
+            "CNSC0001~CNSC0025 全系列数据与咨询产品",
+            "010501~010508、010111",
+            "旧OA wtsx=10/13 | 申请表30单/归档表27单",
+            8,
+            "MB20251205020；MB20251205022；MB20251205023；MB20251205025；MB20251205026；MB20251205028；MB20251205029；MB20251229002",
+            "数据库模板表将这些模板挂在 auth_item=1 下，但产品表属 S-C(数据与咨询)，按第5级产品编码 CNSC* 可1对1精准路由至上述8套模板",
+        ),
+        (
+            "10",
+            "非标准产品",
+            "标准在用(非标)",
+            "M (综合业务)",
+            "M",
+            "非标准产品",
+            "-",
+            "非固定模板起草 (draft_type=2)",
+            "非标定制服务，无固定标准模板",
+            "按定制合同约定",
+            "非标手动报价产品",
+            "-",
+            "旧OA wtsx=14 | 申请表530单",
+            0,
+            "采用 draft_type=2 上传自定义合同（或借用 MB20251205082 技术咨询 / MB20251205073 非诉专项）",
+            "非标准产品不强制走固定模板，由法务审核自定义文本",
+        ),
+        (
+            "11",
+            "第三方业务(独立枚举)",
+            "枚举映射说明",
+            "P (政策辅导)",
+            "P",
+            "第三方业务",
+            "P-R",
+            "单委服务(1+6) · 科技查新/软件测试/ISO/贯标/评估",
+            "对应上方 auth_item=4/1 中承担 P-R 第三方业务的3套模板",
+            "固定收费或分阶段收费",
+            "CNPR0001~CNPR0066 全系列第三方业务产品",
+            "050101、050201",
+            "新系统原生29单",
+            3,
+            "MB20251205063(软件查新服务合同)；MB20251205082(技术咨询服务合同)；MB20251205024(专利评价报告)",
+            "查新/软件测试走 063；ISO/贯标/绿色工厂/资产评估走 082；专利评价报告走 024",
+        ),
+        (
+            "12",
+            "IP运营(独立枚举)",
+            "枚举映射说明",
+            "O (IP运营)",
+            "O",
+            "IP运营",
+            "O-P",
+            "单委交易(1+6) · 专利/商标买卖交易与许可运营",
+            "对应上方运营主体买方/卖方专利商标转让合同及许可备案合同",
+            "按交易买卖价款或运营分成结算",
+            "CNIP0019、CNIT0003、CNOP0001~0003",
+            "010701~020702",
+            "新系统原生9单",
+            6,
+            "MB20251205045；MB20251205046；MB20251205043；MB20251205044；MB20251205015；MB20251205053",
+            "买专利走045、卖专利走046；买商标走043、卖商标走044；许可走015/053",
+        ),
+        (
+            "13",
+            "交易(历史OA遗留)",
+            "来源oa未映射字典",
+            "C (合作) / O (IP运营)",
+            "C / O",
+            "知产交易(历史)",
+            "C / O-P",
+            "历史OA迁移数据兼容 (旧OA wtsx=6)",
+            "历史OA知产买卖或转让代理合同",
+            "按转让合同约定",
+            "映射至 CNIP0019 / CNIP0023 / CNIT0003",
+            "010402、020202",
+            "旧OA迁移996单",
+            7,
+            "MB20251205045；MB20251205046；MB20251205043；MB20251205044；MB20251205027；MB20251205058；MB20251205068",
+            "RAG清洗时归一化至 IP运营(12) 或 专利/商标转让(1/2)",
+        ),
+        (
+            "14",
+            "合作(历史OA遗留)",
+            "来源oa未映射字典",
+            "D (电商) / H (渠道合作)",
+            "D / H",
+            "渠道/战略合作",
+            "D / H-Q",
+            "历史OA迁移数据兼容 (旧OA wtsx=8)",
+            "外部渠道合作、战略合作框架",
+            "按合作协议约定",
+            "渠道合作协议",
+            "-",
+            "旧OA迁移434单",
+            2,
+            "MB20251205070(知识产权战略保护合作协议)；MB20251205089(知识产权服务合同)",
+            "外部渠道与战略合作协议",
+        ),
+        (
+            "15",
+            "工商财会(历史OA遗留)",
+            "来源oa未映射字典",
+            "P (政策辅导)",
+            "P",
+            "财税审计(历史)",
+            "P-S",
+            "历史OA迁移数据兼容 (旧OA wtsx=9)",
+            "年度财审/专审/代理记账（注意排查2020年旧OA误选单）",
+            "固定审计费",
+            "映射至 CNPS0001~0024",
+            "060101",
+            "旧OA迁移1223单(归档修正后1034单)",
+            2,
+            "MB20251205061(广东审计报告合同)；MB20251205062(非广东审计报告合同)",
+            "【避坑】209单旧OA误选已由归档表修正，务必以 contract_archive.auth_item 为准",
+        ),
+        (
+            "16",
+            "发明专利授权宝(历史OA)",
+            "来源oa未映射字典",
+            "I (知识产权)",
+            "I",
+            "国内专利(授权宝)",
+            "I-P",
+            "历史OA迁移数据兼容 (旧OA wtsx=11)",
+            "发明专利风险代理/不过退费产品",
+            "风险代理收费",
+            "映射至 CNIP0013~0015",
+            "010101-风险",
+            "旧OA迁移4475单",
+            1,
+            "MB20251209001(国内专利风险代理服务合同（申请）)",
+            "现统一归入 auth_item=1 下的 MB20251209001 风险代理模板",
+        ),
+        (
+            "17",
+            "知识产权风险代理产品(历史OA)",
+            "来源oa未映射字典",
+            "I (知识产权)",
+            "I",
+            "国内专利/商标(风险)",
+            "I-P / I-T",
+            "历史OA迁移数据兼容 (旧OA wtsx=12)",
+            "专利/商标/诉讼风险代理产品",
+            "风险代理收费",
+            "映射至 CNIP0013~0015 / CNIT0040",
+            "100126",
+            "旧OA迁移1296单",
+            3,
+            "MB20251209001(专利风险)；MB20251205059(商标风险包过)；MB20251205076(民事维权全风险)",
+            "按专利/商标/诉讼细分归入对应风险模板",
+        ),
+        (
+            "18",
+            "农业项目(历史OA遗留)",
+            "来源oa未映射字典",
+            "P (政策辅导)",
+            "P",
+            "科创项目(农业)",
+            "P-B",
+            "历史OA迁移数据兼容 (旧OA wtsx=16)",
+            "农业政策补贴与科创项目申报",
+            "项目咨询费",
+            "映射至 CNPB* 科创项目产品",
+            "040101",
+            "旧OA迁移4单",
+            1,
+            "MB20251205082(技术咨询服务合同)",
+            "现统一归入 auth_item=4 科创项目通用模板 MB20251205082",
+        ),
     ]
     for r_compat in oa_compat_rows:
         s2_rows.append(list(r_compat))
@@ -679,7 +1442,10 @@ def main():
     # =========================================================================
     with conn_contract.cursor() as cur:
         cur.execute("SELECT id, name, company_code FROM contract_my_mainbody")
-        mb_map = {str(r["id"]): f"{r['name']}({r['company_code'] or '无代码'})" for r in cur.fetchall()}
+        mb_map = {
+            str(r["id"]): f"{r['name']}({r['company_code'] or '无代码'})"
+            for r in cur.fetchall()
+        }
 
         cur.execute("""
             SELECT t.template_code, p.product_code, p.product_name
@@ -691,7 +1457,9 @@ def main():
         """)
         prod_by_tpl = defaultdict(list)
         for r in cur.fetchall():
-            prod_by_tpl[r["template_code"]].append(f"{r['product_code']}:{r['product_name']}")
+            prod_by_tpl[r["template_code"]].append(
+                f"{r['product_code']}:{r['product_name']}"
+            )
 
         cur.execute("""
             SELECT contract_template_code, COUNT(*) as cnt
@@ -707,9 +1475,12 @@ def main():
             LEFT JOIN contract_attachment a ON a.source_id = t.id AND a.source_type = 3 AND a.deleted = 0
             WHERE t.deleted = 0 AND t.is_current = 1
         """)
-        tpl_file_map = {r["template_code"]: (r.get("doc_name") or "", r.get("oss_url") or "") for r in cur.fetchall()}
+        tpl_file_map = {
+            r["template_code"]: (r.get("doc_name") or "", r.get("oss_url") or "")
+            for r in cur.fetchall()
+        }
 
-    from template_5th_layer_data import TEMPLATE_5TH_LAYER_RULES, DISAMBIGUATION_GROUPS
+    from template_5th_layer_data import TEMPLATE_5TH_LAYER_RULES
 
     ref_existing_map = {}
     for root_dir, _, files in os.walk("参考"):
@@ -720,29 +1491,68 @@ def main():
                 ref_existing_map[code_part] = f"{folder_name}/{fn}"
 
     ct_label = {1: "1-销售合同", 2: "2-采购合同", 3: "3-服务协议", 5: "5-律所合同"}
-    bt_label = {3: "3-生态合作伙伴协议", 6: "6-普通新增产品", 7: "7-总委托业务", 8: "8-保密协议", 9: "9-合作协议"}
+    bt_label = {
+        3: "3-生态合作伙伴协议",
+        6: "6-普通新增产品",
+        7: "7-总委托业务",
+        8: "8-保密协议",
+        9: "9-合作协议",
+    }
     auth_label_map = {
-        "1": "国内专利", "2": "国内商标", "3": "国内著作权", "4": "科创项目",
-        "5": "财税审计", "6": "数据与咨询", "7": "法律服务", "8": "国际专利",
-        "9": "国际商标", "10": "非标准产品", "11": "第三方业务", "12": "IP运营"
+        "1": "国内专利",
+        "2": "国内商标",
+        "3": "国内著作权",
+        "4": "科创项目",
+        "5": "财税审计",
+        "6": "数据与咨询",
+        "7": "法律服务",
+        "8": "国际专利",
+        "9": "国际商标",
+        "10": "非标准产品",
+        "11": "第三方业务",
+        "12": "IP运营",
     }
 
     s3_headers = [
-        "模板编码 (template_code)", "标准模板名称 (template_name)", "是否在[参考]文件夹中",
-        "[参考]文件夹对应路径", "数据库最新模板附件名 (doc_name)", "数据库最新模板下载链接 (oss_url)",
-        "合同类型 (contract_type)", "业务类型 (business_type)", "适用委托事项编码 (auth_item)", "适用委托事项中文",
-        "最新版本号", "历史迭代版本数", "新系统已调用次数",
-        "绑定产品数 (含第5层补齐)", "绑定的产品明细 (新系统产品+ERP编码，已全量补齐)",
-        "适用签约主体数量", "适用我方签约主体明细 (match_body_id)", "最后更新时间",
-        "【第5层补齐】细分业务场景定位", "【第5层补齐】收费与结算模式约束", "【第5层补齐】委托标的与交易方向约束",
-        "【第5层核心】同分类易混模板排他决策规则", "数据库原表绑定状态"
+        "模板编码 (template_code)",
+        "标准模板名称 (template_name)",
+        "是否在[参考]文件夹中",
+        "[参考]文件夹对应路径",
+        "数据库最新模板附件名 (doc_name)",
+        "数据库最新模板下载链接 (oss_url)",
+        "合同类型 (contract_type)",
+        "业务类型 (business_type)",
+        "适用委托事项编码 (auth_item)",
+        "适用委托事项中文",
+        "最新版本号",
+        "历史迭代版本数",
+        "新系统已调用次数",
+        "绑定产品数 (含第5层补齐)",
+        "绑定的产品明细 (新系统产品+ERP编码，已全量补齐)",
+        "适用签约主体数量",
+        "适用我方签约主体明细 (match_body_id)",
+        "最后更新时间",
+        "【第5层补齐】细分业务场景定位",
+        "【第5层补齐】收费与结算模式约束",
+        "【第5层补齐】委托标的与交易方向约束",
+        "【第5层核心】同分类易混模板排他决策规则",
+        "数据库原表绑定状态",
     ]
     s3_rows = []
     for t in tpl_rows:
         tcode = t["template_code"]
         ai_raw = str(t["auth_item"] or "")
-        ai_cn = " + ".join(auth_label_map.get(x.strip(), x.strip()) for x in ai_raw.split(",") if x.strip()) or "通用/无特定事项"
-        mb_ids = [x.strip() for x in str(t["match_body_id"] or "").split(",") if x.strip()]
+        ai_cn = (
+            " + ".join(
+                auth_label_map.get(x.strip(), x.strip())
+                for x in ai_raw.split(",")
+                if x.strip()
+            )
+            or "通用/无特定事项"
+        )
+        mb_ids = [
+            x.strip() for x in str(t["match_body_id"] or "").split(",") if x.strip()
+        ]
         mb_names = [f"{mid}:{mb_map.get(mid, '未知主体')}" for mid in mb_ids]
         db_prods = prod_by_tpl.get(tcode, [])
         ref_fn = ref_existing_map.get(tcode, "")
@@ -754,7 +1564,9 @@ def main():
         seen_p = {p.split(":")[0] for p in db_prods}
         for npc in rule5.get("new_products", []):
             if npc not in seen_p:
-                np_name = all_new_prods_meta.get(npc, {}).get("product_name", "新系统标准产品")
+                np_name = all_new_prods_meta.get(npc, {}).get(
+                    "product_name", "新系统标准产品"
+                )
                 combined_prods.append(f"{npc}:{np_name}")
                 seen_p.add(npc)
         for epc in rule5.get("erp_products", []):
@@ -769,41 +1581,55 @@ def main():
         else:
             col_o_text = "；".join(combined_prods)
 
-        db_bind_status = f"数据库已绑({len(db_prods)}项)" if db_prods else f"原库未绑，已补齐({len(combined_prods)}项)"
+        db_bind_status = (
+            f"数据库已绑({len(db_prods)}项)"
+            if db_prods
+            else f"原库未绑，已补齐({len(combined_prods)}项)"
+        )
 
-        s3_rows.append([
-            tcode,
-            t["template_name"],
-            "已就绪 (78套标准模板之一)" if ref_fn else ("测试模板(已忽略)" if tcode == "MB20251226001" else "待核实"),
-            ref_fn or "-",
-            doc_name,
-            oss_url,
-            ct_label.get(t["contract_type"], str(t["contract_type"])),
-            bt_label.get(t["business_type"], str(t["business_type"])),
-            ai_raw if ai_raw else "(空)",
-            ai_cn,
-            t["latest_ver"],
-            t["ver_cnt"],
-            tpl_use_cnt.get(tcode, 0),
-            len(combined_prods),
-            col_o_text,
-            len(mb_ids),
-            "；".join(mb_names[:10]) + (f" 等共{len(mb_names)}家" if len(mb_names) > 10 else ""),
-            clean_xml_str(t["last_upd"]),
-            rule5.get("sub_scene", "测试模板(不参与路由)"),
-            rule5.get("fee_mode", "-"),
-            rule5.get("target_constraint", "-"),
-            rule5.get("disambiguation_rule", "-"),
-            db_bind_status,
-        ])
+        s3_rows.append(
+            [
+                tcode,
+                t["template_name"],
+                "已就绪 (78套标准模板之一)"
+                if ref_fn
+                else ("测试模板(已忽略)" if tcode == "MB20251226001" else "待核实"),
+                ref_fn or "-",
+                doc_name,
+                oss_url,
+                ct_label.get(t["contract_type"], str(t["contract_type"])),
+                bt_label.get(t["business_type"], str(t["business_type"])),
+                ai_raw if ai_raw else "(空)",
+                ai_cn,
+                t["latest_ver"],
+                t["ver_cnt"],
+                tpl_use_cnt.get(tcode, 0),
+                len(combined_prods),
+                col_o_text,
+                len(mb_ids),
+                "；".join(mb_names[:10])
+                + (f" 等共{len(mb_names)}家" if len(mb_names) > 10 else ""),
+                clean_xml_str(t["last_upd"]),
+                rule5.get("sub_scene", "测试模板(不参与路由)"),
+                rule5.get("fee_mode", "-"),
+                rule5.get("target_constraint", "-"),
+                rule5.get("disambiguation_rule", "-"),
+                db_bind_status,
+            ]
+        )
 
     # =========================================================================
     # SHEET 4: 04_模板与ERP产品绑定明细 (contract_template_products + 补齐明细)
     # =========================================================================
     s4_headers = [
-        "模板编码 (template_code)", "模板名称 (template_name)", "适用委托事项 (auth_item)",
-        "产品编码 (product_code)", "产品名称 (product_name)", "产品ID (product_id)",
-        "绑定模板版本数", "绑定来源状态"
+        "模板编码 (template_code)",
+        "模板名称 (template_name)",
+        "适用委托事项 (auth_item)",
+        "产品编码 (product_code)",
+        "产品名称 (product_name)",
+        "产品ID (product_id)",
+        "绑定模板版本数",
+        "绑定来源状态",
     ]
     s4_rows = []
     existing_s4_pairs = set()
@@ -819,11 +1645,18 @@ def main():
         """)
         for r in cur.fetchall():
             existing_s4_pairs.add((r["template_code"], r["product_code"]))
-            s4_rows.append([
-                r["template_code"], r["template_name"], r["auth_item"],
-                r["product_code"], r["product_name"], str(r["product_id"]), r["ver_cnt"],
-                "数据库已绑定 (孙梦婷/阳佳佳原配)"
-            ])
+            s4_rows.append(
+                [
+                    r["template_code"],
+                    r["template_name"],
+                    r["auth_item"],
+                    r["product_code"],
+                    r["product_name"],
+                    str(r["product_id"]),
+                    r["ver_cnt"],
+                    "数据库已绑定 (孙梦婷/阳佳佳原配)",
+                ]
+            )
 
     for t in tpl_rows:
         tcode = t["template_code"]
@@ -831,20 +1664,34 @@ def main():
         for npc in rule5.get("new_products", []):
             if (tcode, npc) not in existing_s4_pairs:
                 pmeta = all_new_prods_meta.get(npc, {})
-                s4_rows.append([
-                    tcode, t["template_name"], str(t["auth_item"] or ""),
-                    npc, pmeta.get("product_name", "新系统标准产品"), str(pmeta.get("product_id", "")),
-                    1, "第5层补齐绑定 (历史实签/条款精准匹配)"
-                ])
+                s4_rows.append(
+                    [
+                        tcode,
+                        t["template_name"],
+                        str(t["auth_item"] or ""),
+                        npc,
+                        pmeta.get("product_name", "新系统标准产品"),
+                        str(pmeta.get("product_id", "")),
+                        1,
+                        "第5层补齐绑定 (历史实签/条款精准匹配)",
+                    ]
+                )
                 existing_s4_pairs.add((tcode, npc))
 
     # =========================================================================
     # SHEET 5: 05_我方签约主体映射表 (contract_my_mainbody & Old OA)
     # =========================================================================
     s5_headers = [
-        "新库主体ID (id)", "我方签约主体全称 (name)", "合同编号主体代码 (company_code)",
-        "统一社会信用代码", "法定代表人", "注册地址", "联系电话",
-        "状态", "全库合同使用次数 (contract_apply)", "说明"
+        "新库主体ID (id)",
+        "我方签约主体全称 (name)",
+        "合同编号主体代码 (company_code)",
+        "统一社会信用代码",
+        "法定代表人",
+        "注册地址",
+        "联系电话",
+        "状态",
+        "全库合同使用次数 (contract_apply)",
+        "说明",
     ]
     s5_rows = []
     with conn_contract.cursor() as cur:
@@ -853,26 +1700,37 @@ def main():
             mid = str(r["id"])
             is_del = r.get("deleted") in (b"\x01", 1)
             cnt = apply_counts["my_main_body"].get(mid, 0)
-            s5_rows.append([
-                r["id"],
-                r.get("name") or "",
-                r.get("company_code") or "",
-                r.get("unified_social_credit_code") or "",
-                r.get("legal_representative") or "",
-                r.get("address") or "",
-                r.get("contact_number") or r.get("phone") or "",
-                "已停用/删除" if is_del else "在用",
-                cnt,
-                f"对应旧OA wfqygs={r['id']}（部分早期主体在旧OA wfqy 有独立编号）"
-            ])
+            s5_rows.append(
+                [
+                    r["id"],
+                    r.get("name") or "",
+                    r.get("company_code") or "",
+                    r.get("unified_social_credit_code") or "",
+                    r.get("legal_representative") or "",
+                    r.get("address") or "",
+                    r.get("contact_number") or r.get("phone") or "",
+                    "已停用/删除" if is_del else "在用",
+                    cnt,
+                    f"对应旧OA wfqygs={r['id']}（部分早期主体在旧OA wfqy 有独立编号）",
+                ]
+            )
 
     # =========================================================================
     # SHEET 6: 06_合同编号前缀分类映射表 (All 83 Prefixes in data/contract_merged)
     # =========================================================================
     import re
+
     s6_headers = [
-        "排名", "合同编号前缀", "归档文件夹 (cases/子目录)", "业务分类名称", "合并库案件数量",
-        "占全库比例 (%)", "前缀编码体系类型", "前缀业务/主体含义解析", "样本合同编号", "样本合同名称"
+        "排名",
+        "合同编号前缀",
+        "归档文件夹 (cases/子目录)",
+        "业务分类名称",
+        "合并库案件数量",
+        "占全库比例 (%)",
+        "前缀编码体系类型",
+        "前缀业务/主体含义解析",
+        "样本合同编号",
+        "样本合同名称",
     ]
     prefix_meanings = {
         "CIP": ("旧OA综合知识产权前缀", "综合知识产权/专利/商标/版权/法律合同"),
@@ -895,7 +1753,10 @@ def main():
         "HK": ("2026新制度主体前缀", "香港国际知产服务主体（主体代码 HK）"),
         "HZ": ("2026新制度主体前缀", "杭州分支科创主体（主体代码 HZ）"),
         "MG": ("2026新制度主体前缀", "集团网络技术服务主体（主体代码 MG）"),
-        "TZ": ("2026新制度主体前缀", "集团合作律师事务所主体（主体代码 TZ，专用于法律诉讼维权）"),
+        "TZ": (
+            "2026新制度主体前缀",
+            "集团合作律师事务所主体（主体代码 TZ，专用于法律诉讼维权）",
+        ),
         "SZ": ("2026新制度主体前缀", "苏州分支服务主体（主体代码 SZ）"),
         "CD": ("2026新制度主体前缀", "成都分支服务主体（主体代码 CD）"),
         "FS": ("2026新制度主体前缀", "佛山分支服务主体（主体代码 FS）"),
@@ -920,7 +1781,11 @@ def main():
             for row in reader:
                 cno = (row.get("合同编号") or "").strip()
                 m = re.match(r"^([A-Za-z]+)", cno)
-                p = m.group(1).upper() if m else (row.get("业务分类代字") or "数字/无前缀")
+                p = (
+                    m.group(1).upper()
+                    if m
+                    else (row.get("业务分类代字") or "数字/无前缀")
+                )
                 prefix_counter[p] += 1
                 prefix_folder[p] = row.get("归档文件夹", "")
                 prefix_cat_name[p] = row.get("业务分类名称", "")
@@ -933,54 +1798,82 @@ def main():
     for rank, (p, cnt) in enumerate(prefix_counter.most_common(), start=1):
         ptype, pdesc = prefix_meanings.get(
             p,
-            ("分支机构/历史专项前缀", f"对应 {prefix_cat_name.get(p, '专项业务')}（{'独立文件夹归档' if cnt > 50 else '<=50件归入其他业务文件夹'}）")
+            (
+                "分支机构/历史专项前缀",
+                f"对应 {prefix_cat_name.get(p, '专项业务')}（{'独立文件夹归档' if cnt > 50 else '<=50件归入其他业务文件夹'}）",
+            ),
         )
-        s6_rows.append([
-            rank, p, prefix_folder.get(p, ""), prefix_cat_name.get(p, ""), cnt,
-            round(cnt * 100.0 / total_cases, 2),
-            ptype, pdesc, prefix_sample_no.get(p, ""), prefix_sample_name.get(p, "")
-        ])
+        s6_rows.append(
+            [
+                rank,
+                p,
+                prefix_folder.get(p, ""),
+                prefix_cat_name.get(p, ""),
+                cnt,
+                round(cnt * 100.0 / total_cases, 2),
+                ptype,
+                pdesc,
+                prefix_sample_no.get(p, ""),
+                prefix_sample_name.get(p, ""),
+            ]
+        )
 
     # =========================================================================
     # SHEET 7: 07_模板占位符与表单字段映射 (contract_config_fill_field & template_file_key_map)
     # =========================================================================
     s7_headers = [
-        "映射表来源", "记录ID", "字段/占位符编码 (file_key / fill_name)",
-        "字段中文名称 (file_key_msg / name)", "父级节点 / 填充默认值 (file_parent_key / value)",
-        "类型标识 (file_type / type_id)", "备注说明 (remark)"
+        "映射表来源",
+        "记录ID",
+        "字段/占位符编码 (file_key / fill_name)",
+        "字段中文名称 (file_key_msg / name)",
+        "父级节点 / 填充默认值 (file_parent_key / value)",
+        "类型标识 (file_type / type_id)",
+        "备注说明 (remark)",
     ]
     s7_rows = []
     with conn_contract.cursor() as cur:
         cur.execute("SELECT * FROM template_file_key_map WHERE deleted = 0 ORDER BY id")
         for r in cur.fetchall():
-            s7_rows.append([
-                "Word模板域变量映射 (template_file_key_map)",
-                r.get("id"),
-                r.get("file_key") or "",
-                r.get("file_key_msg") or "",
-                r.get("file_parent_key") or "顶层变量",
-                f"file_type={r.get('file_type')}",
-                "Word合同模板正文自动替换域变量"
-            ])
-        cur.execute("SELECT * FROM contract_config_fill_field WHERE deleted = 0 ORDER BY sort, id")
+            s7_rows.append(
+                [
+                    "Word模板域变量映射 (template_file_key_map)",
+                    r.get("id"),
+                    r.get("file_key") or "",
+                    r.get("file_key_msg") or "",
+                    r.get("file_parent_key") or "顶层变量",
+                    f"file_type={r.get('file_type')}",
+                    "Word合同模板正文自动替换域变量",
+                ]
+            )
+        cur.execute(
+            "SELECT * FROM contract_config_fill_field WHERE deleted = 0 ORDER BY sort, id"
+        )
         for r in cur.fetchall():
-            s7_rows.append([
-                "合同模板在线填充字段 (contract_config_fill_field)",
-                r.get("id"),
-                r.get("fill_name") or "",
-                r.get("name") or "",
-                r.get("value") or "",
-                f"type_id={r.get('type_id')}",
-                r.get("remark") or ""
-            ])
+            s7_rows.append(
+                [
+                    "合同模板在线填充字段 (contract_config_fill_field)",
+                    r.get("id"),
+                    r.get("fill_name") or "",
+                    r.get("name") or "",
+                    r.get("value") or "",
+                    f"type_id={r.get('type_id')}",
+                    r.get("remark") or "",
+                ]
+            )
 
     # =========================================================================
     # SHEET 8: 08_旧OA表单下拉字典对照 (ecologyE9 workflow_selectitem)
     # =========================================================================
     s8_headers = [
-        "旧OA表单表名", "流程BillID", "字段ID (fieldid)", "旧OA字段英文名 (fieldname)",
-        "旧OA字段中文标签 (labelname)", "下拉选项值 (selectvalue)", "下拉选项中文名 (selectname)",
-        "是否已作废 (cancel)", "对应新系统表与字段映射说明"
+        "旧OA表单表名",
+        "流程BillID",
+        "字段ID (fieldid)",
+        "旧OA字段英文名 (fieldname)",
+        "旧OA字段中文标签 (labelname)",
+        "下拉选项值 (selectvalue)",
+        "下拉选项中文名 (selectname)",
+        "是否已作废 (cancel)",
+        "对应新系统表与字段映射说明",
     ]
     s8_rows = []
     oa_field_map_notes = {
@@ -1019,17 +1912,19 @@ def main():
             """)
             for r in mcur.fetchall():
                 fname = r["fieldname"] or ""
-                s8_rows.append([
-                    r["tablename"],
-                    r["billid"],
-                    r["fieldid"],
-                    fname,
-                    r["labelname"] or "",
-                    r["selectvalue"],
-                    r["selectname"] or "",
-                    "已作废(1)" if r["cancel"] == 1 else "在用(0)",
-                    oa_field_map_notes.get(fname, "旧OA流程表单辅助控制字段")
-                ])
+                s8_rows.append(
+                    [
+                        r["tablename"],
+                        r["billid"],
+                        r["fieldid"],
+                        fname,
+                        r["labelname"] or "",
+                        r["selectvalue"],
+                        r["selectname"] or "",
+                        "已作废(1)" if r["cancel"] == 1 else "在用(0)",
+                        oa_field_map_notes.get(fname, "旧OA流程表单辅助控制字段"),
+                    ]
+                )
         ms_conn.close()
     except Exception as e:
         s8_rows.append(["SQL Server 连接异常", "", "", "", "", "", str(e), "", ""])
@@ -1038,9 +1933,14 @@ def main():
     # SHEET 9: 09_系统全局字典表全量明细 (tender_system.system_dict_type & data)
     # =========================================================================
     s9_headers = [
-        "字典类型ID", "字典类型编码 (dict_type)", "字典类型名称 (dict_name)",
-        "字典项排序 (sort)", "字典项值 (value)", "字典项标签 (label)",
-        "状态", "备注说明 (remark)"
+        "字典类型ID",
+        "字典类型编码 (dict_type)",
+        "字典类型名称 (dict_name)",
+        "字典项排序 (sort)",
+        "字典项值 (value)",
+        "字典项标签 (label)",
+        "状态",
+        "备注说明 (remark)",
     ]
     s9_rows = []
     with conn_sys.cursor() as scur:
@@ -1058,33 +1958,54 @@ def main():
             ORDER BY t.id, d.sort, d.id
         """)
         for r in scur.fetchall():
-            s9_rows.append([
-                r["type_id"],
-                r["dict_type"],
-                r["dict_name"],
-                r["sort"],
-                r["value"],
-                r["label"],
-                "正常(0)" if r["status"] == 0 else f"停用({r['status']})",
-                r["remark"] or ""
-            ])
+            s9_rows.append(
+                [
+                    r["type_id"],
+                    r["dict_type"],
+                    r["dict_name"],
+                    r["sort"],
+                    r["value"],
+                    r["label"],
+                    "正常(0)" if r["status"] == 0 else f"停用({r['status']})",
+                    r["remark"] or "",
+                ]
+            )
 
     # =========================================================================
     # SHEET 10: 10_申请与归档委托事项错位明细 (209 Discrepancy Records)
     # =========================================================================
     s10_headers = [
-        "合同编号 (contract_no)", "合同名称 (contract_name)", "申请表ID (apply_id)",
-        "申请表委托事项 (apply.auth_item)", "申请表委托事项译名",
-        "归档表ID (archive_id)", "归档表委托事项 (archive.auth_item - 权威修正值)",
-        "归档表委托事项译名", "业务类型 (business_type)", "错位原因说明"
+        "合同编号 (contract_no)",
+        "合同名称 (contract_name)",
+        "申请表ID (apply_id)",
+        "申请表委托事项 (apply.auth_item)",
+        "申请表委托事项译名",
+        "归档表ID (archive_id)",
+        "归档表委托事项 (archive.auth_item - 权威修正值)",
+        "归档表委托事项译名",
+        "业务类型 (business_type)",
+        "错位原因说明",
     ]
     s10_rows = []
     full_auth_label = {
-        "1": "国内专利", "2": "国内商标", "3": "国内著作权", "4": "科创项目",
-        "5": "财税审计", "6": "数据与咨询", "7": "法律服务", "8": "国际专利",
-        "9": "国际商标", "10": "非标准产品", "11": "第三方业务", "12": "IP运营",
-        "13": "交易(OA遗留)", "14": "合作(OA遗留)", "15": "工商财会(OA遗留)",
-        "16": "发明专利授权宝(OA遗留)", "17": "知识产权风险代理(OA遗留)", "18": "农业项目(OA遗留)"
+        "1": "国内专利",
+        "2": "国内商标",
+        "3": "国内著作权",
+        "4": "科创项目",
+        "5": "财税审计",
+        "6": "数据与咨询",
+        "7": "法律服务",
+        "8": "国际专利",
+        "9": "国际商标",
+        "10": "非标准产品",
+        "11": "第三方业务",
+        "12": "IP运营",
+        "13": "交易(OA遗留)",
+        "14": "合作(OA遗留)",
+        "15": "工商财会(OA遗留)",
+        "16": "发明专利授权宝(OA遗留)",
+        "17": "知识产权风险代理(OA遗留)",
+        "18": "农业项目(OA遗留)",
     }
     with conn_contract.cursor() as cur:
         cur.execute("""
@@ -1098,20 +2019,30 @@ def main():
         for r in cur.fetchall():
             ap_raw = str(r["apply_auth"] or "")
             ar_raw = str(r["archive_auth"] or "")
-            ap_cn = "+".join(full_auth_label.get(x.strip(), x.strip()) for x in ap_raw.split(",") if x.strip())
-            ar_cn = "+".join(full_auth_label.get(x.strip(), x.strip()) for x in ar_raw.split(",") if x.strip())
-            s10_rows.append([
-                r["contract_no"] or "",
-                r["contract_name"] or "",
-                r["apply_id"],
-                ap_raw,
-                ap_cn,
-                r["archive_id"],
-                ar_raw,
-                ar_cn,
-                bt_label.get(r["business_type"], str(r["business_type"])),
-                "旧OA发起流程(formtable_main_130)选错wtsx，归档入台账(uf_hettz)时由管理员修正，RAG应以归档表(archive.auth_item)为准"
-            ])
+            ap_cn = "+".join(
+                full_auth_label.get(x.strip(), x.strip())
+                for x in ap_raw.split(",")
+                if x.strip()
+            )
+            ar_cn = "+".join(
+                full_auth_label.get(x.strip(), x.strip())
+                for x in ar_raw.split(",")
+                if x.strip()
+            )
+            s10_rows.append(
+                [
+                    r["contract_no"] or "",
+                    r["contract_name"] or "",
+                    r["apply_id"],
+                    ap_raw,
+                    ap_cn,
+                    r["archive_id"],
+                    ar_raw,
+                    ar_cn,
+                    bt_label.get(r["business_type"], str(r["business_type"])),
+                    "旧OA发起流程(formtable_main_130)选错wtsx，归档入台账(uf_hettz)时由管理员修正，RAG应以归档表(archive.auth_item)为准",
+                ]
+            )
 
     conn_contract.close()
     conn_sys.close()

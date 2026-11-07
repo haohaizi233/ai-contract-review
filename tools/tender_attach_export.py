@@ -9,6 +9,7 @@
   python tools/tender_attach_export.py --since 2026-01-01            # 按创建时间
   python tools/tender_attach_export.py --id 2118160871610552321     # 下载指定文件
 """
+
 import argparse
 import csv
 import hashlib
@@ -29,20 +30,31 @@ def load_env():
         for line in open(ENVF, encoding="utf-8"):
             line = line.strip()
             if line.startswith("export ") and "=" in line:
-                k, v = line[len("export "):].split("=", 1)
+                k, v = line[len("export ") :].split("=", 1)
                 env[k.strip()] = v.strip().strip("'\"")
     return env
 
 
 def sql_query(sql, env):
     cmd = [
-        "mysql", "-h" + env["MYSQL_HOST"], "-P" + env["MYSQL_PORT"],
+        "mysql",
+        "-h" + env["MYSQL_HOST"],
+        "-P" + env["MYSQL_PORT"],
         "-u" + env["MYSQL_USER"],
-        "-N", "-B", "--default-character-set=utf8mb4", "-e", sql,
+        "-N",
+        "-B",
+        "--default-character-set=utf8mb4",
+        "-e",
+        sql,
     ]
     proc_env = {**os.environ, "MYSQL_PWD": env.get("MYSQL_PWD", "")}
     out = subprocess.run(
-        cmd, env=proc_env, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        cmd,
+        env=proc_env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if out.returncode != 0:
         sys.exit("mysql 查询失败: " + out.stderr.strip()[:300])
@@ -63,8 +75,11 @@ def build_sql(args):
         where.append("create_time >= '%s'" % args.since)
     if args.until:
         where.append("create_time < '%s'" % args.until)
-    sql = ("SELECT id, name, type, size, IFNULL(md5, ''), url FROM tender_infra.infra_file WHERE "
-           + " AND ".join(where) + " ORDER BY id DESC")
+    sql = (
+        "SELECT id, name, type, size, IFNULL(md5, ''), url FROM tender_infra.infra_file WHERE "
+        + " AND ".join(where)
+        + " ORDER BY id DESC"
+    )
     if args.limit:
         sql += " LIMIT %d" % args.limit
     return sql

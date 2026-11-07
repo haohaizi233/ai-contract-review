@@ -131,7 +131,10 @@ async def capture_request_body_middleware(request: Request, call_next):
     MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB 有界读取
     body = await request.body()
     if len(body) > MAX_BODY_SIZE:
-        return JSONResponse(status_code=413, content={"error": "file_too_large", "detail": "Request Entity Too Large"})
+        return JSONResponse(
+            status_code=413,
+            content={"error": "file_too_large", "detail": "Request Entity Too Large"},
+        )
     response = await call_next(request)
     return response
 

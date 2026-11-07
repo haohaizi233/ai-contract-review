@@ -8,7 +8,6 @@ import json
 import time
 from pathlib import Path
 from unittest.mock import patch
-import pytest
 from fastapi.testclient import TestClient
 
 import contract_kb.api as api
@@ -84,8 +83,13 @@ def test_tampered_actual_body_is_rejected_401(tmp_path: Path):
     )
     h["Content-Type"] = "application/json"
 
-    with patch.object(api, "get_storage", return_value=st), patch.object(
-        api, "_auth", TrustedHeaderAuth(shared_key=SHARED_KEY, storage=st, auth_version="2")
+    with (
+        patch.object(api, "get_storage", return_value=st),
+        patch.object(
+            api,
+            "_auth",
+            TrustedHeaderAuth(shared_key=SHARED_KEY, storage=st, auth_version="2"),
+        ),
     ):
         client = TestClient(api.app)
         # 发送被篡改的正文
@@ -117,8 +121,13 @@ def test_shared_nonce_prevents_replay_across_api_instances(tmp_path: Path):
     statuses = []
     # 模拟两个独立进程/实例
     for _ in range(2):
-        with patch.object(api, "get_storage", return_value=st), patch.object(
-            api, "_auth", TrustedHeaderAuth(shared_key=SHARED_KEY, storage=st, auth_version="2")
+        with (
+            patch.object(api, "get_storage", return_value=st),
+            patch.object(
+                api,
+                "_auth",
+                TrustedHeaderAuth(shared_key=SHARED_KEY, storage=st, auth_version="2"),
+            ),
         ):
             client = TestClient(api.app)
             r = client.get("/api/v1/contract-kb/rules", headers=h)
@@ -145,10 +154,17 @@ def test_invalid_signature_does_not_consume_nonce(tmp_path: Path):
     )
 
     # 构造带有错误签名的请求
-    bad_headers = dict(valid_headers, **{"X-Auth-Signature": "invalid_bogus_signature_hex"})
+    bad_headers = dict(
+        valid_headers, **{"X-Auth-Signature": "invalid_bogus_signature_hex"}
+    )
 
-    with patch.object(api, "get_storage", return_value=st), patch.object(
-        api, "_auth", TrustedHeaderAuth(shared_key=SHARED_KEY, storage=st, auth_version="2")
+    with (
+        patch.object(api, "get_storage", return_value=st),
+        patch.object(
+            api,
+            "_auth",
+            TrustedHeaderAuth(shared_key=SHARED_KEY, storage=st, auth_version="2"),
+        ),
     ):
         client = TestClient(api.app)
 

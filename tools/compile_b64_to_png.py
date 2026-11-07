@@ -12,6 +12,7 @@
      使 MD 文件从臃肿的数百 KB/数 MB 瘦身至 5~15 KB，且在任何编辑器（VS Code / Typora / Obsidian）中即开即看；
   6. 同步刷新统一相册总账（albums_unified.csv / albums_unified.jsonl）与主数据台账。
 """
+
 from __future__ import annotations
 
 import base64
@@ -21,9 +22,7 @@ import io
 import json
 import os
 import re
-import sys
 import time
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -40,14 +39,18 @@ E9_IMAGES_DIR = E9_DIR / "images"
 UNIFIED_DIR = DATA_DIR / "contract_unified"
 UNIFIED_ALBUM_DIR = UNIFIED_DIR / "album_images" / "e9_b64"
 
-B64_MD_PATTERN = re.compile(r"!\[(.*?)\]\(data:image/([a-zA-Z0-9]+);base64,([A-Za-z0-9+/=]+)\)")
+B64_MD_PATTERN = re.compile(
+    r"!\[(.*?)\]\(data:image/([a-zA-Z0-9]+);base64,([A-Za-z0-9+/=]+)\)"
+)
 
 
 def norm_no(s: str) -> str:
     return re.sub(r"\s+", "", (s or "").strip()).upper()
 
 
-def convert_and_save_png(raw_bytes: bytes, target_paths: List[Path]) -> Tuple[int, int, int]:
+def convert_and_save_png(
+    raw_bytes: bytes, target_paths: List[Path]
+) -> Tuple[int, int, int]:
     """通过 Pillow 读取原始字节流，统一编译为标准 PNG 格式并写入目标文件"""
     with Image.open(io.BytesIO(raw_bytes)) as im:
         w, h = im.size
@@ -96,13 +99,13 @@ def process_single_md(md_path: Path) -> Dict[str, Any]:
 
     for idx, m in enumerate(matches):
         alt = m.group(1) or "图片"
-        orig_ext = m.group(2).lower()
+        m.group(2).lower()
         b64_str = m.group(3)
 
         try:
             raw_bytes = base64.b64decode(b64_str)
             h = hashlib.md5(raw_bytes).hexdigest()[:10]
-            png_fn = f"{idx+1}_{h}.png"
+            png_fn = f"{idx + 1}_{h}.png"
 
             path_e9 = e9_case_img_dir / png_fn
             path_unified = unified_case_img_dir / png_fn
@@ -113,21 +116,23 @@ def process_single_md(md_path: Path) -> Dict[str, Any]:
             rel_link = f"![{alt}](../images/{case_no}/{png_fn})"
             replacements.append((m.group(0), rel_link))
 
-            compiled_images.append({
-                "contract_no": case_no,
-                "photo_id": f"e9_b64_{case_no}_{idx+1}",
-                "category": "审批流程截图",
-                "source": "e9_opinion_b64",
-                "filename": png_fn,
-                "format": "PNG",
-                "width": w,
-                "height": h_px,
-                "size": png_sz,
-                "local_path": f"e9-opinion-export/images/{case_no}/{png_fn}",
-                "unified_path": f"contract_unified/album_images/e9_b64/{case_no}/{png_fn}",
-                "status": "已编译为PNG",
-            })
-        except Exception as err:
+            compiled_images.append(
+                {
+                    "contract_no": case_no,
+                    "photo_id": f"e9_b64_{case_no}_{idx + 1}",
+                    "category": "审批流程截图",
+                    "source": "e9_opinion_b64",
+                    "filename": png_fn,
+                    "format": "PNG",
+                    "width": w,
+                    "height": h_px,
+                    "size": png_sz,
+                    "local_path": f"e9-opinion-export/images/{case_no}/{png_fn}",
+                    "unified_path": f"contract_unified/album_images/e9_b64/{case_no}/{png_fn}",
+                    "status": "已编译为PNG",
+                }
+            )
+        except Exception:
             continue
 
     # 执行替换并写回 Markdown
@@ -150,7 +155,9 @@ def process_single_md(md_path: Path) -> Dict[str, Any]:
     }
 
 
-def update_catalogs_and_reports(all_compiled_images: List[Dict[str, Any]], stats: Dict[str, Any]):
+def update_catalogs_and_reports(
+    all_compiled_images: List[Dict[str, Any]], stats: Dict[str, Any]
+):
     """同步刷新 unified 目录下的相册、主表与报告"""
     print("[3/4] 刷新统一相册总账与合同主表数据 ...")
 
@@ -172,17 +179,43 @@ def update_catalogs_and_reports(all_compiled_images: List[Dict[str, Any]], stats
     final_albums = existing_albums + all_compiled_images
     final_albums.sort(key=lambda x: (x["contract_no"], x["photo_id"]))
 
-    with open(album_csv_path, "w", newline="", encoding="utf-8-sig") as fc, \
-         open(album_jsonl_path, "w", encoding="utf-8") as fj:
+    with (
+        open(album_csv_path, "w", newline="", encoding="utf-8-sig") as fc,
+        open(album_jsonl_path, "w", encoding="utf-8") as fj,
+    ):
         w = csv.writer(fc)
-        w.writerow(["合同编号", "照片ID", "类别", "来源系统", "文件名", "图片格式", "宽度", "高度", "文件大小_B", "本地存储路径", "状态"])
+        w.writerow(
+            [
+                "合同编号",
+                "照片ID",
+                "类别",
+                "来源系统",
+                "文件名",
+                "图片格式",
+                "宽度",
+                "高度",
+                "文件大小_B",
+                "本地存储路径",
+                "状态",
+            ]
+        )
         for ph in final_albums:
             fj.write(json.dumps(ph, ensure_ascii=False) + "\n")
-            w.writerow([
-                ph["contract_no"], ph["photo_id"], ph["category"], ph["source"],
-                ph["filename"], ph["format"], ph["width"], ph["height"], ph["size"],
-                ph.get("unified_path") or ph.get("local_path"), ph["status"]
-            ])
+            w.writerow(
+                [
+                    ph["contract_no"],
+                    ph["photo_id"],
+                    ph["category"],
+                    ph["source"],
+                    ph["filename"],
+                    ph["format"],
+                    ph["width"],
+                    ph["height"],
+                    ph["size"],
+                    ph.get("unified_path") or ph.get("local_path"),
+                    ph["status"],
+                ]
+            )
 
     # 2. 刷新 contracts_unified.csv 中的 e9_md大小_KB
     contracts_csv_path = UNIFIED_DIR / "contracts_unified.csv"
@@ -195,7 +228,7 @@ def update_catalogs_and_reports(all_compiled_images: List[Dict[str, Any]], stats
                 if not line.strip():
                     continue
                 rec = json.loads(line)
-                c_no = rec["合同编号"]
+                rec["合同编号"]
                 e = rec.get("e9")
                 if e and e.get("md_文件"):
                     # 重新计算实际文件大小
@@ -210,13 +243,42 @@ def update_catalogs_and_reports(all_compiled_images: List[Dict[str, Any]], stats
 
         # 重写 contracts_unified.csv
         csv_cols = [
-            "合同编号", "覆盖来源", "数据完整度评级", "附件综合落盘率",
-            "e9_requestids", "e9_流程", "e9_发起日期", "e9_标题", "e9_意见条数", "e9_md文件", "e9_md大小_KB", "e9_内嵌图片数",
-            "tender_apply_ids", "tender_archive_ids", "tender_oa_ids", "tender_oa_source",
-            "tender_合同名称", "tender_状态", "tender_申请人", "tender_部门", "tender_我方主体", "tender_对方主体",
-            "tender_创建时间", "tender_新审批意见数", "tender_md文件", "tender_md大小_KB",
-            "关联附件总数", "tender已下载数", "e9补全数", "综合有效落盘数", "仍悬空缺失数",
-            "相册总照片数", "相册_BPM截图数", "相册_e9截图数", "相册_附件图片数", "文件摘要"
+            "合同编号",
+            "覆盖来源",
+            "数据完整度评级",
+            "附件综合落盘率",
+            "e9_requestids",
+            "e9_流程",
+            "e9_发起日期",
+            "e9_标题",
+            "e9_意见条数",
+            "e9_md文件",
+            "e9_md大小_KB",
+            "e9_内嵌图片数",
+            "tender_apply_ids",
+            "tender_archive_ids",
+            "tender_oa_ids",
+            "tender_oa_source",
+            "tender_合同名称",
+            "tender_状态",
+            "tender_申请人",
+            "tender_部门",
+            "tender_我方主体",
+            "tender_对方主体",
+            "tender_创建时间",
+            "tender_新审批意见数",
+            "tender_md文件",
+            "tender_md大小_KB",
+            "关联附件总数",
+            "tender已下载数",
+            "e9补全数",
+            "综合有效落盘数",
+            "仍悬空缺失数",
+            "相册总照片数",
+            "相册_BPM截图数",
+            "相册_e9截图数",
+            "相册_附件图片数",
+            "文件摘要",
         ]
         with open(contracts_csv_path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f)
@@ -226,34 +288,46 @@ def update_catalogs_and_reports(all_compiled_images: List[Dict[str, Any]], stats
                 t = c["tender"]
                 fa = c["附件统计"]
                 ph = c["相册统计"]
-                w.writerow([
-                    c["合同编号"], c["覆盖来源"], c["数据完整度评级"], c["附件综合落盘率"],
-                    ";".join(e["requestids"]) if e else "",
-                    ";".join(e["流程"]) if e else "",
-                    ";".join(e["发起日期"]) if e else "",
-                    e["标题"][0] if (e and e["标题"]) else "",
-                    e["意见条数"] if e else 0,
-                    e["md_文件"][0] if (e and e["md_文件"]) else "",
-                    e["md_大小_KB"] if e else 0,
-                    e["base64图片数"] if e else 0,
-                    ";".join(t["apply_ids"]) if t else "",
-                    ";".join(t["archive_ids"]) if t else "",
-                    ";".join(t["oa_ids"]) if t else "",
-                    ";".join(t["oa_source"]) if t else "",
-                    t["合同名称"] if t else "",
-                    t["状态"] if t else "",
-                    t["申请人"] if t else "",
-                    t["部门"] if t else "",
-                    t["我方主体"] if t else "",
-                    t["对方主体"] if t else "",
-                    t["创建时间"] if t else "",
-                    t["新审批意见数"] if t else 0,
-                    t["md_文件"] if t else "",
-                    t["md_大小_KB"] if t else 0,
-                    fa["关联总数"], fa["新库已下载数"], fa["通过e9补全数"], fa["综合有效落盘数"], fa["仍悬空缺失数"],
-                    ph["总照片数"], ph["BPM审批截图数"], ph["e9意见截图数"], ph["附件单据图片数"],
-                    c["文件摘要"]
-                ])
+                w.writerow(
+                    [
+                        c["合同编号"],
+                        c["覆盖来源"],
+                        c["数据完整度评级"],
+                        c["附件综合落盘率"],
+                        ";".join(e["requestids"]) if e else "",
+                        ";".join(e["流程"]) if e else "",
+                        ";".join(e["发起日期"]) if e else "",
+                        e["标题"][0] if (e and e["标题"]) else "",
+                        e["意见条数"] if e else 0,
+                        e["md_文件"][0] if (e and e["md_文件"]) else "",
+                        e["md_大小_KB"] if e else 0,
+                        e["base64图片数"] if e else 0,
+                        ";".join(t["apply_ids"]) if t else "",
+                        ";".join(t["archive_ids"]) if t else "",
+                        ";".join(t["oa_ids"]) if t else "",
+                        ";".join(t["oa_source"]) if t else "",
+                        t["合同名称"] if t else "",
+                        t["状态"] if t else "",
+                        t["申请人"] if t else "",
+                        t["部门"] if t else "",
+                        t["我方主体"] if t else "",
+                        t["对方主体"] if t else "",
+                        t["创建时间"] if t else "",
+                        t["新审批意见数"] if t else 0,
+                        t["md_文件"] if t else "",
+                        t["md_大小_KB"] if t else 0,
+                        fa["关联总数"],
+                        fa["新库已下载数"],
+                        fa["通过e9补全数"],
+                        fa["综合有效落盘数"],
+                        fa["仍悬空缺失数"],
+                        ph["总照片数"],
+                        ph["BPM审批截图数"],
+                        ph["e9意见截图数"],
+                        ph["附件单据图片数"],
+                        c["文件摘要"],
+                    ]
+                )
 
 
 def main():
@@ -281,11 +355,15 @@ def main():
             if cnt > 0:
                 total_converted += cnt
                 total_files_modified += 1
-                total_saved_bytes += (res.get("orig_size", 0) - res.get("new_size", 0))
+                total_saved_bytes += res.get("orig_size", 0) - res.get("new_size", 0)
                 all_compiled_images.extend(res.get("images", []))
 
-    print(f"      编译完成！成功处理并替换 {total_files_modified:,} 个 MD 文件中的 {total_converted:,} 张 base64 图片")
-    print(f"      Markdown 案卷瘦身: 释放文本冗余 {total_saved_bytes / 1024 / 1024:.2f} MB")
+    print(
+        f"      编译完成！成功处理并替换 {total_files_modified:,} 个 MD 文件中的 {total_converted:,} 张 base64 图片"
+    )
+    print(
+        f"      Markdown 案卷瘦身: 释放文本冗余 {total_saved_bytes / 1024 / 1024:.2f} MB"
+    )
 
     stats = {
         "total_converted": total_converted,
@@ -307,7 +385,7 @@ def main():
 
 ## 八、base64 全量图片编译为 PNG 专题记录
 
-- **执行时间**：{time.strftime('%Y-%m-%d %H:%M:%S')}
+- **执行时间**：{time.strftime("%Y-%m-%d %H:%M:%S")}
 - **转换总数**：**{total_converted:,} 张图片** 全部成功解码并通过 Pillow 严格转码为标准 PNG 格式；
 - **Markdown 案卷重写**：**{total_files_modified:,} 份 Markdown** 案卷已完成原子替换，内联 base64 字符串均已转换为本地相对路径 `../images/<案号>/<序号>_<哈希>.png`；
 - **物理落盘路径**：

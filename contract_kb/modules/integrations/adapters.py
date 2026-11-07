@@ -273,7 +273,9 @@ class ContractIntegrationOrchestrator:
                 for cc in canonical_items:
                     cno_str = cc.contract_number.raw if cc.contract_number else None
                     existing_dict = None
-                    find_by_cno = getattr(self.storage, "find_canonical_by_contract_number", None)
+                    find_by_cno = getattr(
+                        self.storage, "find_canonical_by_contract_number", None
+                    )
                     if find_by_cno and cno_str:
                         existing_dict = find_by_cno(tenant_id, cno_str)
                     if not existing_dict:
@@ -290,24 +292,35 @@ class ContractIntegrationOrchestrator:
                             for m in existing_dict.get("source_mappings", [])
                         ]
                         existing_source_keys = {
-                            (m.source_system, m.external_id): m for m in existing_mappings
+                            (m.source_system, m.external_id): m
+                            for m in existing_mappings
                         }
                         for new_m in cc.source_mappings:
-                            existing_source_keys[(new_m.source_system, new_m.external_id)] = new_m
+                            existing_source_keys[
+                                (new_m.source_system, new_m.external_id)
+                            ] = new_m
 
                         cc.contract_id = existing_dict["contract_id"]
                         cc.source_mappings = list(existing_source_keys.values())
                         expected_ver = int(existing_dict.get("version", 1))
                         cc.version = expected_ver + 1
-                        outcome = MergeOutcome(contract=cc, is_new=False, version_incremented=True)
-                        saved = self.storage.save_canonical_version(outcome, expected_version=expected_ver)
+                        outcome = MergeOutcome(
+                            contract=cc, is_new=False, version_incremented=True
+                        )
+                        saved = self.storage.save_canonical_version(
+                            outcome, expected_version=expected_ver
+                        )
                         if not saved:
                             raise SyncBatchConflictError(
                                 f"增量合流并发版本冲突：合同 {cno_str} 期望版本 {expected_ver}"
                             )
                     else:
-                        outcome = MergeOutcome(contract=cc, is_new=True, version_incremented=False)
-                        saved = self.storage.save_canonical_version(outcome, expected_version=None)
+                        outcome = MergeOutcome(
+                            contract=cc, is_new=True, version_incremented=False
+                        )
+                        saved = self.storage.save_canonical_version(
+                            outcome, expected_version=None
+                        )
                         if not saved:
                             raise SyncBatchConflictError(
                                 f"增量合流并发版本冲突：新建合同 {cno_str} 失败"

@@ -27,7 +27,6 @@ from ..security.idempotency import (
 from ...modules.rules import RuleRegistry
 from .checkpoints import (
     CheckpointCorruptedError,
-    CheckpointIncompatibleError,
     CheckpointStore,
     ExecutionCheckpoint,
     ManifestMismatchError,
@@ -380,8 +379,11 @@ class ReviewPipeline:
         prov_name = str(getattr(prov, "name", "none") if prov else "none")
         model_name = str(getattr(prov, "model", "none") if prov else "none")
         from ...llm_review import PROMPT_SYSTEM
+
         prompt_ver = hashlib.sha256(PROMPT_SYSTEM.encode("utf-8")).hexdigest()[:12]
-        stage_schemas = ":".join(f"{s.stage_name}@{getattr(s, 'schema_version', 'v1')}" for s in self.stages)
+        stage_schemas = ":".join(
+            f"{s.stage_name}@{getattr(s, 'schema_version', 'v1')}" for s in self.stages
+        )
         schema_ver = hashlib.sha256(stage_schemas.encode("utf-8")).hexdigest()[:12]
 
         manifest = ExecutionManifest(

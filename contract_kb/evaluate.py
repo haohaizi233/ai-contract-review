@@ -155,12 +155,9 @@ def _evaluate_single_rag_query(
     # 构建该 Query 的全局独立 Ground Truth 相关集合与多级打分
     gt_relevant_ids: set[str] = set()
     gt_qrels: dict[str, int] = {}
-    if hasattr(storage, "conn"):
+    if hasattr(storage, "find_clauses_by_category"):
         try:
-            rows = storage.conn.execute(
-                "SELECT clause_id, original_text, clause_category FROM clauses WHERE clause_category=?",
-                (expected_cat,),
-            ).fetchall()
+            rows = storage.find_clauses_by_category(expected_cat)
             for r in rows:
                 has_kw = any(k in r["original_text"] for k in keywords)
                 cid = str(r["clause_id"])
@@ -179,8 +176,12 @@ def _evaluate_single_rag_query(
                 gt_relevant_ids.add(cid)
                 gt_qrels[cid] = g
 
-    calculated_hit_k = {k: hit_at_k(retrieved_clause_ids, gt_relevant_ids, k=k) for k in K_LIST}
-    calculated_recall_k = {k: recall_at_k(retrieved_clause_ids, gt_relevant_ids, k=k) for k in K_LIST}
+    calculated_hit_k = {
+        k: hit_at_k(retrieved_clause_ids, gt_relevant_ids, k=k) for k in K_LIST
+    }
+    calculated_recall_k = {
+        k: recall_at_k(retrieved_clause_ids, gt_relevant_ids, k=k) for k in K_LIST
+    }
     calculated_mrr = mrr(retrieved_clause_ids, gt_relevant_ids) or 0.0
     calculated_ndcg = ndcg_at_k(retrieved_clause_ids, gt_qrels, k=8) or 0.0
 
@@ -215,9 +216,15 @@ def eval_rag(storage: Any) -> dict[str, Any]:
     metrics: dict[str, float] = {}
     for k in K_LIST:
         hits_k = [r["hit_at_k"][k] for r in results if r["hit_at_k"].get(k) is not None]
-        recalls_k = [r["recall_at_k"][k] for r in results if r["recall_at_k"].get(k) is not None]
-        metrics[f"Hit@{k}"] = round(sum(hits_k) / max(1, len(hits_k)), 4) if hits_k else 0.0
-        metrics[f"Recall@{k}"] = round(sum(recalls_k) / max(1, len(recalls_k)), 4) if recalls_k else 0.0
+        recalls_k = [
+            r["recall_at_k"][k] for r in results if r["recall_at_k"].get(k) is not None
+        ]
+        metrics[f"Hit@{k}"] = (
+            round(sum(hits_k) / max(1, len(hits_k)), 4) if hits_k else 0.0
+        )
+        metrics[f"Recall@{k}"] = (
+            round(sum(recalls_k) / max(1, len(recalls_k)), 4) if recalls_k else 0.0
+        )
     mrrs = [r["mrr"] for r in results if r.get("mrr") is not None]
     metrics["MRR"] = round(sum(mrrs) / max(1, len(mrrs)), 4) if mrrs else 0.0
     ndcgs = [r["ndcg"] for r in results if r.get("ndcg") is not None]

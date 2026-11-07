@@ -1,6 +1,7 @@
-import os, sys
+import sys
 from pathlib import Path
-sys.path.insert(0, str(Path('tools').resolve()))
+
+sys.path.insert(0, str(Path("tools").resolve()))
 from tender_fullsync import load_env
 import pymysql
 
@@ -12,11 +13,11 @@ conn = pymysql.connect(
     password=env["MYSQL_PWD"],
     database="tender_contract",
     charset="utf8mb4",
-    cursorclass=pymysql.cursors.DictCursor
+    cursorclass=pymysql.cursors.DictCursor,
 )
 
 with conn.cursor() as cur:
-    with open('data/contract_merged/db_dict_contents.txt', 'w', encoding='utf-8') as f:
+    with open("data/contract_merged/db_dict_contents.txt", "w", encoding="utf-8") as f:
         # 1. contract_business_type
         f.write("=== Table: contract_business_type ===\n")
         cur.execute("SELECT * FROM contract_business_type")

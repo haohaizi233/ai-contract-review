@@ -15,6 +15,8 @@ from datetime import datetime
 from collections import defaultdict
 
 import pymysql
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tender_fullsync import load_env
@@ -24,7 +26,9 @@ from template_5th_layer_data import TEMPLATE_5TH_LAYER_RULES, DISAMBIGUATION_GRO
 sys.stdout.reconfigure(encoding="utf-8")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRATCH_DIR = os.environ.get("CONTRACT_KB_SCRATCH_DIR", os.path.join(BASE_DIR, "data", "scratch"))
+SCRATCH_DIR = os.environ.get(
+    "CONTRACT_KB_SCRATCH_DIR", os.path.join(BASE_DIR, "data", "scratch")
+)
 OUT_DIR = os.path.join(BASE_DIR, "data", "contract_merged")
 
 
@@ -38,15 +42,35 @@ def extract_clause_summaries(content_dict):
         p_clean = p.strip()
         if not p_clean:
             continue
-        if re.match(r"^(第一条|一、|1[\.、]|委托事项)", p_clean) or "受甲方委托" in p_clean or "甲方向乙方购买" in p_clean:
+        if (
+            re.match(r"^(第一条|一、|1[\.、]|委托事项)", p_clean)
+            or "受甲方委托" in p_clean
+            or "甲方向乙方购买" in p_clean
+        ):
             in_c1 = True
-        elif re.match(r"^(第二条|第三条|二、|三、)", p_clean) and len(clause1_lines) >= 1:
+        elif (
+            re.match(r"^(第二条|第三条|二、|三、)", p_clean) and len(clause1_lines) >= 1
+        ):
             in_c1 = False
 
         if in_c1 and len(clause1_lines) < 3:
             clause1_lines.append(p_clean)
 
-        if any(k in p_clean for k in ["退还", "退费", "全额退", "预付款", "尾款", "包干", "分成", "不予退还", "后付费", "授权后"]):
+        if any(
+            k in p_clean
+            for k in [
+                "退还",
+                "退费",
+                "全额退",
+                "预付款",
+                "尾款",
+                "包干",
+                "分成",
+                "不予退还",
+                "后付费",
+                "授权后",
+            ]
+        ):
             if len(payment_lines) < 3 and p_clean not in payment_lines:
                 payment_lines.append(p_clean)
 
@@ -54,13 +78,19 @@ def extract_clause_summaries(content_dict):
         clause1_lines = paras[1:4]
 
     c1_str = " / ".join(clause1_lines)[:260]
-    pay_str = " / ".join(payment_lines)[:260] if payment_lines else "常规固定收费（按表列总金额一次性或按约支付，无特殊退费条款）"
+    pay_str = (
+        " / ".join(payment_lines)[:260]
+        if payment_lines
+        else "常规固定收费（按表列总金额一次性或按约支付，无特殊退费条款）"
+    )
     return c1_str, pay_str
 
 
 def style_worksheet(ws, col_widths, freeze="A2", header_fill_hex="1F4E78"):
     header_font = Font(name="微软雅黑", size=10, bold=True, color="FFFFFF")
-    header_fill = PatternFill(start_color=header_fill_hex, end_color=header_fill_hex, fill_type="solid")
+    header_fill = PatternFill(
+        start_color=header_fill_hex, end_color=header_fill_hex, fill_type="solid"
+    )
     body_font = Font(name="微软雅黑", size=9)
     bold_font = Font(name="微软雅黑", size=9, bold=True)
     thin_side = Side(border_style="thin", color="D9D9D9")
@@ -73,13 +103,18 @@ def style_worksheet(ws, col_widths, freeze="A2", header_fill_hex="1F4E78"):
         col_letter = get_column_letter(col_idx)
         ws.column_dimensions[col_letter].width = width
 
-    for row_idx, row in enumerate(ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=len(col_widths)), start=1):
+    for row_idx, row in enumerate(
+        ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=len(col_widths)),
+        start=1,
+    ):
         if row_idx == 1:
             ws.row_dimensions[row_idx].height = 28
             for cell in row:
                 cell.font = header_font
                 cell.fill = header_fill
-                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                cell.alignment = Alignment(
+                    horizontal="center", vertical="center", wrap_text=True
+                )
                 cell.border = border
         else:
             ws.row_dimensions[row_idx].height = 42
@@ -95,11 +130,21 @@ def style_worksheet(ws, col_widths, freeze="A2", header_fill_hex="1F4E78"):
 
 def main():
     # 1. Load extracted docx + db products
-    with open(os.path.join(SCRATCH_DIR, "extracted_78_templates_and_products.json"), "r", encoding="utf-8") as f:
+    with open(
+        os.path.join(SCRATCH_DIR, "extracted_78_templates_and_products.json"),
+        "r",
+        encoding="utf-8",
+    ) as f:
         extracted = json.load(f)
-    with open(os.path.join(SCRATCH_DIR, "all_new_products_with_ids.json"), "r", encoding="utf-8") as f:
+    with open(
+        os.path.join(SCRATCH_DIR, "all_new_products_with_ids.json"),
+        "r",
+        encoding="utf-8",
+    ) as f:
         all_new_products = json.load(f)
-    with open(os.path.join(OUT_DIR, "contract_mapping_dictionary.json"), "r", encoding="utf-8") as f:
+    with open(
+        os.path.join(OUT_DIR, "contract_mapping_dictionary.json"), "r", encoding="utf-8"
+    ) as f:
         mapping_dict = json.load(f)
 
     # Build ERP product name lookup
@@ -148,8 +193,12 @@ def main():
     conn.close()
 
     # Enum dictionaries from mapping_dict
-    ct_map = {str(k): v for k, v in mapping_dict["enums"].get("contract_type", {}).items()}
-    bt_map = {str(k): v for k, v in mapping_dict["enums"].get("business_type", {}).items()}
+    ct_map = {
+        str(k): v for k, v in mapping_dict["enums"].get("contract_type", {}).items()
+    }
+    bt_map = {
+        str(k): v for k, v in mapping_dict["enums"].get("business_type", {}).items()
+    }
     ai_map = {str(k): v for k, v in mapping_dict["enums"].get("auth_item", {}).items()}
 
     def decode_multi(val_str, d_map):
@@ -169,7 +218,7 @@ def main():
     sheet3_binding_rows = []
     sql_lines = [
         "-- ============================================================================",
-        f"-- 78套标准合同模板 - 待补录产品绑定关系 SQL 脚本 (tender_contract.contract_template_products)",
+        "-- 78套标准合同模板 - 待补录产品绑定关系 SQL 脚本 (tender_contract.contract_template_products)",
         f"-- 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "-- 说明: 供业务/法务(孙梦婷、阳佳佳)核对确认后，由研发(管理员yu)执行导入",
         "-- ============================================================================",
@@ -178,33 +227,45 @@ def main():
 
     product_to_templates = defaultdict(list)
 
-    sorted_codes = sorted(docx_templates.keys(), key=lambda c: (docx_templates[c]["folder"], c))
+    sorted_codes = sorted(
+        docx_templates.keys(), key=lambda c: (docx_templates[c]["folder"], c)
+    )
     for idx, code in enumerate(sorted_codes, start=1):
         t_info = docx_templates[code]
         rule = TEMPLATE_5TH_LAYER_RULES[code]
         db_row = latest_tpl_db.get(code, {})
         tpl_id = str(db_row.get("id", ""))
-        tpl_name = db_row.get("template_name") or t_info["filename"].split("_", 2)[-1].replace(".docx", "")
+        tpl_name = db_row.get("template_name") or t_info["filename"].split("_", 2)[
+            -1
+        ].replace(".docx", "")
         version = db_row.get("version") or t_info["filename"].split("_")[1]
 
         ct_val = db_row.get("contract_type")
         bt_val = db_row.get("business_type")
         ai_val = db_row.get("auth_item")
-        ct_label = f"{ct_val}:{ct_map.get(str(ct_val), ct_val)}" if ct_val is not None else ""
+        ct_label = (
+            f"{ct_val}:{ct_map.get(str(ct_val), ct_val)}" if ct_val is not None else ""
+        )
         bt_label = decode_multi(bt_val, bt_map)
         ai_label = decode_multi(ai_val, ai_map)
-        layer1_to_4_str = f"【合同类型】{ct_label}\n【项目类型】{bt_label}\n【授权事项】{ai_label}"
+        layer1_to_4_str = (
+            f"【合同类型】{ct_label}\n【项目类型】{bt_label}\n【授权事项】{ai_label}"
+        )
 
         c1_summary, pay_summary = extract_clause_summaries(t_info["content"])
         placeholders_str = ", ".join(t_info["content"].get("placeholders", [])[:15])
 
         # Existing DB bindings
         existing_bindings = extracted["existing_template_products"].get(code, [])
-        existing_codes = {b["product_code"] for b in existing_bindings if b.get("product_code")}
+        existing_codes = {
+            b["product_code"] for b in existing_bindings if b.get("product_code")
+        }
 
         # Actual historical usage products
         actual_usages = extracted["template_actual_usage_products"].get(code, [])
-        actual_codes = {u["production_code"] for u in actual_usages if u.get("production_code")}
+        actual_codes = {
+            u["production_code"] for u in actual_usages if u.get("production_code")
+        }
         hist_contract_cnt = actual_contract_counts.get(code, 0)
 
         # Format recommended new products
@@ -220,31 +281,43 @@ def main():
                 tag = "[历史实签]"
             else:
                 tag = "[条款匹配]"
-            new_prod_Display.append(f"{pcode} {pname}{tag}" if pname else f"{pcode}{tag}")
+            new_prod_Display.append(
+                f"{pcode} {pname}{tag}" if pname else f"{pcode}{tag}"
+            )
 
             # Record reverse index
-            product_to_templates[pcode].append({
-                "template_code": code,
-                "template_name": tpl_name,
-                "folder": t_info["folder"],
-                "sub_scene": rule["sub_scene"],
-                "fee_mode": rule["fee_mode"],
-                "source_tag": tag,
-            })
+            product_to_templates[pcode].append(
+                {
+                    "template_code": code,
+                    "template_name": tpl_name,
+                    "folder": t_info["folder"],
+                    "sub_scene": rule["sub_scene"],
+                    "fee_mode": rule["fee_mode"],
+                    "source_tag": tag,
+                }
+            )
 
             # Add to Sheet 3 binding rows
-            sheet3_binding_rows.append([
-                len(sheet3_binding_rows) + 1,
-                tpl_id,
-                code,
-                tpl_name,
-                version,
-                pid or "待查/新增",
-                pcode,
-                pname or "见产品字典",
-                p_meta.get("segment", ""),
-                "已绑定(无需重导)" if pcode in existing_codes else ("历史签约已验证(强烈推荐落库)" if pcode in actual_codes else "模板正文条款匹配(推荐落库)"),
-            ])
+            sheet3_binding_rows.append(
+                [
+                    len(sheet3_binding_rows) + 1,
+                    tpl_id,
+                    code,
+                    tpl_name,
+                    version,
+                    pid or "待查/新增",
+                    pcode,
+                    pname or "见产品字典",
+                    p_meta.get("segment", ""),
+                    "已绑定(无需重导)"
+                    if pcode in existing_codes
+                    else (
+                        "历史签约已验证(强烈推荐落库)"
+                        if pcode in actual_codes
+                        else "模板正文条款匹配(推荐落库)"
+                    ),
+                ]
+            )
 
             if pcode not in existing_codes and tpl_id and pid:
                 safe_pname = (pname or "").replace("'", "''")
@@ -261,7 +334,11 @@ def main():
         erp_prod_display = []
         for ecode in rule["erp_products"]:
             ename = erp_lookup.get(ecode, "")
-            etag = "[库已绑]" if ecode in existing_codes else ("[历史实签]" if ecode in actual_codes else "")
+            etag = (
+                "[库已绑]"
+                if ecode in existing_codes
+                else ("[历史实签]" if ecode in actual_codes else "")
+            )
             erp_prod_display.append(f"{ecode} {ename}{etag}".strip())
 
         if existing_codes:
@@ -271,27 +348,29 @@ def main():
         else:
             db_status = "未绑定(0产品/0历史单，靠条款补齐)"
 
-        sheet1_rows.append([
-            idx,
-            t_info["folder"],
-            code,
-            tpl_name,
-            version,
-            layer1_to_4_str,
-            rule["sub_scene"],
-            rule["fee_mode"],
-            rule["target_constraint"],
-            rule["disambiguation_rule"],
-            c1_summary,
-            pay_summary,
-            "、".join(rule["rag_keywords"]),
-            "\n".join(new_prod_Display) if new_prod_Display else "无(非商品类协议)",
-            "\n".join(erp_prod_display) if erp_prod_display else "无",
-            placeholders_str,
-            hist_contract_cnt,
-            db_status,
-            "□ 确认无误\n□ 需微调(请批注)",
-        ])
+        sheet1_rows.append(
+            [
+                idx,
+                t_info["folder"],
+                code,
+                tpl_name,
+                version,
+                layer1_to_4_str,
+                rule["sub_scene"],
+                rule["fee_mode"],
+                rule["target_constraint"],
+                rule["disambiguation_rule"],
+                c1_summary,
+                pay_summary,
+                "、".join(rule["rag_keywords"]),
+                "\n".join(new_prod_Display) if new_prod_Display else "无(非商品类协议)",
+                "\n".join(erp_prod_display) if erp_prod_display else "无",
+                placeholders_str,
+                hist_contract_cnt,
+                db_status,
+                "□ 确认无误\n□ 需微调(请批注)",
+            ]
+        )
 
     # Save SQL file
     sql_path = os.path.join(OUT_DIR, "contract_template_products_supplement.sql")
@@ -309,7 +388,11 @@ def main():
         if not matched_tpls:
             if pcode.startswith("PCTIP"):
                 fallback = "MB20251205041 (PCT国际申请服务合同)"
-            elif pcode.endswith("IP") or "IP0" in pcode and not pcode.startswith(("CNIP", "IP0")):
+            elif (
+                pcode.endswith("IP")
+                or "IP0" in pcode
+                and not pcode.startswith(("CNIP", "IP0"))
+            ):
                 if "包干" in pname:
                     fallback = "MB20251205037 ((包干费版)PCT巴黎公约国家阶段服务合同)"
                 elif any(k in pname for k in ["答复", "答辩", "复审", "IDS"]):
@@ -324,7 +407,9 @@ def main():
             elif pcode.startswith("CNPB") or pcode.startswith("CNPR"):
                 fallback = "MB20251205082 (技术咨询服务合同)"
             elif pcode.startswith("CNPS"):
-                fallback = "MB20251205061(广东) / MB20251205062(非广东) 审计报告服务合同"
+                fallback = (
+                    "MB20251205061(广东) / MB20251205062(非广东) 审计报告服务合同"
+                )
             elif pcode.startswith("CNLS"):
                 fallback = "MB20251205075(诉讼类) / MB20251205073(非诉类)"
             elif pcode.startswith("CNIP") or pcode.startswith("IP"):
@@ -339,23 +424,44 @@ def main():
             combo_str = "同板块多事项选对应组合模板；跨板块选04_跨板块组合模板"
             match_type = "前缀规则自动推导"
         else:
-            primary_list = [f"{m['template_code']}《{m['template_name']}》({m['sub_scene'][:18]})" for m in matched_tpls if "组合" not in m["template_name"] and "总委" not in m["folder"]]
-            combo_list = [f"{m['template_code']}《{m['template_name']}》" for m in matched_tpls if "组合" in m["template_name"] or "总委" in m["folder"]]
-            primary_str = "\n".join(primary_list) if primary_list else "\n".join(f"{m['template_code']}《{m['template_name']}》" for m in matched_tpls)
-            combo_str = "\n".join(combo_list) if combo_list else "同板块多事项选组合模板(085/086/088)；跨板块选065~078"
+            primary_list = [
+                f"{m['template_code']}《{m['template_name']}》({m['sub_scene'][:18]})"
+                for m in matched_tpls
+                if "组合" not in m["template_name"] and "总委" not in m["folder"]
+            ]
+            combo_list = [
+                f"{m['template_code']}《{m['template_name']}》"
+                for m in matched_tpls
+                if "组合" in m["template_name"] or "总委" in m["folder"]
+            ]
+            primary_str = (
+                "\n".join(primary_list)
+                if primary_list
+                else "\n".join(
+                    f"{m['template_code']}《{m['template_name']}》"
+                    for m in matched_tpls
+                )
+            )
+            combo_str = (
+                "\n".join(combo_list)
+                if combo_list
+                else "同板块多事项选组合模板(085/086/088)；跨板块选065~078"
+            )
             match_type = "核心产品精准绑定"
 
-        sheet4_rows.append([
-            p_idx,
-            pcode,
-            pname,
-            seg or "自动归类",
-            pmeta.get("product_id", ""),
-            pmeta.get("cnt", 0),
-            primary_str,
-            combo_str,
-            match_type,
-        ])
+        sheet4_rows.append(
+            [
+                p_idx,
+                pcode,
+                pname,
+                seg or "自动归类",
+                pmeta.get("product_id", ""),
+                pmeta.get("cnt", 0),
+                primary_str,
+                combo_str,
+                match_type,
+            ]
+        )
 
     # ==================== Create Standalone Excel Workbook ====================
     ws1_headers = [
@@ -429,7 +535,9 @@ def main():
         ("03_待落库模板产品绑定明细", ws3_headers, sheet3_binding_rows),
         ("04_新系统603个产品反查模板表", ws4_headers, sheet4_rows),
     ]
-    standalone_xlsx = os.path.join(OUT_DIR, "78套标准模板第5层细粒度路由与产品绑定规则表.xlsx")
+    standalone_xlsx = os.path.join(
+        OUT_DIR, "78套标准模板第5层细粒度路由与产品绑定规则表.xlsx"
+    )
     write_styled_xlsx(standalone_xlsx, standalone_sheets)
     print(f"[OK] 已生成独立核对表: {standalone_xlsx}")
 
@@ -443,7 +551,9 @@ def main():
         if code in TEMPLATE_5TH_LAYER_RULES:
             rule = TEMPLATE_5TH_LAYER_RULES[code]
             t_info = docx_templates.get(code, {})
-            c1_summary, pay_summary = extract_clause_summaries(t_info.get("content", {}))
+            c1_summary, pay_summary = extract_clause_summaries(
+                t_info.get("content", {})
+            )
             tpl_entry["fifth_layer_routing"] = {
                 "folder": t_info.get("folder", ""),
                 "sub_scene": rule["sub_scene"],
@@ -459,8 +569,12 @@ def main():
                 "new_system_products": [
                     {
                         "product_code": pc,
-                        "product_name": all_new_products.get(pc, {}).get("product_name", ""),
-                        "product_id": all_new_products.get(pc, {}).get("product_id", ""),
+                        "product_name": all_new_products.get(pc, {}).get(
+                            "product_name", ""
+                        ),
+                        "product_id": all_new_products.get(pc, {}).get(
+                            "product_id", ""
+                        ),
                     }
                     for pc in rule["new_products"]
                 ],
@@ -490,7 +604,9 @@ def main():
         json.dump(mapping_dict, f, ensure_ascii=False, indent=2)
     print(f"[OK] 已更新RAG全量映射JSON字典: {json_path}")
     print(f"[OK] 已生成待落库SQL脚本: {sql_path}")
-    print(f"汇总统计: 78套标准模板100%补齐第5层规则 | 生成待落库产品绑定 {len(sheet3_binding_rows)} 条 | 覆盖新系统产品 {len(sheet4_rows)} 个")
+    print(
+        f"汇总统计: 78套标准模板100%补齐第5层规则 | 生成待落库产品绑定 {len(sheet3_binding_rows)} 条 | 覆盖新系统产品 {len(sheet4_rows)} 个"
+    )
 
 
 if __name__ == "__main__":

@@ -1,21 +1,23 @@
-import os
 import pytds
 
 env = {}
-for line in open('data/.db_env', encoding='utf-8'):
+for line in open("data/.db_env", encoding="utf-8"):
     line = line.strip()
-    if line.startswith('export ') and '=' in line:
-        k, v = line[len('export '):].split('=', 1)
-        env[k.strip()] = v.strip().strip('\'"')
+    if line.startswith("export ") and "=" in line:
+        k, v = line[len("export ") :].split("=", 1)
+        env[k.strip()] = v.strip().strip("'\"")
 
 conn = pytds.connect(
-    dsn=env['DB_HOST'], port=int(env['DB_PORT']),
-    user=env['DB_USER'], password=env['DB_PWD_READONLY'],
-    database='ecologyE9', timeout=30
+    dsn=env["DB_HOST"],
+    port=int(env["DB_PORT"]),
+    user=env["DB_USER"],
+    password=env["DB_PWD_READONLY"],
+    database="ecologyE9",
+    timeout=30,
 )
 cur = conn.cursor()
 cur.execute("""
-SELECT b.id, b.workflowname, count(*) 
+SELECT b.id, b.workflowname, count(*)
 FROM workflow_requestbase r
 JOIN workflow_base b ON r.workflowid = b.id
 WHERE b.workflowname LIKE '%合同%' OR b.workflowname LIKE '%委%' OR b.workflowname LIKE '%协议%'

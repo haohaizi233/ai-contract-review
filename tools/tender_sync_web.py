@@ -10,6 +10,7 @@
   独立运行: python tools/tender_sync_web.py [--port 8770] [--progress data/tender_sync/progress.json]
   内嵌运行: tender_fullsync.py 自动 import 本模块并后台启动（start_in_thread）
 """
+
 import argparse
 import json
 import os
@@ -236,7 +237,13 @@ setInterval(()=>{ if(!fallback) tick(); }, 2000);
 </html>
 """
 
-STATE_TEXT = {"running": "运行中", "done": "已完成", "stopped": "已中断", "error": "异常", "init": "初始化"}
+STATE_TEXT = {
+    "running": "运行中",
+    "done": "已完成",
+    "stopped": "已中断",
+    "error": "异常",
+    "init": "初始化",
+}
 
 
 def _fmt_dur(s):
@@ -258,16 +265,35 @@ def _fmt_bytes(n):
 def _rows_html(records, err=False):
     out = []
     for r in records[-20:][::-1]:
-        cls = {"ok": "ok", "done": "ok", "skip": "skip", "fail": "fail"}.get(r.get("status", ""), "")
+        cls = {"ok": "ok", "done": "ok", "skip": "skip", "fail": "fail"}.get(
+            r.get("status", ""), ""
+        )
         if err:
-            out.append("<tr><td>%s</td><td>%s</td><td>%s</td><td class=\"fail\">%s</td></tr>"
-                       % (r.get("ts", ""), r.get("unit", ""), r.get("key", ""),
-                          (r.get("error", "") or "").replace("<", "&lt;")))
+            out.append(
+                '<tr><td>%s</td><td>%s</td><td>%s</td><td class="fail">%s</td></tr>'
+                % (
+                    r.get("ts", ""),
+                    r.get("unit", ""),
+                    r.get("key", ""),
+                    (r.get("error", "") or "").replace("<", "&lt;"),
+                )
+            )
         else:
-            out.append("<tr><td>%s</td><td>%s</td><td>%s</td><td class=\"%s\">%s</td></tr>"
-                       % (r.get("ts", ""), r.get("unit", ""), r.get("key", ""), cls, r.get("status", "")))
-    return "".join(out) or ("<tr><td colspan=\"4\" class=\"ok\">无错误</td></tr>" if err
-                            else "<tr><td colspan=\"4\" class=\"skip\">暂无</td></tr>")
+            out.append(
+                '<tr><td>%s</td><td>%s</td><td>%s</td><td class="%s">%s</td></tr>'
+                % (
+                    r.get("ts", ""),
+                    r.get("unit", ""),
+                    r.get("key", ""),
+                    cls,
+                    r.get("status", ""),
+                )
+            )
+    return "".join(out) or (
+        '<tr><td colspan="4" class="ok">无错误</td></tr>'
+        if err
+        else '<tr><td colspan="4" class="skip">暂无</td></tr>'
+    )
 
 
 def render_html(status):
@@ -276,50 +302,84 @@ def render_html(status):
     f = status.get("files") or {}
     tp = min(100.0, (t.get("done", 0) or 0) * 100.0 / max(t.get("total", 0) or 0, 1))
     fp = min(100.0, (f.get("done", 0) or 0) * 100.0 / max(f.get("total", 0) or 0, 1))
-    bp = min(100.0, (f.get("bytes_done", 0) or 0) * 100.0 / max(f.get("bytes_total", 0) or 0, 1))
+    bp = min(
+        100.0,
+        (f.get("bytes_done", 0) or 0) * 100.0 / max(f.get("bytes_total", 0) or 0, 1),
+    )
     stats = [
         ("阶段", status.get("phase") or "–"),
-        ("表 已导/总数", "%s / %s" % ((t.get("done", 0) or 0) + (t.get("skip", 0) or 0), t.get("total", 0))),
+        (
+            "表 已导/总数",
+            "%s / %s"
+            % ((t.get("done", 0) or 0) + (t.get("skip", 0) or 0), t.get("total", 0)),
+        ),
         ("表 累计行数", "{:,}".format(t.get("rows", 0) or 0)),
         ("文件 已下/总数", "%s / %s" % (f.get("done", 0), f.get("total", 0))),
         ("下载速度", "%s 个/分" % (f.get("speed_per_min", 0) or 0)),
         ("吞吐", "%s MB/s" % (f.get("speed_mbps", 0) or 0)),
-        ("已下载", "%s / %s" % (_fmt_bytes(f.get("bytes_done")), _fmt_bytes(f.get("bytes_total")))),
+        (
+            "已下载",
+            "%s / %s"
+            % (_fmt_bytes(f.get("bytes_done")), _fmt_bytes(f.get("bytes_total"))),
+        ),
         ("剩余时间", _fmt_dur(f.get("eta_s"))),
     ]
     stats_html = "".join(
-        '<div class="stat"><div class="k">%s</div><div class="v">%s</div></div>' % (k, v)
-        for k, v in stats)
-    statline = ("阶段 %s ｜ 表 %s/%s ｜ 文件 %s/%s ｜ 失败 %s ｜ %s MB/s ｜ ETA %s"
-                % (status.get("phase") or "–",
-                   (t.get("done", 0) or 0) + (t.get("skip", 0) or 0), t.get("total", 0),
-                   f.get("done", 0), f.get("total", 0), f.get("fail", 0),
-                   f.get("speed_mbps", 0) or 0, _fmt_dur(f.get("eta_s"))))
-    tcurrent = "进行中: " + "、".join(t.get("current", [])[:6]) if t.get("current") else ""
-    fcurrent = "进行中: " + "、".join(f.get("current", [])[:6]) if f.get("current") else ""
+        '<div class="stat"><div class="k">%s</div><div class="v">%s</div></div>'
+        % (k, v)
+        for k, v in stats
+    )
+    statline = "阶段 %s ｜ 表 %s/%s ｜ 文件 %s/%s ｜ 失败 %s ｜ %s MB/s ｜ ETA %s" % (
+        status.get("phase") or "–",
+        (t.get("done", 0) or 0) + (t.get("skip", 0) or 0),
+        t.get("total", 0),
+        f.get("done", 0),
+        f.get("total", 0),
+        f.get("fail", 0),
+        f.get("speed_mbps", 0) or 0,
+        _fmt_dur(f.get("eta_s")),
+    )
+    tcurrent = (
+        "进行中: " + "、".join(t.get("current", [])[:6]) if t.get("current") else ""
+    )
+    fcurrent = (
+        "进行中: " + "、".join(f.get("current", [])[:6]) if f.get("current") else ""
+    )
     tmeta = "done %s · skip %s · fail %s / total %s" % (
-        t.get("done", 0), t.get("skip", 0), t.get("failed", 0), t.get("total", 0))
+        t.get("done", 0),
+        t.get("skip", 0),
+        t.get("failed", 0),
+        t.get("total", 0),
+    )
     fmeta = "ok %s · skip %s · fail %s / total %s" % (
-        f.get("ok", 0), f.get("skip", 0), f.get("fail", 0), f.get("total", 0))
-    bmeta = "字节进度 %s / %s" % (_fmt_bytes(f.get("bytes_done")), _fmt_bytes(f.get("bytes_total")))
+        f.get("ok", 0),
+        f.get("skip", 0),
+        f.get("fail", 0),
+        f.get("total", 0),
+    )
+    bmeta = "字节进度 %s / %s" % (
+        _fmt_bytes(f.get("bytes_done")),
+        _fmt_bytes(f.get("bytes_total")),
+    )
     status_json = json.dumps(status, ensure_ascii=False).replace("</", "<\\/")
-    html = (HTML
-            .replace("__STATUS_JSON__", status_json)
-            .replace("__STATE_TEXT__", STATE_TEXT.get(status.get("state"), "初始化"))
-            .replace("__UPDATED__", status.get("updated_at") or "–")
-            .replace("__ELAPSED__", _fmt_dur(status.get("elapsed_s")))
-            .replace("__STATLINE__", statline)
-            .replace("__STATS_HTML__", stats_html)
-            .replace("__TPCT__", "%.1f" % tp)
-            .replace("__FPCT__", "%.1f" % fp)
-            .replace("__BPCT__", "%.1f" % bp)
-            .replace("__TMETA__", tmeta)
-            .replace("__FMETA__", fmeta)
-            .replace("__BMETA__", bmeta)
-            .replace("__TCURRENT__", tcurrent)
-            .replace("__FCURRENT__", fcurrent)
-            .replace("__RECENT_HTML__", _rows_html(status.get("recent") or []))
-            .replace("__ERRORS_HTML__", _rows_html(status.get("errors") or [], err=True)))
+    html = (
+        HTML.replace("__STATUS_JSON__", status_json)
+        .replace("__STATE_TEXT__", STATE_TEXT.get(status.get("state"), "初始化"))
+        .replace("__UPDATED__", status.get("updated_at") or "–")
+        .replace("__ELAPSED__", _fmt_dur(status.get("elapsed_s")))
+        .replace("__STATLINE__", statline)
+        .replace("__STATS_HTML__", stats_html)
+        .replace("__TPCT__", "%.1f" % tp)
+        .replace("__FPCT__", "%.1f" % fp)
+        .replace("__BPCT__", "%.1f" % bp)
+        .replace("__TMETA__", tmeta)
+        .replace("__FMETA__", fmeta)
+        .replace("__BMETA__", bmeta)
+        .replace("__TCURRENT__", tcurrent)
+        .replace("__FCURRENT__", fcurrent)
+        .replace("__RECENT_HTML__", _rows_html(status.get("recent") or []))
+        .replace("__ERRORS_HTML__", _rows_html(status.get("errors") or [], err=True))
+    )
     return html
 
 
@@ -331,8 +391,15 @@ def load_status(progress_path):
             raise ValueError("bad snapshot")
         return status
     except Exception:
-        return {"state": "init", "phase": "waiting", "updated_at": "–",
-                "tables": {}, "files": {}, "errors": [], "recent": []}
+        return {
+            "state": "init",
+            "phase": "waiting",
+            "updated_at": "–",
+            "tables": {},
+            "files": {},
+            "errors": [],
+            "recent": [],
+        }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -360,9 +427,17 @@ class Handler(BaseHTTPRequestHandler):
                     data = f.read()
                 json.loads(data)  # 校验完整性（原子写，读到的要么完整要么旧版）
             except Exception:
-                data = json.dumps({"state": "init", "phase": "waiting",
-                                   "tables": {}, "files": {}, "errors": [], "recent": []},
-                                  ensure_ascii=False).encode("utf-8")
+                data = json.dumps(
+                    {
+                        "state": "init",
+                        "phase": "waiting",
+                        "tables": {},
+                        "files": {},
+                        "errors": [],
+                        "recent": [],
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8")
             self._send(200, "application/json", data)
         elif path == "/assets/sync-background.png":
             try:

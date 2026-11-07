@@ -16,9 +16,7 @@
 from __future__ import annotations
 
 import argparse
-import io
 import json
-import os
 import sys
 import tempfile
 import urllib.parse
@@ -35,9 +33,8 @@ try:
 except Exception:
     pass
 
-from contract_kb import config
-from contract_kb.storage import Storage
-from tools.diff_contract import run_diff
+from contract_kb import config  # noqa: E402
+from tools.diff_contract import run_diff  # noqa: E402
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -98,9 +95,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .brand-title { font-size: 17px; font-weight: 600; color: #1E293B; }
   .brand-tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #EEF2F6; color: #475569; font-weight: 500; }
-  
+
   .container { max-width: 1440px; margin: 24px auto; padding: 0 24px; }
-  
+
   /* 上传与预设区域 */
   .control-grid {
     display: grid;
@@ -129,7 +126,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .upload-icon { font-size: 28px; margin-bottom: 8px; }
   .upload-title { font-size: 15px; font-weight: 600; color: #1E293B; margin-bottom: 4px; }
   .upload-desc { font-size: 12px; color: var(--text-muted); }
-  
+
   .preset-box {
     background: var(--card);
     border: 1px solid var(--border);
@@ -169,7 +166,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .meta-details { display: flex; gap: 24px; margin-top: 10px; font-size: 13px; color: var(--text-muted); }
   .meta-details strong { color: #334155; }
-  
+
   .stats-strip {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
@@ -199,7 +196,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     transition: all 0.15s ease; font-weight: 500;
   }
   .filter-chip.active { background: #1E293B; color: #FFF; border-color: #1E293B; }
-  
+
   .view-switch {
     display: flex; background: #E2E8F0; padding: 2px; border-radius: 8px;
   }
@@ -676,7 +673,9 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                             break
 
                 if file_bytes:
-                    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+                    with tempfile.NamedTemporaryFile(
+                        suffix=".docx", delete=False
+                    ) as tmp:
                         tmp.write(file_bytes)
                         tmp_path = Path(tmp.name)
                     try:
@@ -690,7 +689,9 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
                     self.end_headers()
-                    self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
+                    self.wfile.write(
+                        json.dumps(res, ensure_ascii=False).encode("utf-8")
+                    )
                     return
 
             self.send_response(400)
@@ -704,7 +705,9 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
 
 def export_standalone_html():
     """将可视化页面导出为独立 HTML 文件存放在 data/contract_merged 供直接双击打开。"""
-    out_path = config.DATA_DIR.parent / "contract_merged" / "合同模板条款比对与Diff可视化.html"
+    out_path = (
+        config.DATA_DIR.parent / "contract_merged" / "合同模板条款比对与Diff可视化.html"
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(HTML_TEMPLATE, encoding="utf-8")
     print(f"[已生成独立可视化网页] {out_path}")
@@ -713,7 +716,9 @@ def export_standalone_html():
 def main():
     parser = argparse.ArgumentParser(description="合同 Diff 前端可视化服务")
     parser.add_argument("--port", type=int, default=8772, help="Web 端口（默认 8772）")
-    parser.add_argument("--export-only", action="store_true", help="仅导出独立 HTML 页面")
+    parser.add_argument(
+        "--export-only", action="store_true", help="仅导出独立 HTML 页面"
+    )
     args = parser.parse_args()
 
     export_standalone_html()

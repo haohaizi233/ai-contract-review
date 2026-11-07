@@ -92,7 +92,6 @@ class EvidenceReference:
         )
 
 
-
 @dataclass
 class Finding:
     """统一的审核风险发现领域实体。"""
@@ -200,7 +199,9 @@ class Finding:
             knowledge_references=list(d.get("knowledge_references", []) or []),
             suggestion=str(d.get("suggestion", "")),
             execution_mode=str(d.get("execution_mode", "DETERMINISTIC")),
-            finding_source=str(d.get("finding_source", FindingSource.DETERMINISTIC.value)),
+            finding_source=str(
+                d.get("finding_source", FindingSource.DETERMINISTIC.value)
+            ),
             requires_human_review=bool(d.get("requires_human_review", False)),
             confidence=d.get("confidence"),
             check_status=str(d.get("check_status", CheckStatus.CHECKED.value)),
@@ -208,7 +209,6 @@ class Finding:
             human_state=str(d.get("human_state", "PENDING")),
             human_note=d.get("human_note"),
         )
-
 
 
 @dataclass

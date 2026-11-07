@@ -10,11 +10,8 @@
 
 from __future__ import annotations
 
-import pytest
-
 from contract_kb.modules.retrieval.governance import (
     KnowledgeGovernancePolicy,
-    KnowledgeSourceType,
 )
 
 
@@ -60,7 +57,9 @@ def test_missing_or_unapproved_status_rejected_for_authoritative_sources():
         "tenant_id": "t1",
         # approved_status 缺失
     }
-    assert KnowledgeGovernancePolicy.is_chunk_admissible(hit_template_no_status) is False
+    assert (
+        KnowledgeGovernancePolicy.is_chunk_admissible(hit_template_no_status) is False
+    )
 
     # APPROVED_RULE 的 approved_status 为 UNKNOWN 或 PENDING
     hit_rule_pending = {

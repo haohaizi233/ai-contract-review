@@ -21,6 +21,7 @@
   python tools/tender_fullsync.py --workers 32 --web-port 8770
   中断后重跑同一命令即自动续传（WAL 跳过已完成单元）。
 """
+
 import argparse
 import csv
 import gzip
@@ -54,26 +55,38 @@ SAFE_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 # ---------------------------------------------------------------- 基础设施
 
+
 def load_env():
     env = {}
     if os.path.exists(ENVF):
         for line in open(ENVF, encoding="utf-8"):
             line = line.strip()
             if line.startswith("export ") and "=" in line:
-                k, v = line[len("export "):].split("=", 1)
+                k, v = line[len("export ") :].split("=", 1)
                 env[k.strip()] = v.strip().strip("'\"")
     return env
 
 
 def sql_query(sql, env):
     cmd = [
-        "mysql", "-h" + env["MYSQL_HOST"], "-P" + env["MYSQL_PORT"],
+        "mysql",
+        "-h" + env["MYSQL_HOST"],
+        "-P" + env["MYSQL_PORT"],
         "-u" + env["MYSQL_USER"],
-        "-N", "-B", "--default-character-set=utf8mb4", "-e", sql,
+        "-N",
+        "-B",
+        "--default-character-set=utf8mb4",
+        "-e",
+        sql,
     ]
     proc_env = {**os.environ, "MYSQL_PWD": env.get("MYSQL_PWD", "")}
     out = subprocess.run(
-        cmd, env=proc_env, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        cmd,
+        env=proc_env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if out.returncode != 0:
         raise RuntimeError("mysql 查询失败: " + out.stderr.strip()[:300])
@@ -93,6 +106,7 @@ def safe_name(name, limit=120):
 
 
 # ---------------------------------------------------------------- 进度跟踪
+
 
 class Progress:
     """线程安全的进度累计器：WAL 追加 + progress.json 原子快照 + 速率/ETA。"""
@@ -159,7 +173,9 @@ class Progress:
 
     def table_error(self, name, err):
         with self.lock:
-            self.errors.append({"ts": now_iso(), "unit": "table", "key": name, "error": err[:300]})
+            self.errors.append(
+                {"ts": now_iso(), "unit": "table", "key": name, "error": err[:300]}
+            )
 
     # ---- 文件
     def files_set_total(self, count, nbytes):
@@ -186,7 +202,9 @@ class Progress:
 
     def file_error(self, key, err):
         with self.lock:
-            self.errors.append({"ts": now_iso(), "unit": "file", "key": str(key), "error": err[:300]})
+            self.errors.append(
+                {"ts": now_iso(), "unit": "file", "key": str(key), "error": err[:300]}
+            )
 
     def set_phase(self, phase):
         with self.lock:
@@ -202,8 +220,8 @@ class Progress:
                 t_old, f_old, b_old = self.samples[0]
                 dt = t - t_old
                 if dt > 1:
-                    speed_f = (self.f_done - f_old) / dt            # 个/秒
-                    speed_b = (self.b_done - b_old) / dt            # 字节/秒
+                    speed_f = (self.f_done - f_old) / dt  # 个/秒
+                    speed_b = (self.b_done - b_old) / dt  # 字节/秒
             eta = 0.0
             if speed_f > 0 and self.f_total:
                 eta = max(0, (self.f_total - self.f_done) / speed_f)
@@ -215,14 +233,21 @@ class Progress:
                 "elapsed_s": round(t - self.t0, 1),
                 "updated_at": now_iso(),
                 "tables": {
-                    "total": self.t_total, "done": self.t_done, "skip": self.t_skip,
-                    "failed": self.t_fail, "rows": self.t_rows,
+                    "total": self.t_total,
+                    "done": self.t_done,
+                    "skip": self.t_skip,
+                    "failed": self.t_fail,
+                    "rows": self.t_rows,
                     "current": sorted(self.t_current),
                 },
                 "files": {
-                    "total": self.f_total, "done": self.f_done, "ok": self.f_ok,
-                    "skip": self.f_skip, "fail": self.f_fail,
-                    "bytes_total": self.b_total, "bytes_done": self.b_done,
+                    "total": self.f_total,
+                    "done": self.f_done,
+                    "ok": self.f_ok,
+                    "skip": self.f_skip,
+                    "fail": self.f_fail,
+                    "bytes_total": self.b_total,
+                    "bytes_done": self.b_done,
                     "speed_per_min": round(speed_f * 60, 1),
                     "speed_mbps": round(speed_b / 1048576, 2),
                     "eta_s": round(eta),
@@ -256,6 +281,7 @@ class Progress:
 
 # ---------------------------------------------------------------- WAL 恢复
 
+
 def load_wal():
     done_tables, done_files = {}, set()
     if os.path.exists(WAL_PATH):
@@ -278,19 +304,30 @@ def load_wal():
 
 # ---------------------------------------------------------------- 表导出
 
+
 def dump_table(env, schema, table, dest_gz):
     """mysqldump 单表 -> gzip 流式落盘，.part 原子替换。"""
     cmd = [
-        "mysqldump", "-h" + env["MYSQL_HOST"], "-P" + env["MYSQL_PORT"],
+        "mysqldump",
+        "-h" + env["MYSQL_HOST"],
+        "-P" + env["MYSQL_PORT"],
         "-u" + env["MYSQL_USER"],
-        "--single-transaction", "--skip-lock-tables", "--no-tablespaces",
-        "--set-gtid-purged=OFF", "--hex-blob", "--triggers",
-        "--default-character-set=utf8mb4", schema, table,
+        "--single-transaction",
+        "--skip-lock-tables",
+        "--no-tablespaces",
+        "--set-gtid-purged=OFF",
+        "--hex-blob",
+        "--triggers",
+        "--default-character-set=utf8mb4",
+        schema,
+        table,
     ]
     proc_env = {**os.environ, "MYSQL_PWD": env.get("MYSQL_PWD", "")}
     tmp = dest_gz + ".part"
     try:
-        p = subprocess.Popen(cmd, env=proc_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p = subprocess.Popen(
+            cmd, env=proc_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
         with open(tmp, "wb") as f:
             g = gzip.GzipFile(fileobj=f, mode="wb", compresslevel=1)
             while True:
@@ -329,13 +366,18 @@ def run_tables(env, prog, workers, table_limit):
 
     done_tables, _ = load_wal()
     todo = [(s, t, r) for s, t, r in targets if "%s.%s" % (s, t) not in done_tables]
-    skip_rows = sum(done_tables.get("%s.%s" % (s, t), 0) for s, t, r in targets
-                    if "%s.%s" % (s, t) in done_tables)
+    skip_rows = sum(
+        done_tables.get("%s.%s" % (s, t), 0)
+        for s, t, r in targets
+        if "%s.%s" % (s, t) in done_tables
+    )
     prog.set_phase("tables")
     prog.table_set_total(len(targets))
     prog.table_add_skips(len(targets) - len(todo), skip_rows)
-    print("[tables] 共 %d 张基表（已排除快照表），WAL 跳过 %d，待导 %d，并发 %d"
-          % (len(targets), len(targets) - len(todo), len(todo), workers))
+    print(
+        "[tables] 共 %d 张基表（已排除快照表），WAL 跳过 %d，待导 %d，并发 %d"
+        % (len(targets), len(targets) - len(todo), len(todo), workers)
+    )
     os.makedirs(TABLES_DIR, exist_ok=True)
 
     def work(item):
@@ -354,7 +396,10 @@ def run_tables(env, prog, workers, table_limit):
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         list(ex.map(work, todo))
-    print("[tables] 完成: done=%d skip=%d fail=%d" % (prog.t_done, prog.t_skip, prog.t_fail))
+    print(
+        "[tables] 完成: done=%d skip=%d fail=%d"
+        % (prog.t_done, prog.t_skip, prog.t_fail)
+    )
 
 
 # ---------------------------------------------------------------- 文件下载
@@ -379,7 +424,10 @@ def download(url, dest, expect_md5, retries=4):
         nbytes = 0
         try:
             opener = _OPENERS[attempt % 2]
-            with opener.open(urllib.request.Request(url), timeout=90) as r, open(tmp, "wb") as f:
+            with (
+                opener.open(urllib.request.Request(url), timeout=90) as r,
+                open(tmp, "wb") as f,
+            ):
                 while True:
                     chunk = r.read(1 << 20)
                     if not chunk:
@@ -391,8 +439,9 @@ def download(url, dest, expect_md5, retries=4):
             if os.path.exists(tmp):
                 os.remove(tmp)
             # 确定性错误（源站拒绝/对象不存在）重试无意义，试满直连+代理两次即止
-            if attempt >= 1 and any(m in last_err for m in
-                                    ("10061", "refused", "502", "404", "Not Found")):
+            if attempt >= 1 and any(
+                m in last_err for m in ("10061", "refused", "502", "404", "Not Found")
+            ):
                 break
             time.sleep(min(1.5 * (attempt + 1), 6))
             continue
@@ -409,8 +458,10 @@ def download(url, dest, expect_md5, retries=4):
 
 
 def run_files(env, prog, workers, limit):
-    sql = ("SELECT id, name, type, IFNULL(size,0), IFNULL(md5,''), url FROM tender_infra.infra_file "
-           "WHERE deleted = 0 AND url IS NOT NULL AND url <> '' ORDER BY id")
+    sql = (
+        "SELECT id, name, type, IFNULL(size,0), IFNULL(md5,''), url FROM tender_infra.infra_file "
+        "WHERE deleted = 0 AND url IS NOT NULL AND url <> '' ORDER BY id"
+    )
     rows = sql_query(sql, env)
     if limit:
         rows = rows[:limit]
@@ -421,7 +472,9 @@ def run_files(env, prog, workers, limit):
         w = csv.writer(f)
         w.writerow(["id", "name", "type", "size", "md5", "url", "dest"])
         for fid, name, ftype, size, md5, url in rows:
-            w.writerow([fid, name, ftype, size, md5, url, "%s_%s" % (fid, safe_name(name))])
+            w.writerow(
+                [fid, name, ftype, size, md5, url, "%s_%s" % (fid, safe_name(name))]
+            )
 
     _, done_files = load_wal()
     total_bytes = sum(int(r[3] or 0) for r in rows)
@@ -436,8 +489,16 @@ def run_files(env, prog, workers, limit):
             continue
         todo.append((fid, name, url, md5, dest))
 
-    print("[files] 共 %d 个文件 / %.2f GB，WAL+落盘跳过 %d，待下 %d，并发 %d"
-          % (len(rows), total_bytes / 1073741824.0, len(rows) - len(todo), len(todo), workers))
+    print(
+        "[files] 共 %d 个文件 / %.2f GB，WAL+落盘跳过 %d，待下 %d，并发 %d"
+        % (
+            len(rows),
+            total_bytes / 1073741824.0,
+            len(rows) - len(todo),
+            len(todo),
+            workers,
+        )
+    )
 
     def work(item):
         fid, name, url, md5, dest = item
@@ -455,21 +516,29 @@ def run_files(env, prog, workers, limit):
             fut.result()
             done_counter += 1
             if done_counter % 500 == 0:
-                print("[files] %d/%d done(fail=%d)" % (done_counter, len(todo), prog.f_fail))
+                print(
+                    "[files] %d/%d done(fail=%d)"
+                    % (done_counter, len(todo), prog.f_fail)
+                )
     print("[files] 完成: ok=%d skip=%d fail=%d" % (prog.f_ok, prog.f_skip, prog.f_fail))
 
 
 # ---------------------------------------------------------------- 入口
 
+
 def main():
-    ap = argparse.ArgumentParser(description="tender_* 库全量同步（表 + 文件），WAL 断点续传")
+    ap = argparse.ArgumentParser(
+        description="tender_* 库全量同步（表 + 文件），WAL 断点续传"
+    )
     ap.add_argument("--workers", type=int, default=32, help="文件下载并发（默认 32）")
     ap.add_argument("--table-workers", type=int, default=6, help="表导出并发（默认 6）")
     ap.add_argument("--tables-only", action="store_true")
     ap.add_argument("--files-only", action="store_true")
     ap.add_argument("--limit", type=int, default=0, help="文件下载上限（冒烟用）")
     ap.add_argument("--table-limit", type=int, default=0, help="表导出上限（冒烟用）")
-    ap.add_argument("--web-port", type=int, default=8770, help="进度 Web 端口（默认 8770）")
+    ap.add_argument(
+        "--web-port", type=int, default=8770, help="进度 Web 端口（默认 8770）"
+    )
     ap.add_argument("--no-web", action="store_true")
     args = ap.parse_args()
 
@@ -487,6 +556,7 @@ def main():
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         try:
             import tender_sync_web
+
             port = tender_sync_web.start_in_thread(PROGRESS_PATH, args.web_port)
             web_url = "http://127.0.0.1:%d/" % port
             print("[web] 进度页: %s" % web_url)
@@ -510,14 +580,28 @@ def main():
         prog.close()
 
     mins = (time.time() - t_start) / 60.0
-    print("[汇总] state=%s 耗时=%.1f 分 | 表 done=%d fail=%d | 文件 ok=%d skip=%d fail=%d"
-          % (prog.state, mins, prog.t_done, prog.t_fail, prog.f_ok, prog.f_skip, prog.f_fail))
+    print(
+        "[汇总] state=%s 耗时=%.1f 分 | 表 done=%d fail=%d | 文件 ok=%d skip=%d fail=%d"
+        % (
+            prog.state,
+            mins,
+            prog.t_done,
+            prog.t_fail,
+            prog.f_ok,
+            prog.f_skip,
+            prog.f_fail,
+        )
+    )
     if web_url:
         print("[汇总] 进度页: %s （重开浏览器即可复查）" % web_url)
-    print("[汇总] 重跑续传: python tools/tender_fullsync.py%s%s%s"
-          % (" --tables-only" if args.tables_only else "",
-             " --files-only" if args.files_only else "",
-             (" --limit %d" % args.limit) if args.limit else ""))
+    print(
+        "[汇总] 重跑续传: python tools/tender_fullsync.py%s%s%s"
+        % (
+            " --tables-only" if args.tables_only else "",
+            " --files-only" if args.files_only else "",
+            (" --limit %d" % args.limit) if args.limit else "",
+        )
+    )
 
 
 if __name__ == "__main__":

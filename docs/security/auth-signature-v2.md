@@ -69,11 +69,23 @@ import uuid
 
 EMPTY_BODY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
-def sign_v2_request(shared_key: str, method: str, path: str, query: str, user: str, roles: str, tenant: str, body_bytes: bytes = b"") -> dict[str, str]:
+
+def sign_v2_request(
+    shared_key: str,
+    method: str,
+    path: str,
+    query: str,
+    user: str,
+    roles: str,
+    tenant: str,
+    body_bytes: bytes = b"",
+) -> dict[str, str]:
     ts = str(int(time.time()))
     nonce = uuid.uuid4().hex + uuid.uuid4().hex[:8]  # 40 chars
-    body_sha = hashlib.sha256(body_bytes).hexdigest() if body_bytes else EMPTY_BODY_SHA256
-    
+    body_sha = (
+        hashlib.sha256(body_bytes).hexdigest() if body_bytes else EMPTY_BODY_SHA256
+    )
+
     # 规范化 query
     if query:
         pairs = urllib.parse.parse_qsl(query, keep_blank_values=True)
@@ -81,21 +93,25 @@ def sign_v2_request(shared_key: str, method: str, path: str, query: str, user: s
         canonical_query = urllib.parse.urlencode(pairs)
     else:
         canonical_query = ""
-        
-    canonical_payload = "\n".join([
-        method.upper().strip(),
-        path.strip(),
-        canonical_query,
-        user.strip(),
-        roles.strip(),
-        tenant.strip(),
-        ts,
-        nonce,
-        body_sha.lower(),
-    ])
-    
-    sig = hmac.new(shared_key.encode("utf-8"), canonical_payload.encode("utf-8"), hashlib.sha256).hexdigest()
-    
+
+    canonical_payload = "\n".join(
+        [
+            method.upper().strip(),
+            path.strip(),
+            canonical_query,
+            user.strip(),
+            roles.strip(),
+            tenant.strip(),
+            ts,
+            nonce,
+            body_sha.lower(),
+        ]
+    )
+
+    sig = hmac.new(
+        shared_key.encode("utf-8"), canonical_payload.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
     return {
         "X-User": user,
         "X-Roles": roles,

@@ -9,11 +9,8 @@
 
 from __future__ import annotations
 
-import math
-from pathlib import Path
 
 from contract_kb.evaluate import eval_rag
-from contract_kb.storage import Storage
 
 
 def test_eval_rag_metrics_honesty(storage):

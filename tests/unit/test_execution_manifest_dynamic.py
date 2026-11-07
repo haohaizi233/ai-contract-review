@@ -17,7 +17,7 @@ from docx import Document
 
 from contract_kb.application.pipeline.contracts import ExecutionManifest
 from contract_kb.application.pipeline.runner import ReviewPipeline
-from contract_kb.llm_review import MockLLMProvider, OpenAICompatProvider
+from contract_kb.llm_review import MockLLMProvider
 from contract_kb.modules.rules import RuleRegistry
 from contract_kb.storage import Storage
 
@@ -60,6 +60,7 @@ def test_manifest_extracts_dynamic_rule_provider_and_prompt(tmp_path: Path):
     assert len(cps) > 0
     first_cp = cps[0]
     manifest_hash = first_cp.manifest_hash
+    assert manifest_hash, "快照清单哈希不能为空"
 
     # 重新构造相同配置的 manifest，哈希必须完全相同
     manifest_same = ExecutionManifest(
@@ -77,4 +78,7 @@ def test_manifest_extracts_dynamic_rule_provider_and_prompt(tmp_path: Path):
         provider="vllm_local",
         model="deepseek-r1-671b",
     )
-    assert manifest_diff.compute_manifest_fingerprint() != manifest_same.compute_manifest_fingerprint()
+    assert (
+        manifest_diff.compute_manifest_fingerprint()
+        != manifest_same.compute_manifest_fingerprint()
+    )

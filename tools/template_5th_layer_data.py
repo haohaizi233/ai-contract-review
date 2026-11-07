@@ -16,4 +16,8 @@ from contract_kb.modules.templates.catalog_data import (  # noqa: E402
     TEMPLATE_HIERARCHY_MAP,
 )
 
-__all__ = ["DISAMBIGUATION_GROUPS", "TEMPLATE_5TH_LAYER_RULES", "TEMPLATE_HIERARCHY_MAP"]
+__all__ = [
+    "DISAMBIGUATION_GROUPS",
+    "TEMPLATE_5TH_LAYER_RULES",
+    "TEMPLATE_HIERARCHY_MAP",
+]

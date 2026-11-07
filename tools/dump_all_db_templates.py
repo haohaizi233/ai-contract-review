@@ -1,6 +1,7 @@
-import os, sys
+import sys
 from pathlib import Path
-sys.path.insert(0, str(Path('tools').resolve()))
+
+sys.path.insert(0, str(Path("tools").resolve()))
 from tender_fullsync import load_env
 import pymysql
 
@@ -12,7 +13,7 @@ conn = pymysql.connect(
     password=env["MYSQL_PWD"],
     database="tender_contract",
     charset="utf8mb4",
-    cursorclass=pymysql.cursors.DictCursor
+    cursorclass=pymysql.cursors.DictCursor,
 )
 
 with conn.cursor() as cur:
@@ -23,9 +24,11 @@ with conn.cursor() as cur:
     """)
     rows = cur.fetchall()
 
-with open('data/contract_merged/db_templates_all.txt', 'w', encoding='utf-8') as f:
+with open("data/contract_merged/db_templates_all.txt", "w", encoding="utf-8") as f:
     f.write(f"Total templates in contract_template table: {len(rows)}\n\n")
     for r in rows:
-        f.write(f"{r['template_code']} | {r['template_name']} | contract_type={r['contract_type']} | business_type={r['business_type']} | auth_item={r['auth_item']} | {r['version_no']}\n")
+        f.write(
+            f"{r['template_code']} | {r['template_name']} | contract_type={r['contract_type']} | business_type={r['business_type']} | auth_item={r['auth_item']} | {r['version_no']}\n"
+        )
 
 print(f"Dumped {len(rows)} templates from DB.")

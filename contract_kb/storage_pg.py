@@ -674,6 +674,32 @@ class PgVectorStorage:
                 out.append(d)
             return out
 
+    def find_clauses_by_category(
+        self, category: str, tenant_id: str | None = None
+    ) -> list[dict]:
+        with self._lock:
+            sql = (
+                "SELECT c.clause_id, c.original_text, c.clause_category "
+                "FROM clauses c "
+                "JOIN documents d ON d.document_id = c.document_id "
+                "WHERE c.clause_category = %s"
+            )
+            params: list[Any] = [category]
+            if tenant_id is not None:
+                sql += " AND d.tenant_id = %s"
+                params.append(tenant_id)
+            with self.conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+                return [
+                    {
+                        "clause_id": r[0],
+                        "original_text": r[1],
+                        "clause_category": r[2],
+                    }
+                    for r in rows
+                ]
+
     def get_clause(self, clause_id: str) -> dict | None:
         with self._lock:
             with self.conn.cursor() as cur:
@@ -1785,6 +1811,9 @@ class PgVectorStorage:
                     if not row:
                         return None
                     return self.get_canonical_contract(row[0], tenant_id=tenant_id)
+            except Exception:
+                self._rollback()
+                raise
 
     def find_canonical_by_contract_number(
         self, tenant_id: str, contract_number: str
@@ -1802,9 +1831,6 @@ class PgVectorStorage:
                     if not row:
                         return None
                     return self._decode_canonical_row(dict(row))
-            except Exception:
-                self._rollback()
-                raise
             except Exception:
                 self._rollback()
                 raise

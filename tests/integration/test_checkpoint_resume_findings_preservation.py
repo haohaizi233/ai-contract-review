@@ -30,7 +30,9 @@ def test_resume_preserves_all_findings_and_gate_status(tmp_path: Path):
 
     # 1. 运行正常 baseline
     pipeline_normal = ReviewPipeline(st)
-    normal_res = pipeline_normal.run(docx_file, task_id="task_baseline", tenant_id="tenant_audit")
+    normal_res = pipeline_normal.run(
+        docx_file, task_id="task_baseline", tenant_id="tenant_audit"
+    )
     assert normal_res.status == "COMPLETED"
     baseline_rule_ids = {issue["rule_id"] for issue in normal_res.issues}
     assert "AMOUNT_CASE_CONSISTENCY" in baseline_rule_ids
@@ -41,12 +43,17 @@ def test_resume_preserves_all_findings_and_gate_status(tmp_path: Path):
     class SyntheticFailStage9(ReviewStage):
         stage_name = "RetrieveEvidence"
         stage_order = 9
+
         def execute(self, ctx):
             raise RuntimeError("Synthetic interruption at stage 9")
 
     pipeline_fail = ReviewPipeline(st)
     # 找到 RetrieveEvidence 替换为失败桩
-    stage_idx = next(i for i, s in enumerate(pipeline_fail.stages) if s.stage_name == "RetrieveEvidence")
+    stage_idx = next(
+        i
+        for i, s in enumerate(pipeline_fail.stages)
+        if s.stage_name == "RetrieveEvidence"
+    )
     pipeline_fail.stages[stage_idx] = SyntheticFailStage9()
 
     with pytest.raises(RuntimeError, match="Synthetic interruption at stage 9"):
@@ -54,7 +61,9 @@ def test_resume_preserves_all_findings_and_gate_status(tmp_path: Path):
 
     # 3. 重新创建干净的执行器并恢复同任务
     pipeline_resumed = ReviewPipeline(st)
-    resumed_res = pipeline_resumed.run(docx_file, task_id="task_resume_01", tenant_id="tenant_audit")
+    resumed_res = pipeline_resumed.run(
+        docx_file, task_id="task_resume_01", tenant_id="tenant_audit"
+    )
 
     assert resumed_res.status == "COMPLETED"
 
@@ -91,11 +100,16 @@ def test_resume_rejects_corrupted_snapshot(tmp_path: Path):
     class SyntheticFailStage9(ReviewStage):
         stage_name = "RetrieveEvidence"
         stage_order = 9
+
         def execute(self, ctx):
             raise RuntimeError("Synthetic interruption at stage 9")
 
     pipeline_fail = ReviewPipeline(st)
-    stage_idx = next(i for i, s in enumerate(pipeline_fail.stages) if s.stage_name == "RetrieveEvidence")
+    stage_idx = next(
+        i
+        for i, s in enumerate(pipeline_fail.stages)
+        if s.stage_name == "RetrieveEvidence"
+    )
     pipeline_fail.stages[stage_idx] = SyntheticFailStage9()
 
     with pytest.raises(RuntimeError):
@@ -110,8 +124,11 @@ def test_resume_rejects_corrupted_snapshot(tmp_path: Path):
 
     pipeline_resumed = ReviewPipeline(st)
     from contract_kb.application.pipeline.checkpoints import CheckpointCorruptedError
+
     with pytest.raises(CheckpointCorruptedError, match="missing|corrupted|invalid"):
-        pipeline_resumed.run(docx_file, task_id="task_corrupted", tenant_id="tenant_audit")
+        pipeline_resumed.run(
+            docx_file, task_id="task_corrupted", tenant_id="tenant_audit"
+        )
 
     st.close()
 
@@ -128,15 +145,22 @@ def test_resume_rejects_manifest_mismatch(tmp_path: Path):
     class SyntheticFailStage9(ReviewStage):
         stage_name = "RetrieveEvidence"
         stage_order = 9
+
         def execute(self, ctx):
             raise RuntimeError("Synthetic interruption at stage 9")
 
     pipeline_fail = ReviewPipeline(st)
-    stage_idx = next(i for i, s in enumerate(pipeline_fail.stages) if s.stage_name == "RetrieveEvidence")
+    stage_idx = next(
+        i
+        for i, s in enumerate(pipeline_fail.stages)
+        if s.stage_name == "RetrieveEvidence"
+    )
     pipeline_fail.stages[stage_idx] = SyntheticFailStage9()
 
     with pytest.raises(RuntimeError):
-        pipeline_fail.run(docx_file, task_id="task_manifest_diff", tenant_id="tenant_audit")
+        pipeline_fail.run(
+            docx_file, task_id="task_manifest_diff", tenant_id="tenant_audit"
+        )
 
     # 人为修改已存检查点的 manifest_hash
     with st._lock:
@@ -147,8 +171,10 @@ def test_resume_rejects_manifest_mismatch(tmp_path: Path):
 
     pipeline_resumed = ReviewPipeline(st)
     from contract_kb.application.pipeline.checkpoints import ManifestMismatchError
+
     with pytest.raises(ManifestMismatchError, match="manifest|mismatch|incompatible"):
-        pipeline_resumed.run(docx_file, task_id="task_manifest_diff", tenant_id="tenant_audit")
+        pipeline_resumed.run(
+            docx_file, task_id="task_manifest_diff", tenant_id="tenant_audit"
+        )
 
     st.close()
-

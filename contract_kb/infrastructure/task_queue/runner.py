@@ -271,16 +271,23 @@ class PersistentTaskRunner:
                 return
             while not stop_heartbeat.wait(self.heartbeat_interval_seconds):
                 try:
-                    ext = max(int(self.lease_seconds), int(self.heartbeat_interval_seconds * 3))
+                    ext = max(
+                        int(self.lease_seconds),
+                        int(self.heartbeat_interval_seconds * 3),
+                    )
                     ok = hb_fn(job_id, lease_token, extension_seconds=ext)
                     if not ok:
-                        logger.warning(f"Task {job_id} lease lost during heartbeat renewal")
+                        logger.warning(
+                            f"Task {job_id} lease lost during heartbeat renewal"
+                        )
                         lease_lost.set()
                         break
                 except Exception as e:
                     logger.warning(f"Task {job_id} heartbeat renewal error: {e}")
 
-        hb_thread = threading.Thread(target=_heartbeat_loop, daemon=True, name=f"hb-{job_id}")
+        hb_thread = threading.Thread(
+            target=_heartbeat_loop, daemon=True, name=f"hb-{job_id}"
+        )
         hb_thread.start()
 
         def _update_progress(pct: int) -> None:
@@ -310,7 +317,9 @@ class PersistentTaskRunner:
             stop_heartbeat.set()
             hb_thread.join(timeout=0.5)
             if finish_fn is not None and lease_token:
-                finish_fn(job_id, lease_token, JobOutcome(status="CANCELLED", progress=100))
+                finish_fn(
+                    job_id, lease_token, JobOutcome(status="CANCELLED", progress=100)
+                )
             else:
                 self.storage.update_async_job(job_id, status="CANCELLED")
             self._cleanup_temp_file(temp_path)
@@ -333,21 +342,31 @@ class PersistentTaskRunner:
             hb_thread.join(timeout=0.5)
 
             if lease_lost.is_set():
-                logger.warning(f"Task {job_id} lease lost; discarding result from stale worker")
+                logger.warning(
+                    f"Task {job_id} lease lost; discarding result from stale worker"
+                )
                 return self.storage.get_async_job(job_id) or {}
 
             if _is_cancelled():
                 if finish_fn is not None and lease_token:
-                    finish_fn(job_id, lease_token, JobOutcome(status="CANCELLED", progress=100))
+                    finish_fn(
+                        job_id,
+                        lease_token,
+                        JobOutcome(status="CANCELLED", progress=100),
+                    )
                 else:
                     self.storage.update_async_job(job_id, status="CANCELLED")
                 self._cleanup_temp_file(temp_path)
             else:
                 if finish_fn is not None and lease_token:
-                    outcome = JobOutcome(status="SUCCEEDED", result=result, progress=100)
+                    outcome = JobOutcome(
+                        status="SUCCEEDED", result=result, progress=100
+                    )
                     committed = finish_fn(job_id, lease_token, outcome)
                     if not committed:
-                        logger.warning(f"Task {job_id} finish_job rejected stale lease_token {lease_token}")
+                        logger.warning(
+                            f"Task {job_id} finish_job rejected stale lease_token {lease_token}"
+                        )
                         return self.storage.get_async_job(job_id) or {}
                 else:
                     self.storage.update_async_job(
@@ -371,7 +390,9 @@ class PersistentTaskRunner:
             hb_thread.join(timeout=0.5)
 
             if lease_lost.is_set():
-                logger.warning(f"Task {job_id} lease lost; discarding exception from stale worker")
+                logger.warning(
+                    f"Task {job_id} lease lost; discarding exception from stale worker"
+                )
                 return self.storage.get_async_job(job_id) or {}
 
             err_msg = redact_sensitive_text(f"{type(exc).__name__}: {exc}", max_len=400)
@@ -386,7 +407,9 @@ class PersistentTaskRunner:
                     )
                     committed = finish_fn(job_id, lease_token, outcome)
                     if not committed:
-                        logger.warning(f"Task {job_id} retry rejected stale lease_token {lease_token}")
+                        logger.warning(
+                            f"Task {job_id} retry rejected stale lease_token {lease_token}"
+                        )
                         return self.storage.get_async_job(job_id) or {}
                 else:
                     self.storage.update_async_job(
@@ -408,7 +431,9 @@ class PersistentTaskRunner:
                     )
                     committed = finish_fn(job_id, lease_token, outcome)
                     if not committed:
-                        logger.warning(f"Task {job_id} dead_letter rejected stale lease_token {lease_token}")
+                        logger.warning(
+                            f"Task {job_id} dead_letter rejected stale lease_token {lease_token}"
+                        )
                         return self.storage.get_async_job(job_id) or {}
                 else:
                     self.storage.update_async_job(

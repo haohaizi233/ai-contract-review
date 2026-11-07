@@ -22,10 +22,9 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from contract_kb.storage import create_storage
-from contract_kb.ingest import import_template_file, security_check_file
-from contract_kb.clause_diff import diff_clause_sets
-from contract_kb import config
+from contract_kb.storage import create_storage  # noqa: E402
+from contract_kb.ingest import import_template_file, security_check_file  # noqa: E402
+from contract_kb.clause_diff import diff_clause_sets  # noqa: E402
 
 
 def run_diff(docx_path: str | Path, forced_template_id: str | None = None) -> dict:
@@ -97,9 +96,13 @@ def print_diff_report(res: dict):
     print("【AI 合同模板对比与条款级 Diff 报告】")
     print("=" * 80)
     print(f"待审文档: {res['uploaded_file']}")
-    print(f"识别类型: {res['detected_subtype']} (置信度: {res['classification_confidence']})")
+    print(
+        f"识别类型: {res['detected_subtype']} (置信度: {res['classification_confidence']})"
+    )
     print(f"匹配模板: [{res['matched_template_id']}] {res['matched_template_name']}")
-    print(f"条款规模: 标准母本 {res['standard_clause_count']} 条 | 待审文档 {res['uploaded_clause_count']} 条")
+    print(
+        f"条款规模: 标准母本 {res['standard_clause_count']} 条 | 待审文档 {res['uploaded_clause_count']} 条"
+    )
     print("-" * 80)
 
     categories = res["diff_report"]
@@ -108,7 +111,9 @@ def print_diff_report(res: dict):
     diffs = [c for c in categories if c["status"] == "DIFF"]
     matches = [c for c in categories if c["status"] == "MATCH"]
 
-    print(f"比对统计: 一致类别 {len(matches)} 项 | 实质差异 {len(diffs)} 项 | 客户删除 {len(missing)} 项 | 客户新增 {len(new_in)} 项\n")
+    print(
+        f"比对统计: 一致类别 {len(matches)} 项 | 实质差异 {len(diffs)} 项 | 客户删除 {len(missing)} 项 | 客户新增 {len(new_in)} 项\n"
+    )
 
     if missing:
         print("🚩 【高危缺失】待审文档删除了标准模板中的必要条款类别：")
@@ -131,7 +136,13 @@ def print_diff_report(res: dict):
                 s_text = delta.get("standard_text", "")
                 r_text = delta.get("reviewed_text", "")
                 print(f"    - [变动类型: {dtype}] {desc}")
-                if dtype in ("NUMBER_CHANGE", "DEADLINE_CHANGE", "PARTY_CHANGE", "NEGATION_CHANGE", "OBLIGATION_CHANGE"):
+                if dtype in (
+                    "NUMBER_CHANGE",
+                    "DEADLINE_CHANGE",
+                    "PARTY_CHANGE",
+                    "NEGATION_CHANGE",
+                    "OBLIGATION_CHANGE",
+                ):
                     print(f"      • 标准模板原文: {s_text[:80]}")
                     print(f"      • 待审修改原文: {r_text[:80]}")
             print()
@@ -145,7 +156,9 @@ def main():
     parser = argparse.ArgumentParser(description="合同模板比对与条款级 Diff 工具")
     parser.add_argument("docx_path", help="待审合同 DOCX 文件路径")
     parser.add_argument("--template-id", help="强制指定基准模板 ID (如 MB20251205012)")
-    parser.add_argument("--json", action="store_true", help="以 JSON 格式输出完整比对结构")
+    parser.add_argument(
+        "--json", action="store_true", help="以 JSON 格式输出完整比对结构"
+    )
     args = parser.parse_args()
 
     res = run_diff(args.docx_path, args.template_id)

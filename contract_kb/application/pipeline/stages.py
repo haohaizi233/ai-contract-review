@@ -42,7 +42,7 @@ from ...modules.rules import (
 )
 from ...rule_engine import ReviewContext as DbRuleContext
 from ...rule_engine import RuleEngine, RuleSpec
-from .checkpoints import CheckpointCorruptedError, CheckpointIncompatibleError
+from .checkpoints import CheckpointCorruptedError
 from .format_adapter import audit_format_from_record
 
 
@@ -62,7 +62,6 @@ class ReviewStage(ABC):
     def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
         """从持久化快照中恢复该阶段的上下文输出。默认无需操作或由具体子类实现。"""
         pass
-
 
 
 class ReceiveStage(ReviewStage):
@@ -160,13 +159,14 @@ class ParseStage(ReviewStage):
             if ctx.docx_path and Path(ctx.docx_path).exists():
                 rec, err = import_template_file(ctx.docx_path)
                 if rec is None:
-                    raise CheckpointCorruptedError(f"Failed to re-parse document on rehydration: {err}")
+                    raise CheckpointCorruptedError(
+                        f"Failed to re-parse document on rehydration: {err}"
+                    )
                 ctx.parsed_record = rec
             else:
                 raise CheckpointCorruptedError(
                     "Cannot rehydrate ParseStage: parsed_record is missing and file does not exist"
                 )
-
 
 
 class NormalizeStage(ReviewStage):
@@ -274,7 +274,9 @@ class ClassifyStage(ReviewStage):
 
     def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
         if "category" not in snapshot or "subtype" not in snapshot:
-            raise CheckpointCorruptedError("ClassifyStage snapshot corrupted: missing category or subtype")
+            raise CheckpointCorruptedError(
+                "ClassifyStage snapshot corrupted: missing category or subtype"
+            )
         ctx.category = str(snapshot["category"])
         ctx.subtype = str(snapshot["subtype"])
         ctx.classification_confidence = float(snapshot.get("confidence", 0.0))
@@ -377,7 +379,9 @@ class ExtractFieldsStage(ReviewStage):
 
     def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
         if "extracted_fields" not in snapshot:
-            raise CheckpointCorruptedError("ExtractFieldsStage snapshot corrupted: missing extracted_fields")
+            raise CheckpointCorruptedError(
+                "ExtractFieldsStage snapshot corrupted: missing extracted_fields"
+            )
         ctx.extracted_fields.update(snapshot["extracted_fields"])
 
 
@@ -450,7 +454,9 @@ class DeterministicValidationStage(ReviewStage):
             )
         ctx.rule_set_version = str(snapshot["rule_set_version"])
         ctx.findings = [Finding.from_dict(f) for f in snapshot["findings"]]
-        if "extracted_fields" in snapshot and isinstance(snapshot["extracted_fields"], dict):
+        if "extracted_fields" in snapshot and isinstance(
+            snapshot["extracted_fields"], dict
+        ):
             ctx.extracted_fields.update(snapshot["extracted_fields"])
         if "format_standard" in snapshot:
             ctx.format_standard = snapshot["format_standard"]
@@ -790,7 +796,6 @@ class RetrieveEvidenceStage(ReviewStage):
             ctx.rag_context = list(snapshot["rag_context"])
 
 
-
 class LLMSemanticReviewStage(ReviewStage):
     """Stage 10: 受控 LLM 语义审核（未授权时如实标注 NOT_CHECKED，绝不伪造已审）。"""
 
@@ -1015,9 +1020,7 @@ class LLMSemanticReviewStage(ReviewStage):
                     description=f.description,
                     source_reference=(
                         EvidenceReference(
-                            ctx.parsed_record.template_id
-                            if ctx.parsed_record
-                            else "",
+                            ctx.parsed_record.template_id if ctx.parsed_record else "",
                             [],
                             None,
                             f.original_text,
@@ -1224,7 +1227,6 @@ class HumanReviewStage(ReviewStage):
             ctx.findings = [Finding.from_dict(f) for f in snapshot["findings"]]
 
 
-
 class FinalizeReportStage(ReviewStage):
     """Stage 14: 计算跨运行可复现性哈希，并在单个原子工作单元（UoW）内持久化任务与全部问题。"""
 
@@ -1280,7 +1282,9 @@ class FinalizeReportStage(ReviewStage):
             "source_file": ctx.parsed_record.source_file,
             "rule_set_version": ctx.rule_set_version,
             "model_version": ctx.model_version,
-            "file_hash": ctx.parsed_record.sha256 if ctx.parsed_record else getattr(ctx, "file_hash", ""),
+            "file_hash": ctx.parsed_record.sha256
+            if ctx.parsed_record
+            else getattr(ctx, "file_hash", ""),
             "category": ctx.category,
             "subtype": ctx.subtype,
             "classification_confidence": ctx.classification_confidence,

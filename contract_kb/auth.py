@@ -242,6 +242,7 @@ class TrustedHeaderAuth:
                 if st is None:
                     try:
                         import contract_kb.api as api_mod
+
                         st = getattr(api_mod, "get_storage", lambda: None)()
                     except Exception:
                         st = None

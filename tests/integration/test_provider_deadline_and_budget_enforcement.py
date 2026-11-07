@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pytest
 
-from contract_kb.application.pipeline.deadline import ExecutionDeadline
 from contract_kb.application.pipeline.runner import ReviewPipeline
 from contract_kb.application.pipeline.stages import LLMSemanticReviewStage
 from contract_kb.application.workflow.budget import (
@@ -33,7 +32,6 @@ from contract_kb.domain.models.review import (
 from contract_kb.llm_review import (
     MockLLMProvider,
     OpenAICompatProvider,
-    LLMSemanticReviewer,
 )
 from contract_kb.storage import Storage
 
@@ -101,7 +99,6 @@ def test_openai_compat_provider_zero_or_negative_timeout_skips_network():
 
 def test_llm_stage_pre_invocation_budget_exhaustion_blocks_call(tmp_path: Path):
     """验证预算耗尽时，LLM 调用前被阻断，Provider.complete 次数为 0，产出 NOT_CHECKED finding。"""
-    storage = Storage(":memory:")
     mock_provider = MockLLMProvider()
 
     # 仅允许 100 token，而审核通常预估需要 > 500 token
@@ -133,9 +130,7 @@ def test_llm_stage_pre_invocation_budget_exhaustion_blocks_call(tmp_path: Path):
     assert result.get("failure") == "BUDGET_EXCEEDED"
 
     # 3. 产出明确的 BUDGET_EXCEEDED 审计 finding
-    budget_findings = [
-        f for f in ctx.findings if f.category == "BUDGET_EXCEEDED"
-    ]
+    budget_findings = [f for f in ctx.findings if f.category == "BUDGET_EXCEEDED"]
     assert len(budget_findings) >= 1
     assert budget_findings[0].check_status == CheckStatus.NOT_CHECKED.value
     assert budget_findings[0].finding_source == FindingSource.LLM_SEMANTIC.value
@@ -243,7 +238,9 @@ def test_pipeline_e2e_budget_exhaustion_interception(tmp_path: Path):
     doc = Document()
     doc.add_heading("技术开发合作协议", 0)
     doc.add_paragraph("第一条 费用及支付方式")
-    doc.add_paragraph("甲方应于合同签订之日起 5 日内向乙方支付技术服务费人民币 100,000 元整。")
+    doc.add_paragraph(
+        "甲方应于合同签订之日起 5 日内向乙方支付技术服务费人民币 100,000 元整。"
+    )
     doc.save(docx_file)
 
     storage = Storage(":memory:")
@@ -278,4 +275,3 @@ def test_pipeline_e2e_budget_exhaustion_interception(tmp_path: Path):
         CheckStatus.NOT_CHECKED.value,
         CheckStatus.INSUFFICIENT_EVIDENCE.value,
     )
-

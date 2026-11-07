@@ -54,7 +54,9 @@ def test_sync_batch_conflict_rolls_back_and_preserves_cursor(tmp_path: Path):
     st.save_canonical_version = lambda *args, **kwargs: False
 
     # 关键断言 1：必须抛出 SyncBatchConflictError 阻断，绝不允许返回 success=True
-    with pytest.raises(SyncBatchConflictError, match="冲突|conflict|save_canonical_version"):
+    with pytest.raises(
+        SyncBatchConflictError, match="冲突|conflict|save_canonical_version"
+    ):
         svc.commit_sync_batch(
             batch_id="test_rejected_batch_01",
             records=records,
