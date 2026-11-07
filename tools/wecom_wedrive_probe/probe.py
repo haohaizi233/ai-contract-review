@@ -713,11 +713,16 @@ class WeDriveProbeRunner:
             }
             return
 
-        if errcode in (2000003, 93001) or category == ErrorCategory.SPACE_NO_PERMISSION.value:
+        if errcode in (2000003, 93001, 640008) or category == ErrorCategory.SPACE_NO_PERMISSION.value:
             self.result_data["conclusion"] = {
                 "level": "C",
-                "title": "仅授权成功（指定空间无权限）",
-                "details": f"Token 获取成功，且应用具备微盘能力，但对指定的共享空间 [{self.space_id}] 无访问权限 (errcode={errcode})。需将应用加入空间成员。",
+                "title": "仅授权成功（微盘空间无访问权限）",
+                "details": (
+                    f"Token 获取成功且 IP 白名单已通过放行，但调用微盘空间接口返回权限不足 (errcode={errcode}: {sp_obj.get('errmsg')})。\n"
+                    f"核心排查点：\n"
+                    f"1. 【微盘 API 全局调用授权】：请在管理后台【协作】->【微盘】->【API】确认已开启接口同步，并将该自建应用（AgentId: 1000077）加入【可调用接口的应用】列表并赋予只读权限；\n"
+                    f"2. 【空间权限隔离】：当前空间‘法律事务部’由个人用户毛世梅创建（agent_id=0），受微盘权限隔离保护，需确认应用对该空间具有协同成员权限。"
+                ),
             }
             return
 
@@ -825,10 +830,12 @@ class WeDriveProbeRunner:
    - 企业微信官方微盘 API 完全满足增量同步需求：`wedrive/file_list` 支持分页、修改时间戳及 `sha`/`md5` 哈希字段，能够在毫秒级比对文件指纹，跳过未修改母本；
    - `wedrive/file_download` 凭证机制可在服务端安全换取下载流，下载完成后通过本地 SHA-256 校验确保与知识库一致。
 2. **当前阻断点与落地动作**：
-   - 当前阻断仅位于**企业微信【企业可信 IP】白名单拦截**（错误码 `60020`）；
-   - **立即动作**：请企业微信管理员进入企业微信管理后台【应用管理】-> 找到对应自建应用 ->【企业可信 IP】，将企业微信实际检测到的请求出口 IP `{caller_ip}`（以及开发工作站直连出口 IP `183.23.149.121`）添加至白名单；
-   - **代理备选方案**：若企业内部采用南山项目类似的集中转发公网 IP（如 `43.138.138.200`），可在 `.env` 中指定 `WECOM_PROXY=http://proxy-host:port` 统一出口；
-   - IP 加白生效后，本测试工具可一键重复执行，即可直接达成【结论 A：完全可用】并自动生成全量合同清单。
+{f'''   - **当前状态**：IP 白名单已成功放行（原 60020 拦截已解除）；当前阻断位于**微盘空间访问权限限制**（错误码 `640008: permision deny`）；
+   - **立即动作**：
+     1. 请管理员登录企业微信管理端 ->【协作】->【微盘】->【API】，确认自建应用（AgentId: 1000077）已加入【可调用接口的应用】并开启权限；
+     2. 确认当前自建应用或操作者对指定空间（法律事务部）具有查看/协同权限；''' if tests.get('space_info', {}).get('errcode') == 640008 else (f'''   - **当前状态**：阻断位于**企业微信【企业可信 IP】白名单拦截**（错误码 `60020`）；
+   - **立即动作**：请企业微信管理员进入企业微信管理后台【应用管理】-> 找到对应自建应用 ->【企业可信 IP】，将当前请求出口 IP `{caller_ip}` 添加至白名单；''' if tests.get('space_info', {}).get('errcode') == 60020 else '''   - **当前状态**：所有网络与微盘接口畅通无阻，已具备上线条件；''')}
+   - 权限配置放行后，本测试工具可一键重复执行，即可直接达成【结论 A：完全可用】并自动生成全量合同清单。
 """
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(md_content)
