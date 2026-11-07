@@ -380,7 +380,7 @@ class PgVectorStorage:
                                 c["original_text"],
                                 c.get("normalized_summary", ""),
                                 bool(c.get("is_company_standard")),
-                                c.get("approval_status", "PENDING_REVIEW"),
+                                "PENDING_REVIEW",
                                 json.dumps(
                                     c.get("source_node_ids", []), ensure_ascii=False
                                 ),
@@ -588,6 +588,31 @@ class PgVectorStorage:
                 self._rollback()
                 raise
 
+
+    def authorized_bulk_import_approved(
+        self,
+        doc: dict,
+        tenant: str | None = None,
+        *,
+        approver_id: str,
+        approval_reason: str,
+    ) -> tuple[str, bool]:
+        """独立授权迁移命令 (PostgreSQL)：批量导入既有法务已批准标准模板，验证审批身份并写入正式审批记录。"""
+        if not approver_id or not approver_id.strip():
+            raise ValueError("授权导入必须指定合法 approver_id")
+        if not approval_reason or not approval_reason.strip():
+            raise ValueError("授权导入必须说明审批理由 approval_reason")
+        effective_tenant = tenant if tenant is not None else "default"
+        did, is_new = self.upsert_document(doc, tenant=effective_tenant)
+        self.approve_knowledge_version(
+            tenant_id=effective_tenant,
+            document_id=did,
+            approver_id=approver_id,
+            approval_action="AUTHORIZE_HISTORICAL_IMPORT",
+            approval_reason=approval_reason,
+        )
+        return did, is_new
+
     def approve_knowledge_version(
         self,
         tenant_id: str,
@@ -598,7 +623,7 @@ class PgVectorStorage:
         clause_ids: list[str] | None = None,
         expected_revision: int | None = None,
     ) -> dict[str, Any]:
-        """统一知识审批写入口 (PostgreSQL)：具备租户隔离、乐观校验和审计留痕。"""
+        """统一知识审批写入口 (PostgreSQL)：具备租户隔离、CAS 乐观锁校验和审计留痕。"""
         with self._lock:
             try:
                 doc = self.get_document(document_id, tenant_id=tenant_id)
@@ -611,14 +636,36 @@ class PgVectorStorage:
                         f"仅 ACTIVE 状态文档允许审批知识版本，当前状态：{doc.get('status')}"
                     )
 
+                current_rev = int(doc.get("revision") or 1)
+                if expected_revision is not None and int(expected_revision) != current_rev:
+                    raise OptimisticLockConflictError(
+                        f"知识版本审批冲突：预期 revision={expected_revision}，当前数据库 revision={current_rev}"
+                    )
+
                 with self.conn.cursor() as cur:
-                    params: list[Any] = [document_id]
+                    if expected_revision is not None:
+                        cur.execute(
+                            "UPDATE documents SET revision = revision + 1 WHERE document_id=%s AND tenant_id=%s AND revision=%s",
+                            (document_id, tenant_id, current_rev),
+                        )
+                        if cur.rowcount == 0:
+                            raise OptimisticLockConflictError(
+                                f"并发更新冲突：文档 {document_id} revision 已被修改"
+                            )
+                    else:
+                        cur.execute(
+                            "UPDATE documents SET revision = revision + 1 WHERE document_id=%s AND tenant_id=%s",
+                            (document_id, tenant_id),
+                        )
+                    new_revision = current_rev + 1
+
+                    params: list[Any] = [new_revision, document_id]
                     extra = ""
                     if clause_ids:
                         extra = " AND clause_id = ANY(%s)"
                         params.append(clause_ids)
                     cur.execute(
-                        f"UPDATE clauses SET approval_status='APPROVED' WHERE document_id=%s{extra}",
+                        f"UPDATE clauses SET approval_status='APPROVED', revision=%s WHERE document_id=%s{extra}",
                         params,
                     )
                     affected = cur.rowcount
@@ -644,30 +691,38 @@ class PgVectorStorage:
                             "action": approval_action,
                             "reason": approval_reason,
                             "affected_clauses": affected,
+                            "revision": new_revision,
                             "timestamp": now_ts,
                         },
                         ensure_ascii=False,
                     )
                     cur.execute(
-                        "INSERT INTO audit_log (actor, action, target, detail) VALUES (%s,%s,%s,%s)",
-                        (approver_id, "approve_knowledge_version", document_id, detail),
+                        "INSERT INTO audit_log (at, actor, action, target, detail) VALUES (%s,%s,%s,%s,%s)",
+                        (
+                            now_ts,
+                            approver_id,
+                            "approve_knowledge_version",
+                            document_id,
+                            detail,
+                        ),
                     )
                     cur.execute(
                         """
                         INSERT INTO knowledge_approval_records (
                             tenant_id, knowledge_id, knowledge_type, version, approver_id,
                             approval_action, approval_reason, clause_ids, created_at
-                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,now())
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,to_timestamp(%s))
                         """,
                         (
                             tenant_id,
                             document_id,
                             doc.get("document_type", "TEMPLATE"),
-                            doc.get("source_version", "v1"),
+                            f"rev_{new_revision}",
                             approver_id,
                             approval_action,
                             approval_reason,
                             json.dumps(clause_ids or []),
+                            now_ts,
                         ),
                     )
                 self._commit()
@@ -677,6 +732,7 @@ class PgVectorStorage:
                     "approved_count": affected,
                     "approver_id": approver_id,
                     "status": "APPROVED",
+                    "revision": new_revision,
                 }
             except Exception:
                 self._rollback()
@@ -689,8 +745,9 @@ class PgVectorStorage:
         revoker_id: str,
         revoke_reason: str = "",
         clause_ids: list[str] | None = None,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
-        """统一撤销知识审批 (PostgreSQL)：撤销后立即丧失权威依据资格。"""
+        """统一撤销知识审批 (PostgreSQL)：撤销后立即丧失权威依据资格，支持 CAS 并发校验。"""
         with self._lock:
             try:
                 doc = self.get_document(document_id, tenant_id=tenant_id)
@@ -699,14 +756,36 @@ class PgVectorStorage:
                         f"文档不存在或跨租户未授权：{document_id} (tenant={tenant_id})"
                     )
 
+                current_rev = int(doc.get("revision") or 1)
+                if expected_revision is not None and int(expected_revision) != current_rev:
+                    raise OptimisticLockConflictError(
+                        f"知识版本撤销冲突：预期 revision={expected_revision}，当前数据库 revision={current_rev}"
+                    )
+
                 with self.conn.cursor() as cur:
-                    params: list[Any] = [document_id]
+                    if expected_revision is not None:
+                        cur.execute(
+                            "UPDATE documents SET revision = revision + 1 WHERE document_id=%s AND tenant_id=%s AND revision=%s",
+                            (document_id, tenant_id, current_rev),
+                        )
+                        if cur.rowcount == 0:
+                            raise OptimisticLockConflictError(
+                                f"并发更新冲突：文档 {document_id} revision 已被修改"
+                            )
+                    else:
+                        cur.execute(
+                            "UPDATE documents SET revision = revision + 1 WHERE document_id=%s AND tenant_id=%s",
+                            (document_id, tenant_id),
+                        )
+                    new_revision = current_rev + 1
+
+                    params: list[Any] = [new_revision, document_id]
                     extra = ""
                     if clause_ids:
                         extra = " AND clause_id = ANY(%s)"
                         params.append(clause_ids)
                     cur.execute(
-                        f"UPDATE clauses SET approval_status='REVOKED' WHERE document_id=%s{extra}",
+                        f"UPDATE clauses SET approval_status='REVOKED', revision=%s WHERE document_id=%s{extra}",
                         params,
                     )
                     affected = cur.rowcount
@@ -732,30 +811,38 @@ class PgVectorStorage:
                             "action": "REVOKE",
                             "reason": revoke_reason,
                             "affected_clauses": affected,
+                            "revision": new_revision,
                             "timestamp": now_ts,
                         },
                         ensure_ascii=False,
                     )
                     cur.execute(
-                        "INSERT INTO audit_log (actor, action, target, detail) VALUES (%s,%s,%s,%s)",
-                        (revoker_id, "revoke_knowledge_version", document_id, detail),
+                        "INSERT INTO audit_log (at, actor, action, target, detail) VALUES (%s,%s,%s,%s,%s)",
+                        (
+                            now_ts,
+                            revoker_id,
+                            "revoke_knowledge_version",
+                            document_id,
+                            detail,
+                        ),
                     )
                     cur.execute(
                         """
                         INSERT INTO knowledge_approval_records (
                             tenant_id, knowledge_id, knowledge_type, version, approver_id,
                             approval_action, approval_reason, clause_ids, created_at
-                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,now())
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,to_timestamp(%s))
                         """,
                         (
                             tenant_id,
                             document_id,
                             doc.get("document_type", "TEMPLATE"),
-                            doc.get("source_version", "v1"),
+                            f"rev_{new_revision}",
                             revoker_id,
                             "REVOKE",
                             revoke_reason,
                             json.dumps(clause_ids or []),
+                            now_ts,
                         ),
                     )
                 self._commit()
@@ -765,6 +852,7 @@ class PgVectorStorage:
                     "revoked_count": affected,
                     "revoker_id": revoker_id,
                     "status": "REVOKED",
+                    "revision": new_revision,
                 }
             except Exception:
                 self._rollback()

@@ -29,10 +29,15 @@ from .application.security.idempotency import IdempotencyOutcome, RequestIdentit
 from .domain.models.execution import JobLease, JobOutcome
 from .embeddings import EmbeddingProvider, get_embedding_provider
 from .infrastructure.observability.redaction import redact_sensitive_text
-from .storage_errors import EmbeddingConfigMismatch, StorageConfigError
+from .storage_errors import (
+    EmbeddingConfigMismatch,
+    OptimisticLockConflictError,
+    StorageConfigError,
+)
 
 __all__ = [
     "EmbeddingConfigMismatch",
+    "OptimisticLockConflictError",
     "StorageConfigError",
     "Storage",
     "create_storage",
@@ -44,6 +49,7 @@ CREATE TABLE IF NOT EXISTS documents (
     source_file TEXT, source_hash TEXT, source_version TEXT,
     tenant_id TEXT NOT NULL DEFAULT 'default', business_category TEXT, contract_subtype TEXT,
     document_type TEXT, imported_at REAL, status TEXT, raw_meta TEXT,
+    revision INTEGER NOT NULL DEFAULT 1,
     UNIQUE (tenant_id, source_hash)
 );
 CREATE TABLE IF NOT EXISTS nodes (
@@ -57,7 +63,8 @@ CREATE TABLE IF NOT EXISTS clauses (
     clause_category TEXT, clause_subcategory TEXT,
     original_text TEXT, normalized_summary TEXT,
     is_company_standard INTEGER, approval_status TEXT,
-    source_node_ids TEXT, knowledge_type TEXT, effective_time TEXT
+    source_node_ids TEXT, knowledge_type TEXT, effective_time TEXT,
+    revision INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS fields (
     field_key TEXT, document_id TEXT, field_name TEXT, data_type TEXT,
@@ -421,6 +428,13 @@ class Storage:
                 "ALTER TABLE rules ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'"
             )
 
+        doc_cols = self._table_cols("documents")
+        if "revision" not in doc_cols:
+            self.conn.execute("ALTER TABLE documents ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
+        clause_cols = self._table_cols("clauses")
+        if "revision" not in clause_cols:
+            self.conn.execute("ALTER TABLE clauses ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
+
         fmt_cols = self._table_cols("format_standards")
         if "tenant_id" not in fmt_cols:
             self.conn.execute(
@@ -617,26 +631,24 @@ class Storage:
                     # 严格知识治理：导入绝不自动提升审批状态！
                     # 未指定审批状态时统一默认为 PENDING_REVIEW；
                     # 文档是否 ACTIVE、是否为模板、is_company_standard=True 均不代表法务已完成审批！
-                    raw_appr = c.get("approval_status")
-                    if raw_appr and str(raw_appr).strip().upper() in (
-                        "PENDING_REVIEW",
-                        "APPROVED",
-                        "REJECTED",
-                        "REVOKED",
-                    ):
-                        clause_appr = str(raw_appr).strip().upper()
-                    else:
-                        clause_appr = "PENDING_REVIEW"
+                    # 严格知识治理：普通数据导入绝不自动提升审批状态！
+                    # 数据导入仅产生知识候选，不授予知识权威；无论外部传入何种参数，普通导入一律强制置为 PENDING_REVIEW。
+                    clause_appr = "PENDING_REVIEW"
 
                     is_template_doc = doc.get("document_type") == "contract_template"
                     clause_ktype = c.get("knowledge_type") or (
                         "TEMPLATE" if is_template_doc else "HISTORICAL_CASE"
                     )
                     self.conn.execute(
-                        "INSERT OR REPLACE INTO clauses (clause_id, document_id, clause_number, "
+                        "INSERT INTO clauses (clause_id, document_id, clause_number, "
                         "clause_category, clause_subcategory, original_text, normalized_summary, "
                         "is_company_standard, approval_status, source_node_ids, knowledge_type, "
-                        "effective_time) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "effective_time, revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1) "
+                        "ON CONFLICT(clause_id) DO UPDATE SET "
+                        "document_id=excluded.document_id, clause_number=excluded.clause_number, "
+                        "clause_category=excluded.clause_category, clause_subcategory=excluded.clause_subcategory, "
+                        "original_text=excluded.original_text, normalized_summary=excluded.normalized_summary, "
+                        "source_node_ids=excluded.source_node_ids, effective_time=excluded.effective_time",
                         (
                             cid,
                             did,
@@ -876,6 +888,31 @@ class Storage:
             self._commit()
             return cur.rowcount > 0
 
+
+    def authorized_bulk_import_approved(
+        self,
+        doc: dict,
+        tenant: str | None = None,
+        *,
+        approver_id: str,
+        approval_reason: str,
+    ) -> tuple[str, bool]:
+        """独立授权迁移命令：批量导入既有法务已批准标准模板，验证审批身份并写入正式审批记录。"""
+        if not approver_id or not approver_id.strip():
+            raise ValueError("授权导入必须指定合法 approver_id")
+        if not approval_reason or not approval_reason.strip():
+            raise ValueError("授权导入必须说明审批理由 approval_reason")
+        effective_tenant = tenant if tenant is not None else config.TENANT_ID
+        did, is_new = self.upsert_document(doc, tenant=effective_tenant)
+        self.approve_knowledge_version(
+            tenant_id=effective_tenant,
+            document_id=did,
+            approver_id=approver_id,
+            approval_action="AUTHORIZE_HISTORICAL_IMPORT",
+            approval_reason=approval_reason,
+        )
+        return did, is_new
+
     def approve_knowledge_version(
         self,
         tenant_id: str,
@@ -886,7 +923,7 @@ class Storage:
         clause_ids: list[str] | None = None,
         expected_revision: int | None = None,
     ) -> dict[str, Any]:
-        """统一知识审批写入口：具备租户约束、幂等、状态校验和审计追踪。"""
+        """统一知识审批写入口：具备租户约束、CAS 乐观锁校验、幂等和审计追踪。"""
         with self._lock:
             doc = self.get_document(document_id, tenant_id=tenant_id)
             if not doc:
@@ -898,7 +935,29 @@ class Storage:
                     f"仅 ACTIVE 状态文档允许审批知识版本，当前状态：{doc.get('status')}"
                 )
 
-            params: list[Any] = [document_id]
+            current_rev = int(doc.get("revision") or 1)
+            if expected_revision is not None and int(expected_revision) != current_rev:
+                raise OptimisticLockConflictError(
+                    f"知识版本审批冲突：预期 revision={expected_revision}，当前数据库 revision={current_rev}"
+                )
+
+            if expected_revision is not None:
+                cur = self.conn.execute(
+                    "UPDATE documents SET revision = revision + 1 WHERE document_id=? AND tenant_id=? AND revision=?",
+                    (document_id, tenant_id, current_rev),
+                )
+                if cur.rowcount == 0:
+                    raise OptimisticLockConflictError(
+                        f"并发更新冲突：文档 {document_id} revision 已被修改"
+                    )
+            else:
+                self.conn.execute(
+                    "UPDATE documents SET revision = revision + 1 WHERE document_id=? AND tenant_id=?",
+                    (document_id, tenant_id),
+                )
+            new_revision = current_rev + 1
+
+            params: list[Any] = [new_revision, document_id]
             extra_clause = ""
             if clause_ids:
                 placeholders = ",".join("?" for _ in clause_ids)
@@ -906,7 +965,7 @@ class Storage:
                 params.extend(clause_ids)
 
             cur = self.conn.execute(
-                f"UPDATE clauses SET approval_status='APPROVED' WHERE document_id=?{extra_clause}",
+                f"UPDATE clauses SET approval_status='APPROVED', revision=? WHERE document_id=?{extra_clause}",
                 params,
             )
             affected = cur.rowcount
@@ -915,7 +974,7 @@ class Storage:
             emb_params: list[Any] = [document_id]
             emb_extra = ""
             if clause_ids:
-                emb_extra = f" AND clause_id IN ({','.join('?' for _ in clause_ids)})"
+                emb_extra = f" AND clause_id IN ({",".join("?" for _ in clause_ids)})"
                 emb_params.extend(clause_ids)
             self.conn.execute(
                 f"UPDATE embeddings SET approved_status='APPROVED' WHERE document_id=?{emb_extra}",
@@ -931,6 +990,7 @@ class Storage:
                     "action": approval_action,
                     "reason": approval_reason,
                     "affected_clauses": affected,
+                    "revision": new_revision,
                     "timestamp": now_ts,
                 },
                 ensure_ascii=False,
@@ -950,7 +1010,7 @@ class Storage:
                     tenant_id,
                     document_id,
                     doc.get("document_type", "TEMPLATE"),
-                    doc.get("source_version", "v1"),
+                    f"rev_{new_revision}",
                     approver_id,
                     approval_action,
                     approval_reason,
@@ -965,6 +1025,7 @@ class Storage:
                 "approved_count": affected,
                 "approver_id": approver_id,
                 "status": "APPROVED",
+                "revision": new_revision,
             }
 
     def revoke_knowledge_version(
@@ -974,8 +1035,9 @@ class Storage:
         revoker_id: str,
         revoke_reason: str = "",
         clause_ids: list[str] | None = None,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
-        """统一撤销知识审批：撤销后立即丧失权威依据资格。"""
+        """统一撤销知识审批：撤销后立即丧失权威依据资格，支持 CAS 并发校验。"""
         with self._lock:
             doc = self.get_document(document_id, tenant_id=tenant_id)
             if not doc:
@@ -983,7 +1045,29 @@ class Storage:
                     f"文档不存在或跨租户未授权：{document_id} (tenant={tenant_id})"
                 )
 
-            params: list[Any] = [document_id]
+            current_rev = int(doc.get("revision") or 1)
+            if expected_revision is not None and int(expected_revision) != current_rev:
+                raise OptimisticLockConflictError(
+                    f"知识版本撤销冲突：预期 revision={expected_revision}，当前数据库 revision={current_rev}"
+                )
+
+            if expected_revision is not None:
+                cur = self.conn.execute(
+                    "UPDATE documents SET revision = revision + 1 WHERE document_id=? AND tenant_id=? AND revision=?",
+                    (document_id, tenant_id, current_rev),
+                )
+                if cur.rowcount == 0:
+                    raise OptimisticLockConflictError(
+                        f"并发更新冲突：文档 {document_id} revision 已被修改"
+                    )
+            else:
+                self.conn.execute(
+                    "UPDATE documents SET revision = revision + 1 WHERE document_id=? AND tenant_id=?",
+                    (document_id, tenant_id),
+                )
+            new_revision = current_rev + 1
+
+            params: list[Any] = [new_revision, document_id]
             extra_clause = ""
             if clause_ids:
                 placeholders = ",".join("?" for _ in clause_ids)
@@ -991,7 +1075,7 @@ class Storage:
                 params.extend(clause_ids)
 
             cur = self.conn.execute(
-                f"UPDATE clauses SET approval_status='REVOKED' WHERE document_id=?{extra_clause}",
+                f"UPDATE clauses SET approval_status='REVOKED', revision=? WHERE document_id=?{extra_clause}",
                 params,
             )
             affected = cur.rowcount
@@ -999,7 +1083,7 @@ class Storage:
             emb_params: list[Any] = [document_id]
             emb_extra = ""
             if clause_ids:
-                emb_extra = f" AND clause_id IN ({','.join('?' for _ in clause_ids)})"
+                emb_extra = f" AND clause_id IN ({",".join("?" for _ in clause_ids)})"
                 emb_params.extend(clause_ids)
             self.conn.execute(
                 f"UPDATE embeddings SET approved_status='REVOKED' WHERE document_id=?{emb_extra}",
@@ -1015,6 +1099,7 @@ class Storage:
                     "action": "REVOKE",
                     "reason": revoke_reason,
                     "affected_clauses": affected,
+                    "revision": new_revision,
                     "timestamp": now_ts,
                 },
                 ensure_ascii=False,
@@ -1034,7 +1119,7 @@ class Storage:
                     tenant_id,
                     document_id,
                     doc.get("document_type", "TEMPLATE"),
-                    doc.get("source_version", "v1"),
+                    f"rev_{new_revision}",
                     revoker_id,
                     "REVOKE",
                     revoke_reason,
@@ -1049,6 +1134,7 @@ class Storage:
                 "revoked_count": affected,
                 "revoker_id": revoker_id,
                 "status": "REVOKED",
+                "revision": new_revision,
             }
 
     def find_active_template(

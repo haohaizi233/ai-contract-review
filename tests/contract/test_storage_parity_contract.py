@@ -109,6 +109,7 @@ def test_sqlite_storage_non_active_document_blocked():
                 ],
             }
             did, _ = st.upsert_document(doc, tenant="t1")
+            st.approve_knowledge_version(tenant_id="t1", document_id=did, approver_id="legal_admin", approval_reason="正式审批")
             hits1 = st.search("签字盖章", approved_only=True, tenant_id="t1")
             assert len(hits1) == 1
 

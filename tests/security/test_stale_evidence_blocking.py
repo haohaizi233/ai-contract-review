@@ -64,7 +64,7 @@ def test_stale_and_unapproved_evidence_blocking(tmp_path: Path):
     )
 
     # 3. 录入一份正式生效的现行标准
-    st.upsert_document(
+    did_active, _ = st.upsert_document(
         {
             "template_id": "doc_active_approved",
             "source_file": "现行正式技术标准.docx",
@@ -86,6 +86,7 @@ def test_stale_and_unapproved_evidence_blocking(tmp_path: Path):
         }
     )
 
+    st.approve_knowledge_version(tenant_id="default", document_id=did_active, approver_id="legal_admin", approval_reason="正式审批现行有效标准")
     svc = GovernedRetrievalService(st)
 
     # 4. 执行权威检索，要求仅能召回现行已审批标准

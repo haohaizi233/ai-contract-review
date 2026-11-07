@@ -10,3 +10,7 @@ class EmbeddingConfigMismatch(RuntimeError):
 
 class StorageConfigError(RuntimeError):
     """存储后端配置缺失或非法异常（fail-closed，禁止静默回退到 SQLite）。"""
+
+
+class OptimisticLockConflictError(RuntimeError):
+    """知识版本或审批状态并发冲突异常 (CAS Mismatch)。"""
