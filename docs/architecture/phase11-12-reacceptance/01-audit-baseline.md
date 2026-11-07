@@ -43,7 +43,12 @@
   在 `contract_kb/storage.py` 中：
   ```python
   raw_appr = c.get("approval_status")
-  if raw_appr and str(raw_appr).strip().upper() in ("PENDING_REVIEW", "APPROVED", "REJECTED", "REVOKED"):
+  if raw_appr and str(raw_appr).strip().upper() in (
+      "PENDING_REVIEW",
+      "APPROVED",
+      "REJECTED",
+      "REVOKED",
+  ):
       clause_appr = str(raw_appr).strip().upper()
   ```
   外部数据导入若携带 `approval_status="APPROVED"`，该条款将直接以 `APPROVED` 状态落库入库，跳过所有法务审核流程。在 PostgreSQL 实现中同样存在该漏洞。
@@ -76,7 +81,9 @@
   `CitationVerifier.verify_retrieval_hits()` 中：
   ```python
   doc_status = str(row_dict.get("doc_status") or "ACTIVE").upper()
-  ktype = str(row_dict.get("knowledge_type") or h.get("knowledge_type") or "TEMPLATE").upper()
+  ktype = str(
+      row_dict.get("knowledge_type") or h.get("knowledge_type") or "TEMPLATE"
+  ).upper()
   ```
   若数据库行或 hit 缺失对应字段，直接补成 `ACTIVE` 和 `TEMPLATE`。此外，未对 `document_id`、`source_hash`、`source_version` 与原始审批凭证进行强一致性校验。
 - **预期行为**：

@@ -15,7 +15,9 @@
   原 `CitationVerifier.verify_retrieval_hits` 在获取文档状态与知识类型时，存在以下默认放行：
   ```python
   doc_status = str(row_dict.get("doc_status") or "ACTIVE").upper()
-  ktype = str(row_dict.get("knowledge_type") or h.get("knowledge_type") or "TEMPLATE").upper()
+  ktype = str(
+      row_dict.get("knowledge_type") or h.get("knowledge_type") or "TEMPLATE"
+  ).upper()
   ```
   缺失对 `tenant_id` 严格校验，缺失对 `document_id` 强锚定，未校验 `source_hash` 防篡改哈希，未核验知识版本（`source_version`），且在未指定租户时易导致跨租户数据穿透。
 - **加固策略（Strict Fail-Closed）**：
