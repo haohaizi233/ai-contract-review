@@ -20,6 +20,7 @@ import json
 import re
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,7 @@ class PgVectorStorage:
 
         self._psycopg2 = psycopg2
         self._lock = threading.RLock()
+        self._tx_depth = 0
         self.dsn = dsn
         self.conn = psycopg2.connect(dsn)
         self.conn.autocommit = False
@@ -74,6 +76,43 @@ class PgVectorStorage:
                 raise
             self.rebuild_index()
 
+    def _commit(self) -> None:
+        if self._tx_depth == 0:
+            self.conn.commit()
+
+    def _rollback(self) -> None:
+        if self._tx_depth == 0:
+            self.conn.rollback()
+
+    def _savepoint_begin(self, sp_name: str) -> None:
+        self._lock.acquire()
+        self._tx_depth += 1
+        with self.conn.cursor() as cur:
+            cur.execute(f"SAVEPOINT {sp_name}")
+
+    def _savepoint_commit(self, sp_name: str) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(f"RELEASE SAVEPOINT {sp_name}")
+        if self._tx_depth <= 1:
+            self.conn.commit()
+
+    def _savepoint_rollback(self, sp_name: str) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(f"ROLLBACK TO SAVEPOINT {sp_name}")
+            cur.execute(f"RELEASE SAVEPOINT {sp_name}")
+        if self._tx_depth <= 1:
+            self.conn.rollback()
+
+    def _savepoint_exit(self) -> None:
+        self._tx_depth = max(0, self._tx_depth - 1)
+        self._lock.release()
+
+    def unit_of_work(self) -> Any:
+        """创建支持嵌套 SAVEPOINT 的原子工作单元。"""
+        from .infrastructure.persistence.uow import PostgresUnitOfWork
+
+        return PostgresUnitOfWork(self)
+
     def _table_cols(self, table: str) -> set[str]:
         if table not in self._col_cache:
             with self.conn.cursor() as cur:
@@ -94,10 +133,55 @@ class PgVectorStorage:
                     sql = f.read_text(encoding="utf-8")
                     with self.conn.cursor() as cur:
                         cur.execute(sql)
-                self.conn.commit()
+                self._commit()
                 self._col_cache.clear()
             except Exception:
-                self.conn.rollback()
+                self._rollback()
+                raise
+
+    def migrate_relational(self, schema: str | None = None) -> None:
+        """在未安装 pgvector 扩展的 PostgreSQL 实例上执行全部关系型表迁移（跳过 vector 列与索引）。"""
+        if schema is not None and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", schema):
+            raise ValueError(f"非法 schema 标识符：{schema!r}")
+        import pglast
+
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    if schema:
+                        cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+                        cur.execute(f"SET search_path TO {schema}, public")
+                    cur.execute(
+                        "SELECT name FROM pg_available_extensions WHERE name IN ('vector', 'pg_trgm')"
+                    )
+                    avail_exts = {r[0] for r in cur.fetchall()}
+                    has_vector = "vector" in avail_exts
+
+                    for f in sorted(MIGRATIONS_DIR.glob("*.sql")):
+                        raw_sql = f.read_text(encoding="utf-8")
+                        for stmt in pglast.split(raw_sql):
+                            s = stmt.strip()
+                            if not s:
+                                continue
+                            low = s.lower()
+                            if not has_vector:
+                                if "extension" in low and "vector" in low:
+                                    continue
+                                if "embeddings" in low and (
+                                    "create table" in low or "create index" in low
+                                ):
+                                    continue
+                            if (
+                                "extension" in low
+                                and "pg_trgm" in low
+                                and "pg_trgm" not in avail_exts
+                            ):
+                                continue
+                            cur.execute(s)
+                self._commit()
+                self._col_cache.clear()
+            except Exception:
+                self._rollback()
                 raise
 
     def _check_embedding_compat(self) -> None:
@@ -127,9 +211,9 @@ class PgVectorStorage:
                             "WHERE status='ACTIVE' ORDER BY version DESC LIMIT 1"
                         )
                         meta = cur.fetchone()
-                self.conn.commit()
+                self._commit()
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
 
         if col_dim is not None and col_dim != int(self.emb.dim):
@@ -184,7 +268,7 @@ class PgVectorStorage:
             cur.execute("SELECT MAX(version) FROM embedding_index_meta")
             v = cur.fetchone()[0]
         if commit:
-            self.conn.commit()
+            self._commit()
         return int(v)
 
     def get_index_version(self) -> dict | None:
@@ -196,7 +280,7 @@ class PgVectorStorage:
                     "ORDER BY version DESC LIMIT 1"
                 )
                 row = cur.fetchone()
-            self.conn.commit()
+            self._commit()
             if not row:
                 return None
             return {
@@ -230,7 +314,7 @@ class PgVectorStorage:
                         )
                     row = cur.fetchone()
                     if row:
-                        self.conn.commit()
+                        self._commit()
                         return row[0], False
 
                     base_did = doc["template_id"]
@@ -302,10 +386,10 @@ class PgVectorStorage:
                         )
                 self._index_clauses(did, commit=False)
                 self._ensure_index_meta(commit=False)
-                self.conn.commit()
+                self._commit()
                 return did, True
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
 
     def _index_clauses(self, document_id: str, commit: bool = True) -> None:
@@ -354,7 +438,7 @@ class PgVectorStorage:
                     ),
                 )
         if commit:
-            self.conn.commit()
+            self._commit()
 
     def rebuild_index(self) -> int:
         with self._lock:
@@ -370,10 +454,10 @@ class PgVectorStorage:
                     for did in ids:
                         self._index_clauses(did, commit=False)
                 ver = self._bump_index_version(commit=False)
-                self.conn.commit()
+                self._commit()
                 return ver
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
 
     def delete_document(self, document_id: str) -> None:
@@ -388,10 +472,10 @@ class PgVectorStorage:
                         " VALUES ('system','delete_document',%s,'')",
                         (document_id,),
                     )
-                self.conn.commit()
+                self._commit()
                 self.rebuild_index()
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
 
     def rollback_to_version(self, document_id: str, source_hash: str) -> bool:
@@ -404,7 +488,7 @@ class PgVectorStorage:
                     )
                     row = cur.fetchone()
                     if not row:
-                        self.conn.commit()
+                        self._commit()
                         return False
                     cur.execute(
                         "UPDATE documents SET status='ACTIVE' WHERE source_hash=%s",
@@ -415,11 +499,11 @@ class PgVectorStorage:
                         "WHERE source_file=%s AND source_hash<>%s AND tenant_id=%s",
                         (row[0], source_hash, row[1]),
                     )
-                self.conn.commit()
+                self._commit()
                 self.rebuild_index()
                 return True
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
 
     def log_audit(self, actor: str, action: str, target: str, detail: str = "") -> None:
@@ -430,9 +514,9 @@ class PgVectorStorage:
                         "INSERT INTO audit_log (actor, action, target, detail) VALUES (%s,%s,%s,%s)",
                         (actor, action, target, detail),
                     )
-                self.conn.commit()
+                self._commit()
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
 
     # ---------- 文档/条款仓储查询方法 ----------
@@ -449,7 +533,7 @@ class PgVectorStorage:
                 cur.execute(sql, params)
                 row = cur.fetchone()
                 cols = [d[0] for d in cur.description] if cur.description else []
-            self.conn.commit()
+            self._commit()
             return dict(zip(cols, row)) if row else None
 
     def find_document_by_hash(
@@ -465,7 +549,7 @@ class PgVectorStorage:
                 cur.execute(sql, params)
                 row = cur.fetchone()
                 cols = [d[0] for d in cur.description] if cur.description else []
-            self.conn.commit()
+            self._commit()
             return dict(zip(cols, row)) if row else None
 
     def list_active_document_hashes(
@@ -480,7 +564,7 @@ class PgVectorStorage:
             with self.conn.cursor() as cur:
                 cur.execute(sql, params)
                 rows = cur.fetchall()
-            self.conn.commit()
+            self._commit()
             return {r[0]: r[1] for r in rows if r[0]}
 
     def set_document_status(
@@ -496,10 +580,10 @@ class PgVectorStorage:
                 with self.conn.cursor() as cur:
                     cur.execute(sql, params)
                     updated = cur.rowcount
-                self.conn.commit()
+                self._commit()
                 return bool(updated)
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
 
     def find_active_template(
@@ -525,7 +609,7 @@ class PgVectorStorage:
                     row = cur.fetchone()
                     if row:
                         cols = [d[0] for d in cur.description]
-                        self.conn.commit()
+                        self._commit()
                         return dict(zip(cols, row))
                 if business_category:
                     sql = (
@@ -542,9 +626,9 @@ class PgVectorStorage:
                     row = cur.fetchone()
                     if row:
                         cols = [d[0] for d in cur.description]
-                        self.conn.commit()
+                        self._commit()
                         return dict(zip(cols, row))
-            self.conn.commit()
+            self._commit()
             return None
 
     def get_document_clauses(
@@ -574,7 +658,7 @@ class PgVectorStorage:
                 cur.execute(sql, params)
                 rows = cur.fetchall()
                 cols = [d[0] for d in cur.description]
-            self.conn.commit()
+            self._commit()
             out = []
             for r in rows:
                 d = dict(zip(cols, r))
@@ -592,7 +676,7 @@ class PgVectorStorage:
                 cur.execute("SELECT * FROM clauses WHERE clause_id=%s", (clause_id,))
                 row = cur.fetchone()
                 cols = [d[0] for d in cur.description] if cur.description else []
-            self.conn.commit()
+            self._commit()
             return dict(zip(cols, row)) if row else None
 
     def record_rule_execution(
@@ -637,9 +721,9 @@ class PgVectorStorage:
                             ts,
                         ),
                     )
-                self.conn.commit()
+                self._commit()
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
 
     def list_rule_executions(
@@ -657,7 +741,7 @@ class PgVectorStorage:
                 cur.execute(sql, params)
                 rows = cur.fetchall()
                 cols = [d[0] for d in cur.description]
-            self.conn.commit()
+            self._commit()
             out = []
             for r in rows:
                 d = dict(zip(cols, r))
@@ -670,6 +754,9 @@ class PgVectorStorage:
             return out
 
     # ---------- 混合检索（FTS + 向量 + RRF + Rerank） ----------
+    def _has_embeddings_table(self) -> bool:
+        return bool(self._table_cols("embeddings"))
+
     def search(
         self,
         query: str,
@@ -684,26 +771,36 @@ class PgVectorStorage:
         tenant_id: str | None = None,
     ) -> list[dict]:
         with self._lock:
-            fts = self._fts_search(
-                keyword or query,
-                top_k * 3,
-                business_category,
-                contract_subtype,
-                clause_number,
-                knowledge_type,
-                approved_only,
-                tenant_id,
-            )
-            vec = self._vector_search(
-                query,
-                top_k * 3,
-                business_category,
-                contract_subtype,
-                knowledge_type,
-                approved_only,
-                tenant_id,
-            )
-            self.conn.commit()
+            try:
+                has_emb = self._has_embeddings_table()
+                fts = self._fts_search(
+                    keyword or query,
+                    top_k * 3,
+                    business_category,
+                    contract_subtype,
+                    clause_number,
+                    knowledge_type,
+                    approved_only,
+                    tenant_id,
+                    use_embeddings_table=has_emb,
+                )
+                vec = (
+                    self._vector_search(
+                        query,
+                        top_k * 3,
+                        business_category,
+                        contract_subtype,
+                        knowledge_type,
+                        approved_only,
+                        tenant_id,
+                    )
+                    if has_emb
+                    else []
+                )
+                self._commit()
+            except Exception:
+                self._rollback()
+                raise
             fused = self._rrf(fts, vec)
             if clause_number:
                 fused = [h for h in fused if h.get("clause_number") == clause_number]
@@ -748,6 +845,7 @@ class PgVectorStorage:
         knowledge_type: str | None,
         approved_only: bool,
         tenant_id: str | None,
+        use_embeddings_table: bool = True,
     ) -> list[dict]:
         words = [w for w in re.findall(r"[\u4e00-\u9fff]{2,}|[a-zA-Z0-9]+", query)][:8]
         for w in list(words):
@@ -757,31 +855,57 @@ class PgVectorStorage:
         if not words:
             return []
         match = " | ".join(words)
-        where, params = self._where(
-            business_category,
-            contract_subtype,
-            knowledge_type,
-            approved_only,
-            tenant_id,
-        )
         extra, eparams = "", []
         if clause_number:
             extra = " AND c.clause_number=%s"
             eparams.append(clause_number)
-        with self.conn.cursor() as cur:
-            cur.execute(
-                "SELECT c.clause_id, c.document_id, c.original_text, c.clause_number,"
-                " c.clause_category, e.chunk_id, e.business_category, e.contract_subtype,"
-                " e.knowledge_type, e.approved_status FROM clauses c "
-                "JOIN embeddings e ON e.clause_id=c.clause_id "
-                "JOIN documents d ON d.document_id=c.document_id "
-                "WHERE to_tsvector('simple', coalesce(c.original_text,'')) @@ to_tsquery('simple', %s)"
-                + where
-                + extra
-                + " LIMIT %s",
-                [match] + params + eparams + [limit],
+        if not use_embeddings_table:
+            d_where = " AND d.status='ACTIVE'"
+            d_params: list[Any] = []
+            if business_category:
+                d_where += " AND d.business_category=%s"
+                d_params.append(business_category)
+            if contract_subtype:
+                d_where += " AND d.contract_subtype=%s"
+                d_params.append(contract_subtype)
+            if tenant_id is not None:
+                d_where += " AND d.tenant_id=%s"
+                d_params.append(tenant_id)
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    "SELECT c.clause_id, c.document_id, c.original_text, c.clause_number,"
+                    " c.clause_category, c.clause_id, d.business_category, d.contract_subtype,"
+                    " 'TEMPLATE', 'APPROVED' FROM clauses c "
+                    "JOIN documents d ON d.document_id=c.document_id "
+                    "WHERE to_tsvector('simple', coalesce(c.original_text,'')) @@ to_tsquery('simple', %s)"
+                    + d_where
+                    + extra
+                    + " LIMIT %s",
+                    [match] + d_params + eparams + [limit],
+                )
+                rows = cur.fetchall()
+        else:
+            where, params = self._where(
+                business_category,
+                contract_subtype,
+                knowledge_type,
+                approved_only,
+                tenant_id,
             )
-            rows = cur.fetchall()
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    "SELECT c.clause_id, c.document_id, c.original_text, c.clause_number,"
+                    " c.clause_category, e.chunk_id, e.business_category, e.contract_subtype,"
+                    " e.knowledge_type, e.approved_status FROM clauses c "
+                    "JOIN embeddings e ON e.clause_id=c.clause_id "
+                    "JOIN documents d ON d.document_id=c.document_id "
+                    "WHERE to_tsvector('simple', coalesce(c.original_text,'')) @@ to_tsquery('simple', %s)"
+                    + where
+                    + extra
+                    + " LIMIT %s",
+                    [match] + params + eparams + [limit],
+                )
+                rows = cur.fetchall()
         return [
             {
                 "chunk_id": r[5],
@@ -897,6 +1021,12 @@ class PgVectorStorage:
         params_obj = (
             rule["parameters"] if "parameters" in rule else rule.get("params", {})
         )
+        eff_raw = rule.get("effective_at")
+        eff_pg = (
+            datetime.fromtimestamp(eff_raw, tz=timezone.utc)
+            if isinstance(eff_raw, (int, float))
+            else eff_raw
+        )
         with self._lock:
             try:
                 with self.conn.cursor() as cur:
@@ -942,7 +1072,7 @@ class PgVectorStorage:
                                 ),
                                 rule.get("status", "DRAFT"),
                                 rule.get("approved_by"),
-                                rule.get("effective_at"),
+                                eff_pg,
                                 resolved_tenant,
                             ),
                         )
@@ -967,13 +1097,13 @@ class PgVectorStorage:
                                 ),
                                 rule.get("status", "DRAFT"),
                                 rule.get("approved_by"),
-                                rule.get("effective_at"),
+                                eff_pg,
                             ),
                         )
-                self.conn.commit()
+                self._commit()
                 return int(version)
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
 
     def approve_rule(
@@ -996,7 +1126,7 @@ class PgVectorStorage:
                         cur.execute(sql_v, p_v)
                         rv = cur.fetchone()
                         if not rv or rv[0] is None:
-                            self.conn.commit()
+                            self._commit()
                             return False
                         version = int(rv[0])
 
@@ -1016,10 +1146,10 @@ class PgVectorStorage:
                             " VALUES (%s,'approve_rule',%s,%s)",
                             (approver, rule_id, f"version={version}"),
                         )
-                self.conn.commit()
+                self._commit()
                 return bool(updated)
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
 
     def get_rules(
@@ -1040,13 +1170,15 @@ class PgVectorStorage:
                 cur.execute(sql, params)
                 cols = [d[0] for d in cur.description]
                 rows = cur.fetchall()
-            self.conn.commit()
+            self._commit()
             out = []
             for r in rows:
                 d = dict(zip(cols, r))
                 for k in ("contract_types", "params", "source_clauses"):
                     if isinstance(d.get(k), str):
                         d[k] = json.loads(d[k])
+                if isinstance(d.get("effective_at"), datetime):
+                    d["effective_at"] = d["effective_at"].timestamp()
                 out.append(d)
             return out
 
@@ -1065,7 +1197,7 @@ class PgVectorStorage:
                 cur.execute(sql, params)
                 cols = [d[0] for d in cur.description]
                 rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-            self.conn.commit()
+            self._commit()
             return rows
 
     def save_task(
@@ -1077,28 +1209,59 @@ class PgVectorStorage:
         meta: dict,
         tenant_id: str = "default",
         created_by: str = "system",
+        idempotency_key: str | None = None,
+        rule_set_version: str | None = None,
+        model_version: str | None = None,
+        reproducibility_hash: str | None = None,
     ) -> None:
+        task_cols = self._table_cols("review_tasks")
         with self._lock:
             try:
                 with self.conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO review_tasks (task_id, document_id, mode, status, meta, tenant_id,"
-                        " created_by) VALUES (%s,%s,%s,%s,%s,%s,%s)"
-                        " ON CONFLICT (task_id) DO UPDATE SET status=EXCLUDED.status,"
-                        " meta=EXCLUDED.meta, updated_at=now()",
-                        (
-                            task_id,
-                            document_id,
-                            mode,
-                            status,
-                            json.dumps(meta, ensure_ascii=False),
-                            tenant_id,
-                            created_by,
-                        ),
-                    )
-                self.conn.commit()
+                    if "idempotency_key" in task_cols:
+                        cur.execute(
+                            "INSERT INTO review_tasks (task_id, document_id, mode, status, meta, tenant_id,"
+                            " created_by, idempotency_key, rule_set_version, model_version, reproducibility_hash)"
+                            " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                            " ON CONFLICT (task_id) DO UPDATE SET status=EXCLUDED.status,"
+                            " meta=EXCLUDED.meta, updated_at=now(),"
+                            " idempotency_key=COALESCE(EXCLUDED.idempotency_key, review_tasks.idempotency_key),"
+                            " rule_set_version=COALESCE(EXCLUDED.rule_set_version, review_tasks.rule_set_version),"
+                            " model_version=COALESCE(EXCLUDED.model_version, review_tasks.model_version),"
+                            " reproducibility_hash=COALESCE(EXCLUDED.reproducibility_hash, review_tasks.reproducibility_hash)",
+                            (
+                                task_id,
+                                document_id,
+                                mode,
+                                status,
+                                json.dumps(meta, ensure_ascii=False),
+                                tenant_id,
+                                created_by,
+                                idempotency_key,
+                                rule_set_version,
+                                model_version,
+                                reproducibility_hash,
+                            ),
+                        )
+                    else:
+                        cur.execute(
+                            "INSERT INTO review_tasks (task_id, document_id, mode, status, meta, tenant_id,"
+                            " created_by) VALUES (%s,%s,%s,%s,%s,%s,%s)"
+                            " ON CONFLICT (task_id) DO UPDATE SET status=EXCLUDED.status,"
+                            " meta=EXCLUDED.meta, updated_at=now()",
+                            (
+                                task_id,
+                                document_id,
+                                mode,
+                                status,
+                                json.dumps(meta, ensure_ascii=False),
+                                tenant_id,
+                                created_by,
+                            ),
+                        )
+                self._commit()
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
 
     def get_task(self, task_id: str) -> dict | None:
@@ -1107,16 +1270,186 @@ class PgVectorStorage:
                 cur.execute("SELECT * FROM review_tasks WHERE task_id=%s", (task_id,))
                 row = cur.fetchone()
                 cols = [d[0] for d in cur.description] if cur.description else []
-            self.conn.commit()
+            self._commit()
             if not row:
                 return None
             d = dict(zip(cols, row))
+            d["cancel_requested"] = bool(d.get("cancel_requested", False))
             if isinstance(d.get("meta"), str):
                 try:
                     d["meta"] = json.loads(d["meta"])
                 except json.JSONDecodeError:
                     pass
             return d
+
+    def find_task_by_idempotency_key(
+        self, idempotency_key: str, tenant_id: str | None = None
+    ) -> dict | None:
+        if not idempotency_key:
+            return None
+        with self._lock:
+            sql = "SELECT * FROM review_tasks WHERE idempotency_key=%s"
+            params: list[Any] = [idempotency_key]
+            if tenant_id is not None:
+                sql += " AND tenant_id=%s"
+                params.append(tenant_id)
+            sql += " ORDER BY created_at DESC LIMIT 1"
+            with self.conn.cursor() as cur:
+                cur.execute(sql, params)
+                row = cur.fetchone()
+                cols = [d[0] for d in cur.description] if cur.description else []
+            self._commit()
+            if not row:
+                return None
+            d = dict(zip(cols, row))
+            d["cancel_requested"] = bool(d.get("cancel_requested", False))
+            if isinstance(d.get("meta"), str):
+                try:
+                    d["meta"] = json.loads(d["meta"])
+                except json.JSONDecodeError:
+                    pass
+            return d
+
+    def list_tasks(
+        self,
+        tenant_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        with self._lock:
+            where = " WHERE 1=1"
+            params: list[Any] = []
+            if tenant_id is not None:
+                where += " AND tenant_id=%s"
+                params.append(tenant_id)
+            if status:
+                where += " AND status=%s"
+                params.append(status)
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM review_tasks" + where, params)
+                total = int(cur.fetchone()[0])
+                cur.execute(
+                    "SELECT * FROM review_tasks"
+                    + where
+                    + " ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                    params + [int(limit), int(offset)],
+                )
+                rows = cur.fetchall()
+                cols = [d[0] for d in cur.description] if cur.description else []
+            self._commit()
+            items = []
+            for r in rows:
+                d = dict(zip(cols, r))
+                d["cancel_requested"] = bool(d.get("cancel_requested", False))
+                if isinstance(d.get("meta"), str):
+                    try:
+                        d["meta"] = json.loads(d["meta"])
+                    except json.JSONDecodeError:
+                        pass
+                items.append(d)
+            return items, total
+
+    def request_cancel_task(self, task_id: str, tenant_id: str | None = None) -> bool:
+        with self._lock:
+            try:
+                sql = "UPDATE review_tasks SET cancel_requested=TRUE, updated_at=now() WHERE task_id=%s"
+                params: list[Any] = [task_id]
+                if tenant_id is not None:
+                    sql += " AND tenant_id=%s"
+                    params.append(tenant_id)
+                with self.conn.cursor() as cur:
+                    cur.execute(sql, params)
+                    updated = cur.rowcount
+                self._commit()
+                return bool(updated)
+            except Exception:
+                self._rollback()
+                raise
+
+    def is_task_cancelled(self, task_id: str) -> bool:
+        with self._lock:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    "SELECT cancel_requested, status FROM review_tasks WHERE task_id=%s",
+                    (task_id,),
+                )
+                row = cur.fetchone()
+            self._commit()
+            if not row:
+                return False
+            return bool(row[0]) or row[1] == "CANCELLED"
+
+    def save_stage_state(
+        self,
+        task_id: str,
+        stage_name: str,
+        stage_order: int,
+        status: str,
+        attempt: int = 1,
+        started_at: float | None = None,
+        finished_at: float | None = None,
+        duration_ms: float = 0.0,
+        detail: dict | None = None,
+        error: str | None = None,
+    ) -> None:
+        s_ts = datetime.fromtimestamp(
+            started_at if started_at is not None else time.time(), tz=timezone.utc
+        )
+        f_ts = (
+            datetime.fromtimestamp(finished_at, tz=timezone.utc)
+            if finished_at is not None
+            else None
+        )
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO review_stage_states (task_id, stage_name, stage_order, status,"
+                        " attempt, started_at, finished_at, duration_ms, detail_json, error)"
+                        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                        " ON CONFLICT (task_id, stage_name) DO UPDATE SET status=EXCLUDED.status,"
+                        " attempt=EXCLUDED.attempt, started_at=EXCLUDED.started_at,"
+                        " finished_at=EXCLUDED.finished_at, duration_ms=EXCLUDED.duration_ms,"
+                        " detail_json=EXCLUDED.detail_json, error=EXCLUDED.error",
+                        (
+                            task_id,
+                            stage_name,
+                            int(stage_order),
+                            status,
+                            int(attempt),
+                            s_ts,
+                            f_ts,
+                            float(duration_ms),
+                            json.dumps(detail or {}, ensure_ascii=False),
+                            error,
+                        ),
+                    )
+                self._commit()
+            except Exception:
+                self._rollback()
+                raise
+
+    def get_stage_states(self, task_id: str) -> list[dict]:
+        with self._lock:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    "SELECT * FROM review_stage_states WHERE task_id=%s ORDER BY stage_order ASC",
+                    (task_id,),
+                )
+                rows = cur.fetchall()
+                cols = [d[0] for d in cur.description] if cur.description else []
+            self._commit()
+            out = []
+            for r in rows:
+                d = dict(zip(cols, r))
+                raw = d.pop("detail_json", None)
+                if isinstance(raw, str):
+                    d["detail"] = json.loads(raw)
+                else:
+                    d["detail"] = raw or {}
+                out.append(d)
+            return out
 
     def get_issue(self, issue_id: str) -> dict | None:
         with self._lock:
@@ -1129,51 +1462,97 @@ class PgVectorStorage:
                 )
                 row = cur.fetchone()
                 cols = [d[0] for d in cur.description] if cur.description else []
-            self.conn.commit()
+            self._commit()
             return dict(zip(cols, row)) if row else None
 
     def save_issues(self, task_id: str, issues: list[dict]) -> None:
+        issue_cols = self._table_cols("review_issues")
+        has_ext = "finding_source" in issue_cols
         with self._lock:
             try:
                 with self.conn.cursor() as cur:
                     for it in issues:
-                        cur.execute(
-                            "INSERT INTO review_issues (issue_id, task_id, rule_id, severity, category,"
-                            " title, description, expected_value, actual_value, source_ref, knowledge_refs,"
-                            " suggestion, execution_mode, requires_human_review, confidence, human_state,"
-                            " human_note) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
-                            " ON CONFLICT (issue_id) DO UPDATE SET human_state=EXCLUDED.human_state,"
-                            " human_note=EXCLUDED.human_note",
-                            (
-                                it["issue_id"],
-                                task_id,
-                                it.get("rule_id"),
-                                it["severity"],
-                                it["category"],
-                                it["title"],
-                                it["description"],
-                                json.dumps(
-                                    it.get("expected_value"), ensure_ascii=False
+                        if has_ext:
+                            cur.execute(
+                                "INSERT INTO review_issues (issue_id, task_id, rule_id, severity, category,"
+                                " title, description, expected_value, actual_value, source_ref, knowledge_refs,"
+                                " suggestion, execution_mode, requires_human_review, confidence, human_state,"
+                                " human_note, finding_source, check_status)"
+                                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                                " ON CONFLICT (issue_id) DO UPDATE SET human_state=EXCLUDED.human_state,"
+                                " human_note=EXCLUDED.human_note, finding_source=EXCLUDED.finding_source,"
+                                " check_status=EXCLUDED.check_status",
+                                (
+                                    it["issue_id"],
+                                    task_id,
+                                    it.get("rule_id"),
+                                    it["severity"],
+                                    it["category"],
+                                    it["title"],
+                                    it["description"],
+                                    json.dumps(
+                                        it.get("expected_value"), ensure_ascii=False
+                                    ),
+                                    json.dumps(
+                                        it.get("actual_value"), ensure_ascii=False
+                                    ),
+                                    json.dumps(
+                                        it.get("source_reference"), ensure_ascii=False
+                                    ),
+                                    json.dumps(
+                                        it.get("knowledge_references", []),
+                                        ensure_ascii=False,
+                                    ),
+                                    it.get("suggestion", ""),
+                                    it.get("execution_mode", "DETERMINISTIC"),
+                                    bool(it.get("requires_human_review")),
+                                    it.get("confidence"),
+                                    it.get("human_state", "PENDING"),
+                                    it.get("human_note"),
+                                    it.get("finding_source", "DETERMINISTIC"),
+                                    it.get("check_status", "CHECKED"),
                                 ),
-                                json.dumps(it.get("actual_value"), ensure_ascii=False),
-                                json.dumps(
-                                    it.get("source_reference"), ensure_ascii=False
+                            )
+                        else:
+                            cur.execute(
+                                "INSERT INTO review_issues (issue_id, task_id, rule_id, severity, category,"
+                                " title, description, expected_value, actual_value, source_ref, knowledge_refs,"
+                                " suggestion, execution_mode, requires_human_review, confidence, human_state,"
+                                " human_note) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                                " ON CONFLICT (issue_id) DO UPDATE SET human_state=EXCLUDED.human_state,"
+                                " human_note=EXCLUDED.human_note",
+                                (
+                                    it["issue_id"],
+                                    task_id,
+                                    it.get("rule_id"),
+                                    it["severity"],
+                                    it["category"],
+                                    it["title"],
+                                    it["description"],
+                                    json.dumps(
+                                        it.get("expected_value"), ensure_ascii=False
+                                    ),
+                                    json.dumps(
+                                        it.get("actual_value"), ensure_ascii=False
+                                    ),
+                                    json.dumps(
+                                        it.get("source_reference"), ensure_ascii=False
+                                    ),
+                                    json.dumps(
+                                        it.get("knowledge_references", []),
+                                        ensure_ascii=False,
+                                    ),
+                                    it.get("suggestion", ""),
+                                    it.get("execution_mode", "DETERMINISTIC"),
+                                    bool(it.get("requires_human_review")),
+                                    it.get("confidence"),
+                                    it.get("human_state", "PENDING"),
+                                    it.get("human_note"),
                                 ),
-                                json.dumps(
-                                    it.get("knowledge_references", []),
-                                    ensure_ascii=False,
-                                ),
-                                it.get("suggestion", ""),
-                                it.get("execution_mode", "DETERMINISTIC"),
-                                bool(it.get("requires_human_review")),
-                                it.get("confidence"),
-                                it.get("human_state", "PENDING"),
-                                it.get("human_note"),
-                            ),
-                        )
-                self.conn.commit()
+                            )
+                self._commit()
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
 
     def get_issues(self, task_id: str) -> list[dict]:
@@ -1182,7 +1561,7 @@ class PgVectorStorage:
                 cur.execute("SELECT * FROM review_issues WHERE task_id=%s", (task_id,))
                 rows = cur.fetchall()
                 cols = [d[0] for d in cur.description]
-            self.conn.commit()
+            self._commit()
             out = []
             for r in rows:
                 d = dict(zip(cols, r))
@@ -1203,13 +1582,21 @@ class PgVectorStorage:
         valid = {"ACCEPT", "IGNORE", "EDIT", "NOTE", "FALSE_POSITIVE", "FALSE_NEGATIVE"}
         if action not in valid:
             return False
+        has_source = "finding_source" in self._table_cols("review_issues")
         with self._lock:
             try:
                 with self.conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE review_issues SET human_state=%s, human_note=%s WHERE issue_id=%s",
-                        (action, note, issue_id),
-                    )
+                    if has_source:
+                        cur.execute(
+                            "UPDATE review_issues SET human_state=%s, human_note=%s, finding_source='HUMAN'"
+                            " WHERE issue_id=%s",
+                            (action, note, issue_id),
+                        )
+                    else:
+                        cur.execute(
+                            "UPDATE review_issues SET human_state=%s, human_note=%s WHERE issue_id=%s",
+                            (action, note, issue_id),
+                        )
                     updated = cur.rowcount
                     if updated:
                         cur.execute(
@@ -1217,11 +1604,400 @@ class PgVectorStorage:
                             " VALUES (%s,'issue_feedback',%s,%s)",
                             (actor, issue_id, f"{action} {note[:80]}"),
                         )
-                self.conn.commit()
+                self._commit()
                 return bool(updated)
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
+
+    def record_human_override(
+        self,
+        override_id: str,
+        task_id: str,
+        issue_id: str,
+        tenant_id: str,
+        actor: str,
+        action: str,
+        reason: str,
+        previous_state: str,
+        new_state: str,
+        created_at: float | None = None,
+    ) -> None:
+        c_ts = datetime.fromtimestamp(
+            created_at if created_at is not None else time.time(), tz=timezone.utc
+        )
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO human_overrides (override_id, task_id, issue_id, tenant_id, actor,"
+                        " action, reason, previous_state, new_state, created_at)"
+                        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (
+                            override_id,
+                            task_id,
+                            issue_id,
+                            tenant_id or "default",
+                            actor,
+                            action,
+                            reason,
+                            previous_state,
+                            new_state,
+                            c_ts,
+                        ),
+                    )
+                self._commit()
+            except Exception:
+                self._rollback()
+                raise
+
+    def list_human_overrides(self, task_id: str) -> list[dict]:
+        with self._lock:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    "SELECT * FROM human_overrides WHERE task_id=%s ORDER BY created_at ASC",
+                    (task_id,),
+                )
+                rows = cur.fetchall()
+                cols = [d[0] for d in cur.description] if cur.description else []
+            self._commit()
+            return [dict(zip(cols, r)) for r in rows]
+
+    # ---------- 统一标准合同实体（Canonical Contract） ----------
+    def upsert_canonical_contract(self, contract: dict) -> str:
+        cid = contract["contract_id"]
+        tenant = contract.get("tenant_id") or "default"
+        total_amt = contract.get("total_amount")
+        if total_amt is None and isinstance(contract.get("amounts"), dict):
+            total_amt = contract["amounts"].get("total_amount")
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT version FROM canonical_contracts WHERE contract_id=%s",
+                        (cid,),
+                    )
+                    ex = cur.fetchone()
+                    version = int(contract.get("version") or ((ex[0] + 1) if ex else 1))
+                    cur.execute(
+                        "INSERT INTO canonical_contracts (contract_id, tenant_id, contract_number,"
+                        " entity_prefix, title, business_category, contract_subtype, lifecycle_status,"
+                        " source_system, source_document_id, source_hash, total_amount, currency,"
+                        " parties_json, amounts_json, source_mappings_json, version)"
+                        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                        " ON CONFLICT (contract_id) DO UPDATE SET"
+                        " contract_number=EXCLUDED.contract_number,"
+                        " entity_prefix=EXCLUDED.entity_prefix,"
+                        " title=EXCLUDED.title,"
+                        " business_category=EXCLUDED.business_category,"
+                        " contract_subtype=EXCLUDED.contract_subtype,"
+                        " lifecycle_status=EXCLUDED.lifecycle_status,"
+                        " source_system=EXCLUDED.source_system,"
+                        " source_document_id=EXCLUDED.source_document_id,"
+                        " source_hash=EXCLUDED.source_hash,"
+                        " total_amount=EXCLUDED.total_amount,"
+                        " currency=EXCLUDED.currency,"
+                        " parties_json=EXCLUDED.parties_json,"
+                        " amounts_json=EXCLUDED.amounts_json,"
+                        " source_mappings_json=EXCLUDED.source_mappings_json,"
+                        " version=EXCLUDED.version,"
+                        " updated_at=now()",
+                        (
+                            cid,
+                            tenant,
+                            contract.get("contract_number"),
+                            contract.get("entity_prefix"),
+                            contract.get("title", ""),
+                            contract.get("business_category", ""),
+                            contract.get("contract_subtype", ""),
+                            contract.get("lifecycle_status", "DRAFT"),
+                            contract.get("source_system", "UPLOAD"),
+                            contract.get("source_document_id"),
+                            contract.get("source_hash"),
+                            str(total_amt) if total_amt is not None else None,
+                            contract.get("currency", "CNY"),
+                            json.dumps(contract.get("parties", []), ensure_ascii=False),
+                            json.dumps(contract.get("amounts", {}), ensure_ascii=False),
+                            json.dumps(
+                                contract.get("source_mappings", []), ensure_ascii=False
+                            ),
+                            version,
+                        ),
+                    )
+                self._commit()
+                return cid
+            except Exception:
+                self._rollback()
+                raise
+
+    def get_canonical_contract(
+        self, contract_id: str, tenant_id: str | None = None
+    ) -> dict | None:
+        with self._lock:
+            sql = "SELECT * FROM canonical_contracts WHERE contract_id=%s"
+            params: list[Any] = [contract_id]
+            if tenant_id is not None:
+                sql += " AND tenant_id=%s"
+                params.append(tenant_id)
+            with self.conn.cursor() as cur:
+                cur.execute(sql, params)
+                row = cur.fetchone()
+                cols = [d[0] for d in cur.description] if cur.description else []
+            self._commit()
+            if not row:
+                return None
+            return self._decode_canonical_row(dict(zip(cols, row)))
+
+    def list_canonical_contracts(
+        self,
+        tenant_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        with self._lock:
+            where = " WHERE 1=1"
+            params: list[Any] = []
+            if tenant_id is not None:
+                where += " AND tenant_id=%s"
+                params.append(tenant_id)
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM canonical_contracts" + where, params)
+                total = int(cur.fetchone()[0])
+                cur.execute(
+                    "SELECT * FROM canonical_contracts"
+                    + where
+                    + " ORDER BY updated_at DESC LIMIT %s OFFSET %s",
+                    params + [int(limit), int(offset)],
+                )
+                rows = cur.fetchall()
+                cols = [d[0] for d in cur.description] if cur.description else []
+            self._commit()
+            return [self._decode_canonical_row(dict(zip(cols, r))) for r in rows], total
+
+    @staticmethod
+    def _decode_canonical_row(d: dict) -> dict:
+        p = d.pop("parties_json", None)
+        a = d.pop("amounts_json", None)
+        s = d.pop("source_mappings_json", None)
+        d["parties"] = json.loads(p) if isinstance(p, str) else (p or [])
+        d["amounts"] = json.loads(a) if isinstance(a, str) else (a or {})
+        d["source_mappings"] = json.loads(s) if isinstance(s, str) else (s or [])
+        if d.get("total_amount") is not None:
+            d["total_amount"] = str(d["total_amount"])
+        return d
+
+    # ---------- 轻量持久化异步任务队列（async_jobs） ----------
+    def enqueue_async_job(self, job: dict) -> tuple[str, bool]:
+        tenant = job.get("tenant_id") or "default"
+        idem = job.get("idempotency_key")
+        next_ts = datetime.fromtimestamp(
+            float(job.get("next_run_at", time.time())), tz=timezone.utc
+        )
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    if idem:
+                        cur.execute(
+                            "SELECT job_id FROM async_jobs WHERE tenant_id=%s AND idempotency_key=%s",
+                            (tenant, idem),
+                        )
+                        ex = cur.fetchone()
+                        if ex:
+                            self._commit()
+                            return ex[0], False
+                    jid = job.get("job_id") or f"job_{uuid.uuid4().hex[:12]}"
+                    cur.execute(
+                        "INSERT INTO async_jobs (job_id, idempotency_key, tenant_id, job_type, status,"
+                        " payload_json, result_json, error_message, dead_letter_reason, progress,"
+                        " attempts, max_attempts, next_run_at, cancel_requested, temp_file_path, created_by)"
+                        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (
+                            jid,
+                            idem,
+                            tenant,
+                            job["job_type"],
+                            job.get("status", "PENDING"),
+                            json.dumps(job.get("payload", {}), ensure_ascii=False),
+                            json.dumps(job.get("result"), ensure_ascii=False)
+                            if job.get("result") is not None
+                            else None,
+                            job.get("error_message"),
+                            job.get("dead_letter_reason"),
+                            int(job.get("progress", 0)),
+                            int(job.get("attempts", 0)),
+                            int(job.get("max_attempts", 3)),
+                            next_ts,
+                            bool(job.get("cancel_requested", False)),
+                            job.get("temp_file_path"),
+                            job.get("created_by", "system"),
+                        ),
+                    )
+                self._commit()
+                return jid, True
+            except Exception:
+                self._rollback()
+                raise
+
+    def get_async_job(self, job_id: str, tenant_id: str | None = None) -> dict | None:
+        with self._lock:
+            sql = "SELECT * FROM async_jobs WHERE job_id=%s"
+            params: list[Any] = [job_id]
+            if tenant_id is not None:
+                sql += " AND tenant_id=%s"
+                params.append(tenant_id)
+            with self.conn.cursor() as cur:
+                cur.execute(sql, params)
+                row = cur.fetchone()
+                cols = [d[0] for d in cur.description] if cur.description else []
+            self._commit()
+            return self._decode_job_row(dict(zip(cols, row))) if row else None
+
+    def list_async_jobs(
+        self,
+        tenant_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        with self._lock:
+            where = " WHERE 1=1"
+            params: list[Any] = []
+            if tenant_id is not None:
+                where += " AND tenant_id=%s"
+                params.append(tenant_id)
+            if status:
+                where += " AND status=%s"
+                params.append(status)
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM async_jobs" + where, params)
+                total = int(cur.fetchone()[0])
+                cur.execute(
+                    "SELECT * FROM async_jobs"
+                    + where
+                    + " ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                    params + [int(limit), int(offset)],
+                )
+                rows = cur.fetchall()
+                cols = [d[0] for d in cur.description] if cur.description else []
+            self._commit()
+            return [self._decode_job_row(dict(zip(cols, r))) for r in rows], total
+
+    def claim_next_async_job(self, job_types: list[str] | None = None) -> dict | None:
+        now_ts = datetime.fromtimestamp(time.time(), tz=timezone.utc)
+        with self._lock:
+            try:
+                sql = (
+                    "SELECT job_id, cancel_requested, attempts FROM async_jobs"
+                    " WHERE status IN ('PENDING', 'RETRYING') AND next_run_at <= %s"
+                )
+                params: list[Any] = [now_ts]
+                if job_types:
+                    placeholders = ",".join("%s" for _ in job_types)
+                    sql += f" AND job_type IN ({placeholders})"
+                    params.extend(job_types)
+                sql += " ORDER BY next_run_at ASC, created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                with self.conn.cursor() as cur:
+                    cur.execute(sql, params)
+                    row = cur.fetchone()
+                    if not row:
+                        self._commit()
+                        return None
+                    jid, cancel_req, attempts = row
+                    if cancel_req:
+                        cur.execute(
+                            "UPDATE async_jobs SET status='CANCELLED', updated_at=now() WHERE job_id=%s",
+                            (jid,),
+                        )
+                        self._commit()
+                        return None
+                    cur.execute(
+                        "UPDATE async_jobs SET status='RUNNING', attempts=%s, updated_at=now() WHERE job_id=%s",
+                        (int(attempts or 0) + 1, jid),
+                    )
+                self._commit()
+                return self.get_async_job(jid)
+            except Exception:
+                self._rollback()
+                raise
+
+    def update_async_job(self, job_id: str, **fields: Any) -> bool:
+        if not fields:
+            return False
+        allowed = {
+            "status",
+            "result",
+            "error_message",
+            "dead_letter_reason",
+            "progress",
+            "attempts",
+            "next_run_at",
+            "cancel_requested",
+            "temp_file_path",
+        }
+        assignments: list[str] = ["updated_at=now()"]
+        params: list[Any] = []
+        for k, v in fields.items():
+            if k not in allowed:
+                continue
+            if k == "result":
+                assignments.append("result_json=%s")
+                params.append(
+                    json.dumps(v, ensure_ascii=False) if v is not None else None
+                )
+            elif k == "next_run_at":
+                assignments.append("next_run_at=%s")
+                params.append(datetime.fromtimestamp(float(v), tz=timezone.utc))
+            elif k == "cancel_requested":
+                assignments.append("cancel_requested=%s")
+                params.append(bool(v))
+            else:
+                assignments.append(f"{k}=%s")
+                params.append(v)
+        params.append(job_id)
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE async_jobs SET {', '.join(assignments)} WHERE job_id=%s",
+                        params,
+                    )
+                    updated = cur.rowcount
+                self._commit()
+                return bool(updated)
+            except Exception:
+                self._rollback()
+                raise
+
+    def cancel_async_job(self, job_id: str, tenant_id: str | None = None) -> bool:
+        with self._lock:
+            try:
+                row = self.get_async_job(job_id, tenant_id=tenant_id)
+                if not row:
+                    return False
+                new_status = (
+                    "CANCELLED"
+                    if row["status"] in ("PENDING", "RETRYING")
+                    else row["status"]
+                )
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE async_jobs SET cancel_requested=TRUE, status=%s, updated_at=now() WHERE job_id=%s",
+                        (new_status, job_id),
+                    )
+                self._commit()
+                return True
+            except Exception:
+                self._rollback()
+                raise
+
+    @staticmethod
+    def _decode_job_row(d: dict) -> dict:
+        p = d.pop("payload_json", None)
+        r = d.pop("result_json", None)
+        d["payload"] = json.loads(p) if isinstance(p, str) else (p or {})
+        d["result"] = json.loads(r) if isinstance(r, str) else r
+        d["cancel_requested"] = bool(d.get("cancel_requested", False))
+        return d
 
     # ---------- 公司格式标准（与 SQLite 语义一致） ----------
     def save_format_standard(
@@ -1274,9 +2050,9 @@ class PgVectorStorage:
                         " VALUES (%s,'save_format_standard',%s,%s)",
                         (created_by, standard_id, f"version={version}"),
                     )
-                self.conn.commit()
+                self._commit()
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
             rec = self.get_format_standard(
                 standard_id, int(version), tenant_id=tenant_id
@@ -1306,10 +2082,10 @@ class PgVectorStorage:
                         )
                         row = cur.fetchone()
                         if not row:
-                            self.conn.commit()
+                            self._commit()
                             return False
                         if tenant_id is not None and row[0] != tenant_id:
-                            self.conn.commit()
+                            self._commit()
                             return False
                         cur.execute(
                             "UPDATE format_standards SET status='SUPERSEDED'"
@@ -1323,7 +2099,7 @@ class PgVectorStorage:
                             (standard_id, int(version)),
                         )
                         if not cur.rowcount:
-                            self.conn.commit()
+                            self._commit()
                             return False
                         cur.execute(
                             "UPDATE format_standards SET status='SUPERSEDED'"
@@ -1340,10 +2116,10 @@ class PgVectorStorage:
                         " VALUES (%s,'approve_format_standard',%s,%s)",
                         (approver, standard_id, f"version={version}"),
                     )
-                self.conn.commit()
+                self._commit()
                 return True
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
 
     def get_format_standard(
@@ -1372,7 +2148,7 @@ class PgVectorStorage:
                     cur.execute(sql, params)
                 row = cur.fetchone()
                 cols = [c[0] for c in cur.description] if cur.description else []
-            self.conn.commit()
+            self._commit()
             if not row:
                 return None
             d = dict(zip(cols, row))
@@ -1395,7 +2171,7 @@ class PgVectorStorage:
                 cur.execute(sql, params)
                 row = cur.fetchone()
                 cols = [c[0] for c in cur.description] if cur.description else []
-            self.conn.commit()
+            self._commit()
             if not row:
                 return None
             d = dict(zip(cols, row))

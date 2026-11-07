@@ -170,6 +170,146 @@ def _cell_info(tc_el, row_idx: int, col_cursor: int) -> tuple[dict, int]:
     return info, grid_span
 
 
+def _build_paragraph_node(
+    child,
+    doc: ParsedDocument,
+    doc_id: str,
+    para_count: int,
+    current_section: Optional[str],
+    locator_base: dict,
+) -> tuple[ASTNode, Optional[str]]:
+    text = _para_text(child)
+    m_art = ARTICLE_RE.match(text.strip())
+    m_num = CLAUSE_NUM_RE.match(text.strip())
+    if m_art:
+        current_section = f"{m_art.group(1)} {m_art.group(2)}".strip()
+    node = ASTNode(
+        document_id=doc_id,
+        node_id=f"{doc_id}:p{para_count}",
+        node_type="paragraph",
+        order=0,
+        text=text,
+        section=current_section,
+        clause_number=(m_num.group(1) if m_num else None),
+        style=_para_style(child),
+        source_locator={**locator_base, "paragraph_index": para_count},
+    )
+    blanks = BLANK_RE.findall(text)
+    if blanks:
+        doc.blank_placeholder_count += len(blanks)
+        node.flags["blank_placeholders"] = len(blanks)
+    cc = sum(text.count(c) for c in CHECKBOX_CHARS)
+    if cc:
+        doc.checkbox_count += cc
+        node.flags["checkbox_symbols"] = cc
+    if text.strip().startswith("合同编号"):
+        doc.contract_number_hint = text.strip()
+        node.flags["is_contract_number_line"] = True
+    return node, current_section
+
+
+def _build_table_nodes(
+    child,
+    doc: ParsedDocument,
+    doc_id: str,
+    table_count: int,
+    current_section: Optional[str],
+    locator_base: dict,
+) -> list[ASTNode]:
+    rows = child.findall("w:tr", NS)
+    dims = {"table_index": table_count, "rows": len(rows), "cols": 0}
+    tbl_node = ASTNode(
+        document_id=doc_id,
+        node_id=f"{doc_id}:tbl{table_count}",
+        node_type="table",
+        order=0,
+        text="",
+        section=current_section,
+        table_index=table_count,
+        source_locator={**locator_base, "table_index": table_count},
+        flags={"row_count": len(rows)},
+    )
+    out: list[ASTNode] = [tbl_node]
+    max_cols = 0
+    for ri, tr in enumerate(rows):
+        col_cursor = 0
+        for tc in tr.findall("w:tc", NS):
+            info, span = _cell_info(tc, ri, col_cursor)
+            out.append(
+                ASTNode(
+                    document_id=doc_id,
+                    node_id=f"{doc_id}:tbl{table_count}r{ri}c{col_cursor}",
+                    node_type="table_cell",
+                    order=0,
+                    text=info["text"],
+                    section=current_section,
+                    table_index=table_count,
+                    row_index=ri,
+                    column_index=col_cursor,
+                    style={},
+                    parent_node_id=tbl_node.node_id,
+                    source_locator={
+                        **locator_base,
+                        "table_index": table_count,
+                        "row_index": ri,
+                        "column_index": col_cursor,
+                    },
+                    flags={
+                        "grid_span": info["grid_span"],
+                        "v_merge": info["v_merge"],
+                    },
+                )
+            )
+            col_cursor += span
+        max_cols = max(max_cols, col_cursor)
+    dims["cols"] = max_cols
+    doc.table_dims.append(dims)
+    return out
+
+
+def _extract_part_paragraphs(z: zipfile.ZipFile, part_name: str) -> list[str]:
+    r2 = etree.fromstring(z.read(part_name), parser=SAFE_XML_PARSER)
+    return [t for p in r2.iter(f"{{{W}}}p") if (t := _para_text(p)).strip()]
+
+
+def _populate_package_diagnostics(
+    doc: ParsedDocument, z: zipfile.ZipFile, names: list[str], root
+) -> None:
+    for n in names:
+        if re.match(r"word/header\d*\.xml", n):
+            txts = _extract_part_paragraphs(z, n)
+            if txts:
+                doc.headers.append({"part": n, "text": "\n".join(txts)})
+        elif re.match(r"word/footer\d*\.xml", n):
+            txts = _extract_part_paragraphs(z, n)
+            if txts:
+                doc.footers.append({"part": n, "text": "\n".join(txts)})
+
+    doc.has_images = any(n.startswith("word/media/") for n in names)
+    doc.has_embedded_objects = any(n.startswith("word/embeddings/") for n in names)
+    doc.comments_present = "word/comments.xml" in names
+    doc.revisions_present = bool(
+        root.find(".//w:ins", NS) is not None or root.find(".//w:del", NS) is not None
+    )
+    doc.textboxes_present = bool(root.find(".//w:txbxContent", NS) is not None)
+    for flag, msg in (
+        (doc.has_images, "含图片/嵌入图形：文本层不覆盖图片内容"),
+        (doc.comments_present, "含批注：批注正文未纳入条款抽取"),
+        (doc.revisions_present, "含修订标记：抽取以当前文本层为准"),
+        (doc.textboxes_present, "含文本框：文本框内容未纳入主条款流"),
+    ):
+        if flag:
+            doc.parse_warnings.append(msg)
+
+
+def _populate_titles(doc: ParsedDocument) -> None:
+    non_empty = [n for n in doc.nodes if n.node_type == "paragraph" and n.text.strip()]
+    if non_empty:
+        doc.title = non_empty[0].text.strip()
+    if len(non_empty) > 1 and not ARTICLE_RE.match(non_empty[1].text.strip()):
+        doc.subtitle = non_empty[1].text.strip()
+
+
 def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
     """解析 DOCX 为有序 AST。任何不支持/不可靠结构都记录状态而不是静默丢弃。"""
     import os
@@ -186,8 +326,7 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
 
     with zipfile.ZipFile(path) as z:
         names = z.namelist()
-        xml = z.read("word/document.xml")
-        root = etree.fromstring(xml, parser=SAFE_XML_PARSER)
+        root = etree.fromstring(z.read("word/document.xml"), parser=SAFE_XML_PARSER)
         body = root.find("w:body", NS)
 
         order = 0
@@ -195,7 +334,7 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
         para_count = 0
         table_count = 0
 
-        def add(node: ASTNode):
+        def add(node: ASTNode) -> None:
             nonlocal order
             node.order = order
             order += 1
@@ -210,86 +349,18 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
                 "page_number": None,
             }
             if tag == "p":
-                text = _para_text(child)
-                m_art = ARTICLE_RE.match(text.strip())
-                m_num = CLAUSE_NUM_RE.match(text.strip())
-                if m_art:
-                    current_section = f"{m_art.group(1)} {m_art.group(2)}".strip()
-                node = ASTNode(
-                    document_id=doc_id,
-                    node_id=f"{doc_id}:p{para_count}",
-                    node_type="paragraph",
-                    order=0,
-                    text=text,
-                    section=current_section,
-                    clause_number=(m_num.group(1) if m_num else None),
-                    style=_para_style(child),
-                    source_locator={**locator_base, "paragraph_index": para_count},
+                node, current_section = _build_paragraph_node(
+                    child, doc, doc_id, para_count, current_section, locator_base
                 )
-                blanks = BLANK_RE.findall(text)
-                if blanks:
-                    doc.blank_placeholder_count += len(blanks)
-                    node.flags["blank_placeholders"] = len(blanks)
-                cc = sum(text.count(c) for c in CHECKBOX_CHARS)
-                if cc:
-                    doc.checkbox_count += cc
-                    node.flags["checkbox_symbols"] = cc
-                if text.strip().startswith("合同编号"):
-                    doc.contract_number_hint = text.strip()
-                    node.flags["is_contract_number_line"] = True
                 add(node)
                 para_count += 1
             elif tag == "tbl":
-                rows = child.findall("w:tr", NS)
-                dims = {"table_index": table_count, "rows": len(rows), "cols": 0}
-                tbl_node = ASTNode(
-                    document_id=doc_id,
-                    node_id=f"{doc_id}:tbl{table_count}",
-                    node_type="table",
-                    order=0,
-                    text="",
-                    section=current_section,
-                    table_index=table_count,
-                    source_locator={**locator_base, "table_index": table_count},
-                    flags={"row_count": len(rows)},
-                )
-                add(tbl_node)
-                max_cols = 0
-                for ri, tr in enumerate(rows):
-                    col_cursor = 0
-                    for tc in tr.findall("w:tc", NS):
-                        info, span = _cell_info(tc, ri, col_cursor)
-                        cell_node = ASTNode(
-                            document_id=doc_id,
-                            node_id=f"{doc_id}:tbl{table_count}r{ri}c{col_cursor}",
-                            node_type="table_cell",
-                            order=0,
-                            text=info["text"],
-                            section=current_section,
-                            table_index=table_count,
-                            row_index=ri,
-                            column_index=col_cursor,
-                            style={},
-                            parent_node_id=tbl_node.node_id,
-                            source_locator={
-                                **locator_base,
-                                "table_index": table_count,
-                                "row_index": ri,
-                                "column_index": col_cursor,
-                            },
-                            flags={
-                                "grid_span": info["grid_span"],
-                                "v_merge": info["v_merge"],
-                            },
-                        )
-                        add(cell_node)
-                        col_cursor += span
-                    max_cols = max(max_cols, col_cursor)
-                dims["cols"] = max_cols
-                doc.table_dims.append(dims)
+                for tn in _build_table_nodes(
+                    child, doc, doc_id, table_count, current_section, locator_base
+                ):
+                    add(tn)
                 table_count += 1
             elif tag == "sdt":
-                # 结构化文档标记：内容按段落抽取，标记状态
                 for p in child.iter(f"{{{W}}}p"):
                     text = _para_text(p)
                     if text.strip():
@@ -305,10 +376,7 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
                                 extraction_status="success_with_sdt_wrapper",
                             )
                         )
-            elif tag == "sectPr":
-                pass
-            else:
-                # 其他未知结构：记录而不丢弃
+            elif tag != "sectPr":
                 txt = "".join(t.text or "" for t in child.iter(f"{{{W}}}t"))
                 add(
                     ASTNode(
@@ -327,47 +395,7 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
 
         doc.paragraph_count = para_count
         doc.table_count = table_count
-
-        # 页眉页脚
-        for n in names:
-            if re.match(r"word/header\d*\.xml", n):
-                r2 = etree.fromstring(z.read(n), parser=SAFE_XML_PARSER)
-                txts = [_para_text(p) for p in r2.iter(f"{{{W}}}p")]
-                txts = [t for t in txts if t.strip()]
-                if txts:
-                    doc.headers.append({"part": n, "text": "\n".join(txts)})
-            if re.match(r"word/footer\d*\.xml", n):
-                r2 = etree.fromstring(z.read(n), parser=SAFE_XML_PARSER)
-                txts = [_para_text(p) for p in r2.iter(f"{{{W}}}p")]
-                txts = [t for t in txts if t.strip()]
-                if txts:
-                    doc.footers.append({"part": n, "text": "\n".join(txts)})
-
-        # 图片 / 嵌入对象 / 批注 / 修订 / 文本框
-        doc.has_images = any(n.startswith("word/media/") for n in names)
-        doc.has_embedded_objects = any(n.startswith("word/embeddings/") for n in names)
-        doc.comments_present = "word/comments.xml" in names
-        doc.revisions_present = bool(
-            root.find(".//w:ins", NS) is not None
-            or root.find(".//w:del", NS) is not None
-        )
-        doc.textboxes_present = bool(root.find(".//w:txbxContent", NS) is not None)
-        if doc.has_images:
-            doc.parse_warnings.append("含图片/嵌入图形：文本层不覆盖图片内容")
-        if doc.comments_present:
-            doc.parse_warnings.append("含批注：批注正文未纳入条款抽取")
-        if doc.revisions_present:
-            doc.parse_warnings.append("含修订标记：抽取以当前文本层为准")
-        if doc.textboxes_present:
-            doc.parse_warnings.append("含文本框：文本框内容未纳入主条款流")
-
-        # 标题 / 副标题（取前两个非空段落）
-        non_empty = [
-            n for n in doc.nodes if n.node_type == "paragraph" and n.text.strip()
-        ]
-        if non_empty:
-            doc.title = non_empty[0].text.strip()
-        if len(non_empty) > 1 and not ARTICLE_RE.match(non_empty[1].text.strip()):
-            doc.subtitle = non_empty[1].text.strip()
+        _populate_package_diagnostics(doc, z, names, root)
+        _populate_titles(doc)
 
     return doc

@@ -18,6 +18,7 @@ import re
 import sqlite3
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -70,7 +71,12 @@ CREATE TABLE IF NOT EXISTS rules (
 CREATE TABLE IF NOT EXISTS review_tasks (
     task_id TEXT PRIMARY KEY, document_id TEXT, mode TEXT, status TEXT,
     created_at REAL, updated_at REAL, meta TEXT,
-    tenant_id TEXT NOT NULL DEFAULT 'default', created_by TEXT
+    tenant_id TEXT NOT NULL DEFAULT 'default', created_by TEXT,
+    idempotency_key TEXT,
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    rule_set_version TEXT,
+    model_version TEXT,
+    reproducibility_hash TEXT
 );
 CREATE TABLE IF NOT EXISTS review_issues (
     issue_id TEXT PRIMARY KEY, task_id TEXT, rule_id TEXT, severity TEXT,
@@ -78,7 +84,9 @@ CREATE TABLE IF NOT EXISTS review_issues (
     expected_value TEXT, actual_value TEXT, source_ref TEXT,
     knowledge_refs TEXT, suggestion TEXT, execution_mode TEXT,
     requires_human_review INTEGER, confidence REAL,
-    human_state TEXT DEFAULT 'PENDING', human_note TEXT
+    human_state TEXT DEFAULT 'PENDING', human_note TEXT,
+    finding_source TEXT NOT NULL DEFAULT 'DETERMINISTIC',
+    check_status TEXT NOT NULL DEFAULT 'CHECKED'
 );
 CREATE TABLE IF NOT EXISTS rule_executions (
     exec_id TEXT PRIMARY KEY, rule_id TEXT, rule_version INTEGER, rule_type TEXT,
@@ -108,6 +116,72 @@ CREATE TABLE IF NOT EXISTS format_standards (
     created_by TEXT, approved_by TEXT, approved_at REAL, effective_at REAL,
     note TEXT, tenant_id TEXT NOT NULL DEFAULT 'default',
     PRIMARY KEY (standard_id, version)
+);
+CREATE TABLE IF NOT EXISTS review_stage_states (
+    task_id TEXT NOT NULL,
+    stage_name TEXT NOT NULL,
+    stage_order INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    attempt INTEGER NOT NULL DEFAULT 1,
+    started_at REAL,
+    finished_at REAL,
+    duration_ms REAL NOT NULL DEFAULT 0,
+    detail_json TEXT,
+    error TEXT,
+    PRIMARY KEY (task_id, stage_name)
+);
+CREATE TABLE IF NOT EXISTS human_overrides (
+    override_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    issue_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    actor TEXT NOT NULL,
+    action TEXT NOT NULL,
+    reason TEXT,
+    previous_state TEXT,
+    new_state TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS canonical_contracts (
+    contract_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    contract_number TEXT,
+    entity_prefix TEXT,
+    title TEXT,
+    business_category TEXT,
+    contract_subtype TEXT,
+    lifecycle_status TEXT NOT NULL DEFAULT 'DRAFT',
+    source_system TEXT NOT NULL DEFAULT 'UPLOAD',
+    source_document_id TEXT,
+    source_hash TEXT,
+    total_amount TEXT,
+    currency TEXT NOT NULL DEFAULT 'CNY',
+    parties_json TEXT,
+    amounts_json TEXT,
+    source_mappings_json TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS async_jobs (
+    job_id TEXT PRIMARY KEY,
+    idempotency_key TEXT,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    job_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    payload_json TEXT,
+    result_json TEXT,
+    error_message TEXT,
+    dead_letter_reason TEXT,
+    progress INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    next_run_at REAL NOT NULL,
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    temp_file_path TEXT,
+    created_by TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
 );
 """
 
@@ -177,6 +251,7 @@ class Storage:
     ):
         self.db_path = str(db_path)
         self._lock = threading.RLock()
+        self._tx_depth = 0
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         with self._lock:
@@ -190,11 +265,45 @@ class Storage:
                     raise
                 self.rebuild_index()
 
+    def _commit(self) -> None:
+        if self._tx_depth == 0:
+            self.conn.commit()
+
+    def _rollback(self) -> None:
+        if self._tx_depth == 0:
+            self.conn.rollback()
+
+    def _savepoint_begin(self, sp_name: str) -> None:
+        self._lock.acquire()
+        self._tx_depth += 1
+        self.conn.execute(f"SAVEPOINT {sp_name}")
+
+    def _savepoint_commit(self, sp_name: str) -> None:
+        self.conn.execute(f"RELEASE SAVEPOINT {sp_name}")
+        if self._tx_depth <= 1:
+            self.conn.commit()
+
+    def _savepoint_rollback(self, sp_name: str) -> None:
+        self.conn.execute(f"ROLLBACK TO SAVEPOINT {sp_name}")
+        self.conn.execute(f"RELEASE SAVEPOINT {sp_name}")
+        if self._tx_depth <= 1:
+            self.conn.rollback()
+
+    def _savepoint_exit(self) -> None:
+        self._tx_depth = max(0, self._tx_depth - 1)
+        self._lock.release()
+
+    def unit_of_work(self) -> Any:
+        """创建支持嵌套 SAVEPOINT 的原子工作单元。"""
+        from .infrastructure.persistence.uow import SqliteUnitOfWork
+
+        return SqliteUnitOfWork(self)
+
     def _table_cols(self, table: str) -> set[str]:
         return {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
 
     def _apply_column_migrations(self) -> None:
-        """既有库的增量列迁移（幂等）：租户隔离列、优先级列、索引登记。"""
+        """既有库的增量列迁移（幂等）：租户隔离列、优先级列、流水线与幂等列。"""
         task_cols = self._table_cols("review_tasks")
         if "tenant_id" not in task_cols:
             self.conn.execute(
@@ -202,6 +311,34 @@ class Storage:
             )
         if "created_by" not in task_cols:
             self.conn.execute("ALTER TABLE review_tasks ADD COLUMN created_by TEXT")
+        if "idempotency_key" not in task_cols:
+            self.conn.execute(
+                "ALTER TABLE review_tasks ADD COLUMN idempotency_key TEXT"
+            )
+        if "cancel_requested" not in task_cols:
+            self.conn.execute(
+                "ALTER TABLE review_tasks ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0"
+            )
+        if "rule_set_version" not in task_cols:
+            self.conn.execute(
+                "ALTER TABLE review_tasks ADD COLUMN rule_set_version TEXT"
+            )
+        if "model_version" not in task_cols:
+            self.conn.execute("ALTER TABLE review_tasks ADD COLUMN model_version TEXT")
+        if "reproducibility_hash" not in task_cols:
+            self.conn.execute(
+                "ALTER TABLE review_tasks ADD COLUMN reproducibility_hash TEXT"
+            )
+
+        issue_cols = self._table_cols("review_issues")
+        if "finding_source" not in issue_cols:
+            self.conn.execute(
+                "ALTER TABLE review_issues ADD COLUMN finding_source TEXT NOT NULL DEFAULT 'DETERMINISTIC'"
+            )
+        if "check_status" not in issue_cols:
+            self.conn.execute(
+                "ALTER TABLE review_issues ADD COLUMN check_status TEXT NOT NULL DEFAULT 'CHECKED'"
+            )
 
         rule_cols = self._table_cols("rules")
         if "priority" not in rule_cols:
@@ -223,6 +360,24 @@ class Storage:
 
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_docs_tenant_status ON documents(tenant_id, status)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_review_tasks_tenant_idem ON review_tasks(tenant_id, idempotency_key)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_stage_states_task_order ON review_stage_states(task_id, stage_order)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_human_overrides_task ON human_overrides(task_id, created_at)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_canonical_contracts_tenant ON canonical_contracts(tenant_id, lifecycle_status)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_async_jobs_poll ON async_jobs(status, next_run_at)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_async_jobs_tenant_idem ON async_jobs(tenant_id, idempotency_key)"
         )
         self.conn.commit()
 
@@ -343,9 +498,9 @@ class Storage:
                     )
                 self._index_clauses(did, commit=False)
                 self._ensure_index_meta(commit=False)
-                self.conn.commit()
+                self._commit()
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
             return did, True
 
@@ -404,7 +559,7 @@ class Storage:
                     ),
                 )
         if commit:
-            self.conn.commit()
+            self._commit()
 
     def _ensure_index_meta(self, commit: bool = True) -> int:
         """确保存在与当前 Embedding 一致的 ACTIVE 索引版本。"""
@@ -437,7 +592,7 @@ class Storage:
             ),
         )
         if commit:
-            self.conn.commit()
+            self._commit()
         return int(
             self.conn.execute(
                 "SELECT MAX(version) AS v FROM embedding_index_meta"
@@ -462,10 +617,10 @@ class Storage:
                 ).fetchall():
                     self._index_clauses(did, commit=False)
                 ver = self._bump_index_version(commit=False)
-                self.conn.commit()
+                self._commit()
                 return ver
             except Exception:
-                self.conn.rollback()
+                self._rollback()
                 raise
 
     def delete_document(self, document_id: str) -> None:
@@ -481,7 +636,7 @@ class Storage:
                 "INSERT INTO audit_log VALUES (NULL,?,?,?,?,?)",
                 (time.time(), "system", "delete_document", document_id, ""),
             )
-            self.conn.commit()
+            self._commit()
             self.rebuild_index()
 
     def rollback_to_version(self, document_id: str, source_hash: str) -> bool:
@@ -500,7 +655,7 @@ class Storage:
                 "UPDATE documents SET status='SUPERSEDED' WHERE document_id<>? AND source_file=? AND tenant_id=?",
                 (row["document_id"], row["source_file"], row["tenant_id"]),
             )
-            self.conn.commit()
+            self._commit()
             self.rebuild_index()
             return True
 
@@ -510,7 +665,7 @@ class Storage:
                 "INSERT INTO audit_log VALUES (NULL,?,?,?,?,?)",
                 (time.time(), actor, action, target, detail),
             )
-            self.conn.commit()
+            self._commit()
 
     # ---------- 文档/条款仓储查询方法（消除外部裸 .conn.execute） ----------
     def get_document(
@@ -561,7 +716,7 @@ class Storage:
                 sql += " AND tenant_id=?"
                 params.append(tenant_id)
             cur = self.conn.execute(sql, params)
-            self.conn.commit()
+            self._commit()
             return cur.rowcount > 0
 
     def find_active_template(
@@ -670,7 +825,7 @@ class Storage:
                     executed_at if executed_at is not None else time.time(),
                 ),
             )
-            self.conn.commit()
+            self._commit()
 
     def list_rule_executions(
         self, rule_id: str | None = None, limit: int = 100
@@ -1000,7 +1155,7 @@ class Storage:
                     resolved_tenant,
                 ),
             )
-            self.conn.commit()
+            self._commit()
             return int(version)
 
     def approve_rule(
@@ -1030,7 +1185,7 @@ class Storage:
                 sql += " AND tenant_id=?"
                 params.append(tenant_id)
             cur = self.conn.execute(sql, params)
-            self.conn.commit()
+            self._commit()
             if cur.rowcount:
                 self.log_audit(approver, "approve_rule", rule_id, f"version={version}")
                 return True
@@ -1059,7 +1214,7 @@ class Storage:
                 out.append(d)
             return out
 
-    # ---------- 审核任务与问题（含人工反馈） ----------
+    # ---------- 审核任务与问题（含人工反馈、阶段持久化、幂等与取消） ----------
     def save_task(
         self,
         task_id: str,
@@ -1069,16 +1224,45 @@ class Storage:
         meta: dict,
         tenant_id: str = "default",
         created_by: str = "system",
+        idempotency_key: str | None = None,
+        rule_set_version: str | None = None,
+        model_version: str | None = None,
+        reproducibility_hash: str | None = None,
     ) -> None:
         now = time.time()
         with self._lock:
             existing = self.conn.execute(
-                "SELECT created_at FROM review_tasks WHERE task_id=?", (task_id,)
+                "SELECT created_at, cancel_requested, idempotency_key, rule_set_version, "
+                "model_version, reproducibility_hash FROM review_tasks WHERE task_id=?",
+                (task_id,),
             ).fetchone()
             created_ts = existing["created_at"] if existing else now
+            cancel_req = int(existing["cancel_requested"] or 0) if existing else 0
+            idem = (
+                idempotency_key
+                if idempotency_key is not None
+                else (existing["idempotency_key"] if existing else None)
+            )
+            rsv = (
+                rule_set_version
+                if rule_set_version is not None
+                else (existing["rule_set_version"] if existing else None)
+            )
+            mv = (
+                model_version
+                if model_version is not None
+                else (existing["model_version"] if existing else None)
+            )
+            repro = (
+                reproducibility_hash
+                if reproducibility_hash is not None
+                else (existing["reproducibility_hash"] if existing else None)
+            )
             self.conn.execute(
                 "INSERT OR REPLACE INTO review_tasks (task_id, document_id, mode, status, created_at, "
-                "updated_at, meta, tenant_id, created_by) VALUES (?,?,?,?,?,?,?,?,?)",
+                "updated_at, meta, tenant_id, created_by, idempotency_key, cancel_requested, "
+                "rule_set_version, model_version, reproducibility_hash) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     task_id,
                     document_id,
@@ -1089,9 +1273,14 @@ class Storage:
                     json.dumps(meta, ensure_ascii=False),
                     tenant_id,
                     created_by,
+                    idem,
+                    cancel_req,
+                    rsv,
+                    mv,
+                    repro,
                 ),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_task(self, task_id: str) -> dict | None:
         with self._lock:
@@ -1101,12 +1290,145 @@ class Storage:
             if not r:
                 return None
             d = dict(r)
+            d["cancel_requested"] = bool(d.get("cancel_requested", 0))
             if isinstance(d.get("meta"), str) and d["meta"]:
                 try:
                     d["meta"] = json.loads(d["meta"])
                 except json.JSONDecodeError:
                     pass
             return d
+
+    def find_task_by_idempotency_key(
+        self, idempotency_key: str, tenant_id: str | None = None
+    ) -> dict | None:
+        if not idempotency_key:
+            return None
+        with self._lock:
+            sql = "SELECT * FROM review_tasks WHERE idempotency_key=?"
+            params: list[Any] = [idempotency_key]
+            if tenant_id is not None:
+                sql += " AND tenant_id=?"
+                params.append(tenant_id)
+            sql += " ORDER BY created_at DESC LIMIT 1"
+            r = self.conn.execute(sql, params).fetchone()
+            if not r:
+                return None
+            d = dict(r)
+            d["cancel_requested"] = bool(d.get("cancel_requested", 0))
+            if isinstance(d.get("meta"), str) and d["meta"]:
+                try:
+                    d["meta"] = json.loads(d["meta"])
+                except json.JSONDecodeError:
+                    pass
+            return d
+
+    def list_tasks(
+        self,
+        tenant_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        with self._lock:
+            where = " WHERE 1=1"
+            params: list[Any] = []
+            if tenant_id is not None:
+                where += " AND tenant_id=?"
+                params.append(tenant_id)
+            if status:
+                where += " AND status=?"
+                params.append(status)
+            total = int(
+                self.conn.execute(
+                    "SELECT COUNT(*) AS c FROM review_tasks" + where, params
+                ).fetchone()["c"]
+            )
+            rows = self.conn.execute(
+                "SELECT * FROM review_tasks"
+                + where
+                + " ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                params + [int(limit), int(offset)],
+            ).fetchall()
+            items = []
+            for r in rows:
+                d = dict(r)
+                d["cancel_requested"] = bool(d.get("cancel_requested", 0))
+                if isinstance(d.get("meta"), str) and d["meta"]:
+                    try:
+                        d["meta"] = json.loads(d["meta"])
+                    except json.JSONDecodeError:
+                        pass
+                items.append(d)
+            return items, total
+
+    def request_cancel_task(self, task_id: str, tenant_id: str | None = None) -> bool:
+        with self._lock:
+            sql = "UPDATE review_tasks SET cancel_requested=1, updated_at=? WHERE task_id=?"
+            params: list[Any] = [time.time(), task_id]
+            if tenant_id is not None:
+                sql += " AND tenant_id=?"
+                params.append(tenant_id)
+            cur = self.conn.execute(sql, params)
+            self._commit()
+            return cur.rowcount > 0
+
+    def is_task_cancelled(self, task_id: str) -> bool:
+        with self._lock:
+            r = self.conn.execute(
+                "SELECT cancel_requested, status FROM review_tasks WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+            if not r:
+                return False
+            return bool(r["cancel_requested"]) or r["status"] == "CANCELLED"
+
+    def save_stage_state(
+        self,
+        task_id: str,
+        stage_name: str,
+        stage_order: int,
+        status: str,
+        attempt: int = 1,
+        started_at: float | None = None,
+        finished_at: float | None = None,
+        duration_ms: float = 0.0,
+        detail: dict | None = None,
+        error: str | None = None,
+    ) -> None:
+        now = time.time()
+        with self._lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO review_stage_states (task_id, stage_name, stage_order, "
+                "status, attempt, started_at, finished_at, duration_ms, detail_json, error) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    task_id,
+                    stage_name,
+                    int(stage_order),
+                    status,
+                    int(attempt),
+                    started_at if started_at is not None else now,
+                    finished_at,
+                    float(duration_ms),
+                    json.dumps(detail or {}, ensure_ascii=False),
+                    error,
+                ),
+            )
+            self._commit()
+
+    def get_stage_states(self, task_id: str) -> list[dict]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM review_stage_states WHERE task_id=? ORDER BY stage_order ASC",
+                (task_id,),
+            ).fetchall()
+            out = []
+            for r in rows:
+                d = dict(r)
+                raw = d.pop("detail_json", None)
+                d["detail"] = json.loads(raw) if raw else {}
+                out.append(d)
+            return out
 
     def save_issues(self, task_id: str, issues: list[dict]) -> None:
         with self._lock:
@@ -1115,7 +1437,8 @@ class Storage:
                     "INSERT OR REPLACE INTO review_issues (issue_id, task_id, rule_id, severity, "
                     "category, title, description, expected_value, actual_value, source_ref, "
                     "knowledge_refs, suggestion, execution_mode, requires_human_review, confidence, "
-                    "human_state, human_note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "human_state, human_note, finding_source, check_status) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         it["issue_id"],
                         task_id,
@@ -1136,9 +1459,11 @@ class Storage:
                         it.get("confidence"),
                         it.get("human_state", "PENDING"),
                         it.get("human_note"),
+                        it.get("finding_source", "DETERMINISTIC"),
+                        it.get("check_status", "CHECKED"),
                     ),
                 )
-            self.conn.commit()
+            self._commit()
 
     def get_issues(self, task_id: str) -> list[dict]:
         with self._lock:
@@ -1178,16 +1503,333 @@ class Storage:
             return False
         with self._lock:
             cur = self.conn.execute(
-                "UPDATE review_issues SET human_state=?, human_note=? WHERE issue_id=?",
+                "UPDATE review_issues SET human_state=?, human_note=?, finding_source='HUMAN' "
+                "WHERE issue_id=?",
                 (action, note, issue_id),
             )
-            self.conn.commit()
+            self._commit()
             if cur.rowcount > 0:
                 self.log_audit(
                     actor, "issue_feedback", issue_id, f"{action} {note[:80]}"
                 )
                 return True
             return False
+
+    def record_human_override(
+        self,
+        override_id: str,
+        task_id: str,
+        issue_id: str,
+        tenant_id: str,
+        actor: str,
+        action: str,
+        reason: str,
+        previous_state: str,
+        new_state: str,
+        created_at: float | None = None,
+    ) -> None:
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO human_overrides (override_id, task_id, issue_id, tenant_id, actor, "
+                "action, reason, previous_state, new_state, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    override_id,
+                    task_id,
+                    issue_id,
+                    tenant_id or "default",
+                    actor,
+                    action,
+                    reason,
+                    previous_state,
+                    new_state,
+                    created_at if created_at is not None else time.time(),
+                ),
+            )
+            self._commit()
+
+    def list_human_overrides(self, task_id: str) -> list[dict]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM human_overrides WHERE task_id=? ORDER BY created_at ASC",
+                (task_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # ---------- 统一标准合同实体（Canonical Contract） ----------
+    def upsert_canonical_contract(self, contract: dict) -> str:
+        cid = contract["contract_id"]
+        now = time.time()
+        tenant = contract.get("tenant_id") or "default"
+        with self._lock:
+            existing = self.conn.execute(
+                "SELECT version, created_at FROM canonical_contracts WHERE contract_id=?",
+                (cid,),
+            ).fetchone()
+            version = int(
+                contract.get("version")
+                or ((existing["version"] + 1) if existing else 1)
+            )
+            created_ts = existing["created_at"] if existing else now
+            total_amt = contract.get("total_amount")
+            if total_amt is None and isinstance(contract.get("amounts"), dict):
+                total_amt = contract["amounts"].get("total_amount")
+            self.conn.execute(
+                "INSERT OR REPLACE INTO canonical_contracts (contract_id, tenant_id, contract_number, "
+                "entity_prefix, title, business_category, contract_subtype, lifecycle_status, "
+                "source_system, source_document_id, source_hash, total_amount, currency, "
+                "parties_json, amounts_json, source_mappings_json, version, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    cid,
+                    tenant,
+                    contract.get("contract_number"),
+                    contract.get("entity_prefix"),
+                    contract.get("title", ""),
+                    contract.get("business_category", ""),
+                    contract.get("contract_subtype", ""),
+                    contract.get("lifecycle_status", "DRAFT"),
+                    contract.get("source_system", "UPLOAD"),
+                    contract.get("source_document_id"),
+                    contract.get("source_hash"),
+                    str(total_amt) if total_amt is not None else None,
+                    contract.get("currency", "CNY"),
+                    json.dumps(contract.get("parties", []), ensure_ascii=False),
+                    json.dumps(contract.get("amounts", {}), ensure_ascii=False),
+                    json.dumps(contract.get("source_mappings", []), ensure_ascii=False),
+                    version,
+                    created_ts,
+                    now,
+                ),
+            )
+            self._commit()
+            return cid
+
+    def get_canonical_contract(
+        self, contract_id: str, tenant_id: str | None = None
+    ) -> dict | None:
+        with self._lock:
+            sql = "SELECT * FROM canonical_contracts WHERE contract_id=?"
+            params: list[Any] = [contract_id]
+            if tenant_id is not None:
+                sql += " AND tenant_id=?"
+                params.append(tenant_id)
+            r = self.conn.execute(sql, params).fetchone()
+            if not r:
+                return None
+            return self._decode_canonical_row(dict(r))
+
+    def list_canonical_contracts(
+        self,
+        tenant_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        with self._lock:
+            where = " WHERE 1=1"
+            params: list[Any] = []
+            if tenant_id is not None:
+                where += " AND tenant_id=?"
+                params.append(tenant_id)
+            total = int(
+                self.conn.execute(
+                    "SELECT COUNT(*) AS c FROM canonical_contracts" + where, params
+                ).fetchone()["c"]
+            )
+            rows = self.conn.execute(
+                "SELECT * FROM canonical_contracts"
+                + where
+                + " ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                params + [int(limit), int(offset)],
+            ).fetchall()
+            return [self._decode_canonical_row(dict(r)) for r in rows], total
+
+    @staticmethod
+    def _decode_canonical_row(d: dict) -> dict:
+        d["parties"] = json.loads(d.pop("parties_json") or "[]")
+        d["amounts"] = json.loads(d.pop("amounts_json") or "{}")
+        d["source_mappings"] = json.loads(d.pop("source_mappings_json") or "[]")
+        return d
+
+    # ---------- 轻量持久化异步任务队列（async_jobs） ----------
+    def enqueue_async_job(self, job: dict) -> tuple[str, bool]:
+        now = time.time()
+        tenant = job.get("tenant_id") or "default"
+        idem = job.get("idempotency_key")
+        with self._lock:
+            if idem:
+                ex = self.conn.execute(
+                    "SELECT job_id FROM async_jobs WHERE tenant_id=? AND idempotency_key=?",
+                    (tenant, idem),
+                ).fetchone()
+                if ex:
+                    return ex["job_id"], False
+            jid = job.get("job_id") or f"job_{uuid.uuid4().hex[:12]}"
+            self.conn.execute(
+                "INSERT INTO async_jobs (job_id, idempotency_key, tenant_id, job_type, status, "
+                "payload_json, result_json, error_message, dead_letter_reason, progress, attempts, "
+                "max_attempts, next_run_at, cancel_requested, temp_file_path, created_by, "
+                "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    jid,
+                    idem,
+                    tenant,
+                    job["job_type"],
+                    job.get("status", "PENDING"),
+                    json.dumps(job.get("payload", {}), ensure_ascii=False),
+                    json.dumps(job.get("result"), ensure_ascii=False)
+                    if job.get("result") is not None
+                    else None,
+                    job.get("error_message"),
+                    job.get("dead_letter_reason"),
+                    int(job.get("progress", 0)),
+                    int(job.get("attempts", 0)),
+                    int(job.get("max_attempts", 3)),
+                    float(job.get("next_run_at", now)),
+                    1 if job.get("cancel_requested") else 0,
+                    job.get("temp_file_path"),
+                    job.get("created_by", "system"),
+                    now,
+                    now,
+                ),
+            )
+            self._commit()
+            return jid, True
+
+    def get_async_job(self, job_id: str, tenant_id: str | None = None) -> dict | None:
+        with self._lock:
+            sql = "SELECT * FROM async_jobs WHERE job_id=?"
+            params: list[Any] = [job_id]
+            if tenant_id is not None:
+                sql += " AND tenant_id=?"
+                params.append(tenant_id)
+            r = self.conn.execute(sql, params).fetchone()
+            return self._decode_job_row(dict(r)) if r else None
+
+    def list_async_jobs(
+        self,
+        tenant_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        with self._lock:
+            where = " WHERE 1=1"
+            params: list[Any] = []
+            if tenant_id is not None:
+                where += " AND tenant_id=?"
+                params.append(tenant_id)
+            if status:
+                where += " AND status=?"
+                params.append(status)
+            total = int(
+                self.conn.execute(
+                    "SELECT COUNT(*) AS c FROM async_jobs" + where, params
+                ).fetchone()["c"]
+            )
+            rows = self.conn.execute(
+                "SELECT * FROM async_jobs"
+                + where
+                + " ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                params + [int(limit), int(offset)],
+            ).fetchall()
+            return [self._decode_job_row(dict(r)) for r in rows], total
+
+    def claim_next_async_job(self, job_types: list[str] | None = None) -> dict | None:
+        now = time.time()
+        with self._lock:
+            sql = (
+                "SELECT * FROM async_jobs WHERE status IN ('PENDING', 'RETRYING') "
+                "AND next_run_at <= ?"
+            )
+            params: list[Any] = [now]
+            if job_types:
+                placeholders = ",".join("?" for _ in job_types)
+                sql += f" AND job_type IN ({placeholders})"
+                params.extend(job_types)
+            sql += " ORDER BY next_run_at ASC, created_at ASC LIMIT 1"
+            row = self.conn.execute(sql, params).fetchone()
+            if not row:
+                return None
+            if row["cancel_requested"]:
+                self.conn.execute(
+                    "UPDATE async_jobs SET status='CANCELLED', updated_at=? WHERE job_id=?",
+                    (now, row["job_id"]),
+                )
+                self._commit()
+                return None
+            new_attempts = int(row["attempts"] or 0) + 1
+            self.conn.execute(
+                "UPDATE async_jobs SET status='RUNNING', attempts=?, updated_at=? WHERE job_id=?",
+                (new_attempts, now, row["job_id"]),
+            )
+            self._commit()
+            return self.get_async_job(row["job_id"])
+
+    def update_async_job(self, job_id: str, **fields: Any) -> bool:
+        if not fields:
+            return False
+        allowed = {
+            "status",
+            "result",
+            "error_message",
+            "dead_letter_reason",
+            "progress",
+            "attempts",
+            "next_run_at",
+            "cancel_requested",
+            "temp_file_path",
+        }
+        assignments: list[str] = ["updated_at=?"]
+        params: list[Any] = [time.time()]
+        for k, v in fields.items():
+            if k not in allowed:
+                continue
+            if k == "result":
+                assignments.append("result_json=?")
+                params.append(
+                    json.dumps(v, ensure_ascii=False) if v is not None else None
+                )
+            elif k == "cancel_requested":
+                assignments.append("cancel_requested=?")
+                params.append(1 if v else 0)
+            else:
+                assignments.append(f"{k}=?")
+                params.append(v)
+        params.append(job_id)
+        with self._lock:
+            cur = self.conn.execute(
+                f"UPDATE async_jobs SET {', '.join(assignments)} WHERE job_id=?",
+                params,
+            )
+            self._commit()
+            return cur.rowcount > 0
+
+    def cancel_async_job(self, job_id: str, tenant_id: str | None = None) -> bool:
+        now = time.time()
+        with self._lock:
+            row = self.get_async_job(job_id, tenant_id=tenant_id)
+            if not row:
+                return False
+            new_status = (
+                "CANCELLED"
+                if row["status"] in ("PENDING", "RETRYING")
+                else row["status"]
+            )
+            self.conn.execute(
+                "UPDATE async_jobs SET cancel_requested=1, status=?, updated_at=? WHERE job_id=?",
+                (new_status, now, job_id),
+            )
+            self._commit()
+            return True
+
+    @staticmethod
+    def _decode_job_row(d: dict) -> dict:
+        d["payload"] = json.loads(d.pop("payload_json") or "{}")
+        raw_res = d.pop("result_json", None)
+        d["result"] = json.loads(raw_res) if raw_res else None
+        d["cancel_requested"] = bool(d.get("cancel_requested", 0))
+        return d
 
     # ---------- 公司格式标准（可配置 / 可审批 / 可版本化 / 租户隔离） ----------
     def save_format_standard(
@@ -1222,7 +1864,7 @@ class Storage:
                     resolved_tenant,
                 ),
             )
-            self.conn.commit()
+            self._commit()
             self.log_audit(
                 created_by, "save_format_standard", standard_id, f"version={version}"
             )
@@ -1264,7 +1906,7 @@ class Storage:
                 "effective_at=? WHERE standard_id=? AND version=?",
                 (approver, now, now, standard_id, int(version)),
             )
-            self.conn.commit()
+            self._commit()
             self.log_audit(
                 approver, "approve_format_standard", standard_id, f"version={version}"
             )
