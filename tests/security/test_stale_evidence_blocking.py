@@ -131,18 +131,22 @@ def test_stale_and_unapproved_evidence_blocking(tmp_path: Path):
                 "clause_id": "c_revoked_old_rate",
                 "text": "旧标准：违约金按每日百分之一计算。",
                 "knowledge_type": "TEMPLATE",
+                "tenant_id": "default",
             },
             {
                 "clause_id": "c_draft_unapproved",
                 "text": "法务未审批草拟条款：单方违约赔偿两倍金额。",
                 "knowledge_type": "TEMPLATE",
+                "tenant_id": "default",
             },
             {
                 "clause_id": "c_active_approved",
                 "text": "现行有效标准：违约金按每日千分之三计算。",
                 "knowledge_type": "TEMPLATE",
+                "tenant_id": "default",
             },
         ],
+        expected_tenant_id="default",
     )
 
     assert summary.total_checked == 3

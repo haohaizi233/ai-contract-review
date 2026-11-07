@@ -803,15 +803,15 @@ class RetrieveEvidenceStage(ReviewStage):
                         "clause_id": cid,
                         "document_id": h.get("document_id", ""),
                         "clause_category": h.get("clause_category"),
-                        "knowledge_type": h.get("knowledge_type") or "TEMPLATE",
-                        "approved_status": h.get("approved_status") or "APPROVED",
+                        "knowledge_type": h.get("knowledge_type", ""),
+                        "approved_status": h.get("approved_status", ""),
                         "authority_rank": h.get("authority_rank", 2),
                         "can_drive_mandatory_finding": bool(
                             h.get("can_drive_mandatory_finding", False)
                         ),
                         "prompt_badge": h.get("prompt_badge", ""),
                         "text": (h.get("text") or h.get("original_text") or "")[:160],
-                        "tenant_id": h.get("tenant_id") or ctx.scope_tenant,
+                        "tenant_id": h.get("tenant_id", ""),
                         "source_hash": h.get("source_hash", ""),
                     }
                 )
@@ -845,15 +845,15 @@ class RetrieveEvidenceStage(ReviewStage):
                             "clause_id": cid,
                             "document_id": h["document_id"],
                             "clause_category": h.get("clause_category"),
-                            "knowledge_type": h.get("knowledge_type") or "TEMPLATE",
-                            "approved_status": h.get("approved_status") or "APPROVED",
+                            "knowledge_type": h.get("knowledge_type", ""),
+                            "approved_status": h.get("approved_status", ""),
                             "authority_rank": h.get("authority_rank", 2),
                             "can_drive_mandatory_finding": bool(
                                 h.get("can_drive_mandatory_finding", False)
                             ),
                             "prompt_badge": h.get("prompt_badge", ""),
                             "text": h["text"][:160],
-                            "tenant_id": h.get("tenant_id") or ctx.scope_tenant,
+                            "tenant_id": h.get("tenant_id", ""),
                             "source_hash": h.get("source_hash", ""),
                         }
                     )
@@ -1036,7 +1036,7 @@ class LLMSemanticReviewStage(ReviewStage):
                     "text": (top_ref.get("original_text") or top_ref.get("text") or "")[
                         :120
                     ],
-                    "source_type": top_ref.get("knowledge_type") or "TEMPLATE",
+                    "source_type": top_ref.get("knowledge_type", ""),
                     "tenant_id": top_ref.get("tenant_id") or ctx.scope_tenant,
                     "approved_status": top_ref.get("approved_status") or "APPROVED",
                 }
@@ -1253,7 +1253,7 @@ class LLMSemanticReviewStage(ReviewStage):
 
 
 class VerifyEvidenceStage(ReviewStage):
-    """Stage 11: 原文证据与 AST 节点真实性核验（将原文摘录绑定至真实节点，无法核验则降级）。"""
+    """Stage 11: 原文证据与 AST 节点真实性核验（包含数据库权威回查与 TOCTOU 撤销防御）。"""
 
     stage_name = "VerifyEvidence"
     stage_order = 11
@@ -1261,70 +1261,101 @@ class VerifyEvidenceStage(ReviewStage):
     output_contract = ("findings",)
     is_stateless_rehydratable = True
 
+    def __init__(self, storage: Any | None = None, verifier: Any | None = None):
+        self.storage = storage
+        if verifier is None:
+            from ...modules.retrieval.citation import CitationVerifier
+            self.verifier = CitationVerifier()
+        else:
+            self.verifier = verifier
+
     def execute(self, ctx: PipelineContext) -> dict[str, Any]:
         downgraded = 0
         bound_from_quote = 0
         for f in ctx.findings:
             ref = f.source_reference
-            if ref is None:
-                continue
-            # 若仅有原文引述尚无 node_ids（如 LLM 发现），尝试反查真实条款节点
-            if not ref.node_ids and ref.original_text:
-                quote = ref.original_text.strip()
-                matched_clause = next(
-                    (
-                        c
-                        for c in ctx.clauses
-                        if quote and quote in c.get("original_text", "")
-                    ),
-                    None,
-                )
-                if matched_clause and matched_clause.get("source_node_ids"):
-                    ref.node_ids = list(matched_clause["source_node_ids"])
-                    ref.clause_number = matched_clause.get("clause_number")
-                    ref.exact_quote = quote
-                    f.citation_status = "VERIFIED"
-                    bound_from_quote += 1
-                else:
-                    f.source_reference = None
-                    f.check_status = CheckStatus.INSUFFICIENT_EVIDENCE.value
-                    f.requires_human_review = True
-                    f.citation_status = "CITATION_UNVERIFIED"
-                    downgraded += 1
-                    continue
-
-            if ref.node_ids and not (set(ref.node_ids) & ctx.valid_node_ids):
-                f.check_status = CheckStatus.INSUFFICIENT_EVIDENCE.value
-                f.requires_human_review = True
-                f.citation_status = "CITATION_UNVERIFIED"
-                f.description += (
-                    "（证据校验：引用节点未能在解析结果中核实，已降级为证据不足）"
-                )
-                downgraded += 1
-            elif not ref.node_ids:
-                f.source_reference = None
-                f.citation_status = "CITATION_UNVERIFIED"
-
-            # 严格核验知识库引用（knowledge_references）：隔离跨租户并校验权威审批状态
-            if f.knowledge_references:
-                for kref in f.knowledge_references:
-                    ref_tenant = kref.get("tenant_id")
-                    if (
-                        ref_tenant
-                        and ctx.scope_tenant
-                        and ref_tenant != ctx.scope_tenant
-                    ):
+            if ref is not None:
+                # 若仅有原文引述尚无 node_ids（如 LLM 发现），尝试反查真实条款节点
+                if not ref.node_ids and ref.original_text:
+                    quote = ref.original_text.strip()
+                    matched_clause = next(
+                        (
+                            c
+                            for c in ctx.clauses
+                            if quote and quote in c.get("original_text", "")
+                        ),
+                        None,
+                    )
+                    if matched_clause and matched_clause.get("source_node_ids"):
+                        ref.node_ids = list(matched_clause["source_node_ids"])
+                        ref.clause_number = matched_clause.get("clause_number")
+                        ref.exact_quote = quote
+                        f.citation_status = "VERIFIED"
+                        bound_from_quote += 1
+                    else:
+                        f.source_reference = None
                         f.check_status = CheckStatus.INSUFFICIENT_EVIDENCE.value
                         f.requires_human_review = True
                         f.citation_status = "CITATION_UNVERIFIED"
-                        f.description += "（证据校验：知识库引用跨租户越权，已降级）"
                         downgraded += 1
-                        break
-                    st = kref.get("approved_status")
-                    if st and st != "APPROVED":
-                        f.requires_human_review = True
-                        if f.severity == "HIGH":
-                            f.severity = "MEDIUM"
+                elif ref.node_ids and not (set(ref.node_ids) & ctx.valid_node_ids):
+                    f.check_status = CheckStatus.INSUFFICIENT_EVIDENCE.value
+                    f.requires_human_review = True
+                    f.citation_status = "CITATION_UNVERIFIED"
+                    f.description += (
+                        "（证据校验：引用节点未能在解析结果中核实，已降级为证据不足）"
+                    )
+                    downgraded += 1
+                elif not ref.node_ids:
+                    f.source_reference = None
+                    f.citation_status = "CITATION_UNVERIFIED"
+
+            # 严格核验知识库引用（knowledge_references）：通过真实数据库独立回查权威状态（防 TOCTOU）
+            if f.knowledge_references:
+                eff_storage = self.storage or getattr(ctx, "storage_backend", None)
+                for kref in f.knowledge_references:
+                    if eff_storage is not None:
+                        res = self.verifier.verify_evidence_item(
+                            eff_storage, kref, expected_tenant_id=ctx.scope_tenant
+                        )
+                        if not res.verified:
+                            f.check_status = CheckStatus.INSUFFICIENT_EVIDENCE.value
+                            f.requires_human_review = True
+                            f.citation_status = "CITATION_UNVERIFIED"
+                            if res.status == "APPROVAL_REVOKED":
+                                f.description += "（证据校验：引用的标准依据已被法务撤销失效，已降级为证据不足）"
+                            else:
+                                f.description += f"（证据校验：知识库引用权威核验未通过[{res.status}]，已降级为证据不足）"
+                            if f.severity in ("HIGH", "CRITICAL"):
+                                f.severity = "LOW"
+                            downgraded += 1
+                            break
+                        # 检查来源是否允许驱动强制结论
+                        ktype = str(kref.get("knowledge_type") or kref.get("source_type") or "").upper()
+                        if ktype in ("LEGAL_REFERENCE", "HISTORICAL_CASE") or kref.get("can_drive_mandatory_finding") is False:
+                            if f.severity in ("HIGH", "CRITICAL"):
+                                f.severity = "LOW"
+                                f.requires_human_review = True
+                                f.check_status = CheckStatus.NEEDS_MANUAL_REVIEW.value
+                                f.description += "（参考依据不具备企业强制基准效力，已降级并提示人工复核）"
+                    else:
+                        ref_tenant = kref.get("tenant_id")
+                        if ref_tenant and ctx.scope_tenant and ref_tenant != ctx.scope_tenant:
+                            f.check_status = CheckStatus.INSUFFICIENT_EVIDENCE.value
+                            f.requires_human_review = True
+                            f.citation_status = "CITATION_UNVERIFIED"
+                            f.description += "（证据校验：知识库引用跨租户越权，已降级）"
+                            downgraded += 1
+                            break
+                        st = kref.get("approved_status")
+                        if st != "APPROVED":
+                            f.check_status = CheckStatus.INSUFFICIENT_EVIDENCE.value
+                            f.requires_human_review = True
+                            f.citation_status = "CITATION_UNVERIFIED"
+                            if f.severity in ("HIGH", "CRITICAL"):
+                                f.severity = "LOW"
+                            downgraded += 1
+                            break
         return {
             "downgraded_count": downgraded,
             "bound_from_quote": bound_from_quote,
