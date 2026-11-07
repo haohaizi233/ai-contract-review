@@ -145,6 +145,29 @@ CREATE TABLE IF NOT EXISTS human_overrides (
     new_state TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS canonical_contract_versions (
+    contract_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    tenant_id TEXT NOT NULL,
+    snapshot TEXT,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (contract_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_canonical_versions_lookup
+    ON canonical_contract_versions(contract_id, version DESC);
+
+CREATE TABLE IF NOT EXISTS contract_source_mappings (
+    tenant_id TEXT NOT NULL,
+    source_system TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    contract_id TEXT NOT NULL,
+    external_code TEXT,
+    source_hash TEXT,
+    synced_at REAL NOT NULL,
+    PRIMARY KEY (tenant_id, source_system, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_source_mappings_contract
+    ON contract_source_mappings(contract_id);
 CREATE TABLE IF NOT EXISTS canonical_contracts (
     contract_id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL DEFAULT 'default',
@@ -1649,6 +1672,87 @@ class Storage:
             return [dict(r) for r in rows]
 
     # ---------- 统一标准合同实体（Canonical Contract） ----------
+    def save_canonical_version(
+        self, outcome: Any, expected_version: int | None = None
+    ) -> bool:
+        contract = outcome.contract
+        cid = contract.contract_id
+        now = time.time()
+        tenant = getattr(contract, "tenant_id", "default") or "default"
+        contract_dict = contract.to_dict() if hasattr(contract, "to_dict") else dict(contract)
+
+        with self._lock:
+            if expected_version is not None:
+                cur_row = self.conn.execute(
+                    "SELECT version FROM canonical_contracts WHERE contract_id=?",
+                    (cid,),
+                ).fetchone()
+                if not cur_row or int(cur_row["version"]) != int(expected_version):
+                    return False
+
+            self.upsert_canonical_contract(contract_dict)
+
+            snap_str = json.dumps(contract_dict, ensure_ascii=False)
+            self.conn.execute(
+                "INSERT OR REPLACE INTO canonical_contract_versions (contract_id, version, tenant_id, snapshot, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (cid, contract.version, tenant, snap_str, now),
+            )
+
+            for m in getattr(contract, "source_mappings", []):
+                m_dict = m.to_dict() if hasattr(m, "to_dict") else dict(m)
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO contract_source_mappings "
+                    "(tenant_id, source_system, external_id, contract_id, external_code, source_hash, synced_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        tenant,
+                        m_dict.get("source_system"),
+                        m_dict.get("external_id"),
+                        cid,
+                        m_dict.get("external_code"),
+                        m_dict.get("checksum"),
+                        now,
+                    ),
+                )
+            self._commit()
+            return True
+
+    def get_canonical_versions(self, contract_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT contract_id, version, tenant_id, snapshot, created_at "
+                "FROM canonical_contract_versions WHERE contract_id=? ORDER BY version ASC",
+                (contract_id,),
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for r in rows:
+                raw_snap = r["snapshot"]
+                snap = json.loads(raw_snap) if raw_snap else {}
+                result.append(
+                    {
+                        "contract_id": r["contract_id"],
+                        "version": int(r["version"]),
+                        "tenant_id": r["tenant_id"],
+                        "snapshot": snap,
+                        "created_at": float(r["created_at"]),
+                    }
+                )
+            return result
+
+    def find_canonical_by_source(
+        self, tenant_id: str, source_system: str, external_id: str
+    ) -> dict | None:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT contract_id FROM contract_source_mappings "
+                "WHERE tenant_id=? AND source_system=? AND external_id=?",
+                (tenant_id, source_system, external_id),
+            ).fetchone()
+            if not row:
+                return None
+            return self.get_canonical_contract(row["contract_id"], tenant_id=tenant_id)
+
     def upsert_canonical_contract(self, contract: dict) -> str:
         cid = contract["contract_id"]
         now = time.time()

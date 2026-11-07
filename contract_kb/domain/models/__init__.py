@@ -5,8 +5,11 @@ from .canonical_contract import (
     ContractLifecycleStatus,
     ContractNumber,
     ContractParty,
+    MergeOutcome,
+    SourceContractRecord,
     SourceRecordMapping,
     SourceSystemType,
+    merge_canonical,
 )
 from .execution import JobLease, JobOutcome
 from .review import (

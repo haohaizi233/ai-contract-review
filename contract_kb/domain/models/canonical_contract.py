@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
@@ -229,3 +230,155 @@ class CanonicalContract:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+
+
+@dataclass
+class SourceContractRecord:
+    """外部业务系统输入的合同源记录 DTO。"""
+
+    tenant_id: str
+    source_system: str
+    external_id: str
+    external_code: str = ""
+    title: str = ""
+    contract_number: str = ""
+    business_category: str = ""
+    contract_subtype: str = ""
+    lifecycle_status: str = ContractLifecycleStatus.DRAFT.value
+    parties: list[ContractParty] = field(default_factory=list)
+    amounts: ContractAmountSummary = field(default_factory=ContractAmountSummary)
+    source_updated_at: float = field(default_factory=time.time)
+    source_hash: str = ""
+    attachments: list[dict[str, Any]] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class MergeOutcome:
+    """合同合并纯函数计算结果。"""
+
+    contract: CanonicalContract
+    is_new: bool
+    version_incremented: bool
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
+
+
+def merge_canonical(
+    existing: CanonicalContract | None, incoming: SourceContractRecord
+) -> MergeOutcome:
+    """纯函数：合并外部来源记录到统一合同实体（T10 / F06）。"""
+    mapping = SourceRecordMapping(
+        source_system=incoming.source_system,
+        external_id=incoming.external_id,
+        external_code=incoming.external_code,
+        synced_at=incoming.source_updated_at,
+        checksum=incoming.source_hash,
+        extra=incoming.extra,
+    )
+
+    if existing is None:
+        c_id = f"cc_{uuid.uuid4().hex[:12]}"
+        contract = CanonicalContract(
+            contract_id=c_id,
+            tenant_id=incoming.tenant_id,
+            contract_number=ContractNumber.parse(incoming.contract_number),
+            title=incoming.title,
+            business_category=incoming.business_category,
+            contract_subtype=incoming.contract_subtype,
+            lifecycle_status=incoming.lifecycle_status,
+            source_system=incoming.source_system,
+            source_document_id=incoming.external_id,
+            source_hash=incoming.source_hash,
+            parties=list(incoming.parties),
+            amounts=incoming.amounts,
+            source_mappings=[mapping],
+            version=1,
+            created_at=time.time(),
+            updated_at=time.time(),
+        )
+        return MergeOutcome(contract=contract, is_new=True, version_incremented=False)
+
+    # 检查是否为同源乱序更新：如果传入的 source_updated_at 小于已有映射的更新时间，忽略本次更新
+    for m in existing.source_mappings:
+        if (
+            m.source_system == incoming.source_system
+            and m.external_id == incoming.external_id
+        ):
+            if incoming.source_updated_at < m.synced_at:
+                return MergeOutcome(
+                    contract=existing, is_new=False, version_incremented=False
+                )
+
+    # 保留并更新来源映射（不丢失其他来源的映射）
+    updated_mappings: list[SourceRecordMapping] = []
+    replaced = False
+    for m in existing.source_mappings:
+        if (
+            m.source_system == incoming.source_system
+            and m.external_id == incoming.external_id
+        ):
+            updated_mappings.append(mapping)
+            replaced = True
+        else:
+            updated_mappings.append(m)
+    if not replaced:
+        updated_mappings.append(mapping)
+
+    # 检查实质性变动
+    substantive_change = False
+    if incoming.title and incoming.title != existing.title:
+        substantive_change = True
+    if incoming.source_hash and incoming.source_hash != existing.source_hash:
+        substantive_change = True
+    if (
+        incoming.amounts.total_amount is not None
+        and incoming.amounts.total_amount != existing.amounts.total_amount
+    ):
+        substantive_change = True
+    if incoming.parties and len(incoming.parties) != len(existing.parties):
+        substantive_change = True
+
+    new_version = existing.version + 1 if substantive_change else existing.version
+
+    merged_title = incoming.title if incoming.title else existing.title
+    merged_amounts = (
+        incoming.amounts
+        if incoming.amounts.total_amount is not None
+        else existing.amounts
+    )
+    merged_parties = incoming.parties if incoming.parties else existing.parties
+    merged_status = (
+        incoming.lifecycle_status
+        if incoming.lifecycle_status != ContractLifecycleStatus.DRAFT.value
+        else existing.lifecycle_status
+    )
+    merged_hash = (
+        incoming.source_hash if incoming.source_hash else existing.source_hash
+    )
+
+    merged_contract = CanonicalContract(
+        contract_id=existing.contract_id,
+        tenant_id=existing.tenant_id,
+        contract_number=(
+            ContractNumber.parse(incoming.contract_number) or existing.contract_number
+        ),
+        title=merged_title,
+        business_category=incoming.business_category or existing.business_category,
+        contract_subtype=incoming.contract_subtype or existing.contract_subtype,
+        lifecycle_status=merged_status,
+        source_system=existing.source_system,
+        source_document_id=existing.source_document_id,
+        source_hash=merged_hash,
+        parties=merged_parties,
+        amounts=merged_amounts,
+        source_mappings=updated_mappings,
+        version=new_version,
+        created_at=existing.created_at,
+        updated_at=time.time() if substantive_change else existing.updated_at,
+    )
+    return MergeOutcome(
+        contract=merged_contract,
+        is_new=False,
+        version_incremented=substantive_change,
+        conflicts=[],
+    )

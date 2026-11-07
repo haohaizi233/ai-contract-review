@@ -1681,6 +1681,108 @@ class PgVectorStorage:
             return [dict(zip(cols, r)) for r in rows]
 
     # ---------- 统一标准合同实体（Canonical Contract） ----------
+    def save_canonical_version(
+        self, outcome: Any, expected_version: int | None = None
+    ) -> bool:
+        contract = outcome.contract
+        cid = contract.contract_id
+        time.time()
+        tenant = getattr(contract, "tenant_id", "default") or "default"
+        contract_dict = contract.to_dict() if hasattr(contract, "to_dict") else dict(contract)
+
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    if expected_version is not None:
+                        cur.execute(
+                            "SELECT version FROM canonical_contracts WHERE contract_id=%s",
+                            (cid,),
+                        )
+                        row = cur.fetchone()
+                        if not row or int(row[0]) != int(expected_version):
+                            self._commit()
+                            return False
+
+                    self.upsert_canonical_contract(contract_dict)
+
+                    snap_str = json.dumps(contract_dict, ensure_ascii=False)
+                    cur.execute(
+                        "INSERT INTO canonical_contract_versions (contract_id, version, tenant_id, snapshot, created_at) "
+                        "VALUES (%s, %s, %s, %s, now()) "
+                        "ON CONFLICT (contract_id, version) DO UPDATE SET snapshot=EXCLUDED.snapshot",
+                        (cid, contract.version, tenant, snap_str),
+                    )
+
+                    for m in getattr(contract, "source_mappings", []):
+                        m_dict = m.to_dict() if hasattr(m, "to_dict") else dict(m)
+                        cur.execute(
+                            "INSERT INTO contract_source_mappings "
+                            "(tenant_id, source_system, external_id, contract_id, external_code, source_hash, synced_at) "
+                            "VALUES (%s, %s, %s, %s, %s, %s, now()) "
+                            "ON CONFLICT (tenant_id, source_system, external_id) DO UPDATE SET "
+                            "contract_id=EXCLUDED.contract_id, external_code=EXCLUDED.external_code, "
+                            "source_hash=EXCLUDED.source_hash, synced_at=now()",
+                            (
+                                tenant,
+                                m_dict.get("source_system"),
+                                m_dict.get("external_id"),
+                                cid,
+                                m_dict.get("external_code"),
+                                m_dict.get("checksum"),
+                            ),
+                        )
+                self._commit()
+                return True
+            except Exception:
+                self._rollback()
+                raise
+
+    def get_canonical_versions(self, contract_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT contract_id, version, tenant_id, snapshot, EXTRACT(EPOCH FROM created_at) "
+                        "FROM canonical_contract_versions WHERE contract_id=%s ORDER BY version ASC",
+                        (contract_id,),
+                    )
+                    rows = cur.fetchall()
+                    result = []
+                    for r in rows:
+                        snap = r[3] if isinstance(r[3], dict) else (json.loads(r[3]) if r[3] else {})
+                        result.append(
+                            {
+                                "contract_id": r[0],
+                                "version": int(r[1]),
+                                "tenant_id": r[2],
+                                "snapshot": snap,
+                                "created_at": float(r[4]),
+                            }
+                        )
+                    return result
+            except Exception:
+                self._rollback()
+                raise
+
+    def find_canonical_by_source(
+        self, tenant_id: str, source_system: str, external_id: str
+    ) -> dict | None:
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT contract_id FROM contract_source_mappings "
+                        "WHERE tenant_id=%s AND source_system=%s AND external_id=%s",
+                        (tenant_id, source_system, external_id),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return None
+                    return self.get_canonical_contract(row[0], tenant_id=tenant_id)
+            except Exception:
+                self._rollback()
+                raise
+
     def upsert_canonical_contract(self, contract: dict) -> str:
         cid = contract["contract_id"]
         tenant = contract.get("tenant_id") or "default"
