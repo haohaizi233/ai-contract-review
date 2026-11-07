@@ -1,0 +1,20 @@
+{
+  "timeout": {
+    "status": "TIMEOUT",
+    "configured_seconds": 0.02,
+    "actual_seconds": 0.303
+  },
+  "budget": {
+    "status": "SUCCEEDED",
+    "limit": 1,
+    "used": 9999
+  },
+  "crash_recovery": {
+    "status": "RUNNING",
+    "next_job": null
+  },
+  "governance": {
+    "pending_template_admitted": true,
+    "unknown_source_admitted_as_template": true
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "git_sha": "4eabf0edf21aceb046e9600c0b661e93c3fd019a",
+  "branch": "codex/architecture-remediation",
+  "remote_head": "ab17bf08ab359dff30b2d826431866fa1ae1105d",
+  "dirty": false,
+  "python_version": "3.13.17 (tags/v3.13.17:64e080d, Oct 21 2026, 14:08:53) [MSC v.1944 64 bit (AMD64)]",
+  "dependency_lock_digest": "bbf7fc470b7589f7835d2f20f8d67669dcf19d1324f321ba9b077435678662eb",
+  "database_versions": {
+    "sqlite": "3.50.4",
+    "postgresql": "PostgreSQL 18.6 (Relational test only; vector extension uninstalled on host)"
+  },
+  "dataset_tier": "SYNTHETIC",
+  "test_baseline": {
+    "command": ".\\.venv\\Scripts\\python.exe -m pytest tests tools/wecom_wedrive_probe/tests -ra",
+    "passed": 249,
+    "failed": 0,
+    "skipped": 22,
+    "warning": 1,
+    "exit_code": 0
+  },
+  "acceptance_baseline_evidence": "docs/architecture/acceptance-evidence-20261107/",
+  "acceptance_report": "docs/architecture/independent-acceptance-20261107.md",
+  "remediation_plan": "docs/superpowers/plans/2026-11-07-architecture-remediation-plan.md"
+}

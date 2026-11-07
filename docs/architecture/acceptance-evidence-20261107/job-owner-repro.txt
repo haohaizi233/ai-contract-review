@@ -1,0 +1,19 @@
+import tempfile,json
+from pathlib import Path
+from unittest.mock import patch
+from starlette.requests import Request
+from contract_kb.storage import Storage
+from contract_kb.auth import Principal
+from contract_kb.infrastructure.task_queue.runner import PersistentTaskRunner
+import contract_kb.api as api
+with tempfile.TemporaryDirectory(prefix='arch-idempotency-') as td:
+ st=Storage(Path(td)/'db.sqlite'); runner=PersistentTaskRunner(st)
+ runner.submit('CONTRACT_REVIEW',{'custom_requirements':['synthetic-alice-private']},tenant_id='test',created_by='alice',idempotency_key='reused-key')
+ request=Request({'type':'http','method':'POST','path':'/api/v1/jobs/review','headers':[(b'x-idempotency-key',b'reused-key')],'query_string':b''})
+ upload=Path(td)/'bob.docx';upload.write_bytes(b'synthetic')
+ with patch.object(api,'_principal',return_value=Principal('bob',['reviewer'],'test')),patch.object(api,'get_runner',return_value=runner),patch.object(api,'get_storage',return_value=st),patch.object(api,'_validate_and_stage_docx',return_value=(upload,b'synthetic')):
+  result=api.enqueue_review_job(request,None,'STANDARD','')
+ out={'bob_received_alice_job':result['job']['created_by']=='alice','created':result['created'],'bob_received_alice_payload':result['job'].get('payload')}; print(json.dumps(out,ensure_ascii=False)); Path(__file__).with_suffix('.json').write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding='utf-8')
+ print('bob_received_alice_payload',result['job'].get('payload'))
+ st.close()
+

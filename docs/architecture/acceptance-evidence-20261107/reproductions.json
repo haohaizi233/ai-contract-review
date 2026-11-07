@@ -1,0 +1,162 @@
+{
+  "core": {
+    "command": "python docs\\architecture\\acceptance-evidence-20261107\\core-repro.txt",
+    "exit_code": 0,
+    "evidence": {
+      "resume_execution_counts": {
+        "Receive": 2,
+        "Validate": 2,
+        "Parse": 2,
+        "Normalize": 2,
+        "Classify": 2,
+        "SelectTemplate": 2,
+        "ExtractFields": 2,
+        "DeterministicValidation": 2,
+        "RetrieveEvidence": 2,
+        "LLMSemanticReview": 1,
+        "VerifyEvidence": 1,
+        "ResolveFindings": 1,
+        "HumanReview": 1,
+        "FinalizeReport": 1
+      },
+      "override_exception": "injected override history write failure",
+      "failed_override_state": {
+        "human_state": "IGNORE",
+        "override_rows": 0
+      },
+      "model_version_collision": [
+        {
+          "configured_model": "model-a",
+          "persisted_model_version": "same_provider"
+        },
+        {
+          "configured_model": "model-b",
+          "persisted_model_version": "same_provider"
+        }
+      ],
+      "final_stage_timeout": {
+        "timeout_seconds": 1,
+        "elapsed_seconds": 1.154,
+        "result_status": "COMPLETED",
+        "persisted_status": "COMPLETED"
+      }
+    }
+  },
+  "ai-tasks": {
+    "command": "python docs\\architecture\\acceptance-evidence-20261107\\ai-tasks-repro.txt",
+    "exit_code": 0,
+    "evidence": {
+      "timeout": {
+        "status": "TIMEOUT",
+        "configured_seconds": 0.02,
+        "actual_seconds": 0.303
+      },
+      "budget": {
+        "status": "SUCCEEDED",
+        "limit": 1,
+        "used": 9999
+      },
+      "crash_recovery": {
+        "status": "RUNNING",
+        "next_job": null
+      },
+      "governance": {
+        "pending_template_admitted": true,
+        "unknown_source_admitted_as_template": true
+      }
+    }
+  },
+  "security": {
+    "command": "python docs\\architecture\\acceptance-evidence-20261107\\security-repro.txt",
+    "exit_code": 0,
+    "evidence": {
+      "replay_accepted": [
+        true,
+        true,
+        true
+      ],
+      "json_secret_redacted": false,
+      "list_nested_secret_redacted": false,
+      "audit_secret_stored_plain": true,
+      "my_first_page": {
+        "items": [],
+        "total": 0,
+        "limit": 1,
+        "offset": 0
+      },
+      "my_second_page": {
+        "items": [
+          {
+            "task_id": "my-task",
+            "created_by": "alice"
+          }
+        ],
+        "total": 1,
+        "limit": 1,
+        "offset": 1
+      }
+    }
+  },
+  "job-owner": {
+    "command": "python docs\\architecture\\acceptance-evidence-20261107\\job-owner-repro.txt",
+    "exit_code": 0,
+    "evidence": {
+      "bob_received_alice_job": true,
+      "created": false,
+      "bob_received_alice_payload": {
+        "custom_requirements": [
+          "synthetic-alice-private"
+        ]
+      }
+    }
+  },
+  "sync-loss": {
+    "command": "python docs\\architecture\\acceptance-evidence-20261107\\sync-loss-repro.txt",
+    "exit_code": 0,
+    "evidence": {
+      "before": {
+        "version": 1,
+        "mappings": [
+          {
+            "source_system": "TENDER_NEW",
+            "external_id": "1",
+            "external_code": "ZSCQ20250100",
+            "synced_at": 1794029958.5726542,
+            "checksum": "",
+            "extra": {}
+          },
+          {
+            "source_system": "WEAVER_E9",
+            "external_id": "1",
+            "external_code": "ZSCQ20250100",
+            "synced_at": 1794029958.5726585,
+            "checksum": "",
+            "extra": {}
+          }
+        ]
+      },
+      "after": {
+        "version": 1,
+        "mappings": [
+          {
+            "source_system": "TENDER_NEW",
+            "external_id": "2",
+            "external_code": "ZSCQ20250100",
+            "synced_at": 1794029958.58192,
+            "checksum": "",
+            "extra": {}
+          }
+        ]
+      }
+    }
+  },
+  "sync_owner": {
+    "command": "python docs\\architecture\\acceptance-evidence-20261107\\sync-owner-repro.txt",
+    "exit_code": 0,
+    "evidence": {
+      "same_task": true,
+      "bob_received_creator": "alice",
+      "second_document_not_reviewed": true
+    }
+  }
+}

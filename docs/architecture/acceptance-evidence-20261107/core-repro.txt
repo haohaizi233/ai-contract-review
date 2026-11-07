@@ -1,0 +1,47 @@
+import tempfile,json,time
+from pathlib import Path
+from types import SimpleNamespace
+from contract_kb.storage import Storage
+from contract_kb.application.pipeline.runner import ReviewPipeline
+from contract_kb.application.pipeline.stages import ReviewStage,ReceiveStage
+from contract_kb.domain.models.review import PipelineContext
+from contract_kb.golden import generate_all
+from contract_kb.modules.rules import HumanOverrideService
+out={}
+with tempfile.TemporaryDirectory() as td:
+ p=Path(td); generate_all(p/'samples'); sample=p/'samples'/'mut_08_amount_case_mismatch.docx'; st=Storage(p/'t.db')
+ pl=ReviewPipeline(st); counts={}; fail=[True]
+ class Spy(ReviewStage):
+  def __init__(self,inner):self.inner=inner;self.stage_name=inner.stage_name;self.stage_order=inner.stage_order
+  def execute(self,ctx):
+   counts[self.stage_name]=counts.get(self.stage_name,0)+1
+   if self.stage_order==9 and fail[0]:raise RuntimeError('injected stage9 failure')
+   return self.inner.execute(ctx)
+ pl.stages=[Spy(x) for x in pl.stages]
+ try:pl.run(sample,task_id='retry1',tenant_id='audit_tenant')
+ except RuntimeError:pass
+ fail[0]=False;r=pl.run(sample,task_id='retry1',tenant_id='audit_tenant')
+ out['resume_execution_counts']=counts
+ issue=r.issues[0]
+ def boom(**kw):raise RuntimeError('injected override history write failure')
+ st.record_human_override=boom
+ try:HumanOverrideService().apply_override(st,issue_id=issue['issue_id'],action='IGNORE',actor='audit_legal',reason='synthetic test',tenant_id='audit_tenant')
+ except RuntimeError as e:out['override_exception']=str(e)
+ out['failed_override_state']={'human_state':st.get_issue(issue['issue_id'])['human_state'],'override_rows':len(st.list_human_overrides('retry1'))}
+ versions=[]
+ for model in ['model-a','model-b']:
+  ctx=PipelineContext(docx_path=sample)
+  ReceiveStage(llm_status_fn=lambda m=model:{'provider':'same_provider','model':m,'configured':True}).execute(ctx)
+  versions.append({'configured_model':model,'persisted_model_version':ctx.model_version})
+ out['model_version_collision']=versions
+ class SlowFinalize(ReviewStage):
+  stage_name='FinalizeReport';stage_order=14
+  def __init__(self,inner):self.inner=inner
+  def execute(self,ctx):time.sleep(1.1);return self.inner.execute(ctx)
+ pl2=ReviewPipeline(st);pl2.stages[-1]=SlowFinalize(pl2.stages[-1]);t=time.monotonic()
+ r2=pl2.run(sample,task_id='timeout_final',tenant_id='audit_tenant',timeout_seconds=1.0)
+ out['final_stage_timeout']={'timeout_seconds':1,'elapsed_seconds':round(time.monotonic()-t,3),'result_status':r2.status,'persisted_status':st.get_task('timeout_final')['status']}
+ st.close()
+result_path=Path(tempfile.gettempdir())/'architecture_acceptance_core_20261107.json'
+result_path.write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding='utf-8')
+print(json.dumps(out,ensure_ascii=False,indent=2));print('JSON_PATH',result_path)

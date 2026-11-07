@@ -1,0 +1,9 @@
+{
+  "bob_received_alice_job": true,
+  "created": false,
+  "bob_received_alice_payload": {
+    "custom_requirements": [
+      "synthetic-alice-private"
+    ]
+  }
+}

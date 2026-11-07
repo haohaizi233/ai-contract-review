@@ -1,0 +1,16 @@
+import sys,tempfile,json
+from pathlib import Path
+sys.path.insert(0,r'D:\Users\Administrator\Desktop\AI合同')
+from contract_kb.storage import Storage
+from contract_kb.modules.integrations.adapters import ContractIntegrationOrchestrator,SyncWatermarkStore
+class Source:
+ def __init__(self,batches):self.batches=iter(batches)
+ def fetch_contracts_since(self,*args,**kwargs):return next(self.batches,[])
+with tempfile.TemporaryDirectory() as p:
+ s=Storage(Path(p)/'db.sqlite')
+ e=Source([[{'requestid':1,'contract_no':'ZSCQ20250100','title':'e9 title'}],[]])
+ t=Source([[{'id':1,'contract_no':'ZSCQ20250100','title':'tender title','party_a':'Sample A','total_amount':'30000'}],[{'id':2,'contract_no':'ZSCQ20250100','title':'tender next version','party_a':'Sample A','total_amount':'40000'}]])
+ o=ContractIntegrationOrchestrator(s,SyncWatermarkStore(Path(p)/'wm.json'),e,t)
+ o.sync_incremental_batch(tenant_id='t',dry_run=False);row=s.list_canonical_contracts(tenant_id='t')[0][0];before={'version':row['version'],'mappings':row['source_mappings']}
+ o.sync_incremental_batch(tenant_id='t',dry_run=False);row=s.list_canonical_contracts(tenant_id='t')[0][0];after={'version':row['version'],'mappings':row['source_mappings']}
+ print(json.dumps({'before':before,'after':after},indent=2));s.close()

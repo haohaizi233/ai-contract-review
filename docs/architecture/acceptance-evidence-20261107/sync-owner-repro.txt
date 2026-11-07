@@ -1,0 +1,36 @@
+"""Synthetic-only reproduction of synchronous idempotency owner/content confusion."""
+import json
+import tempfile
+from pathlib import Path
+from contract_kb.storage import Storage
+from contract_kb.golden import generate_all
+from contract_kb.review_engine import ReviewEngine
+
+with tempfile.TemporaryDirectory(prefix="acceptance_sync_owner_") as temp_dir:
+    root = Path(temp_dir)
+    golden_dir = root / "golden"
+    manifest = generate_all(golden_dir)
+    storage = Storage(root / "isolated.db")
+    try:
+        engine = ReviewEngine(storage)
+        first = engine.review_result(
+            golden_dir / manifest[0]["file"],
+            tenant_id="synthetic_tenant", created_by="alice",
+            idempotency_key="shared-key",
+        )
+        second = engine.review_result(
+            golden_dir / manifest[1]["file"],
+            tenant_id="synthetic_tenant", created_by="bob",
+            idempotency_key="shared-key",
+        )
+        result = {
+            "same_task": first.task_id == second.task_id,
+            "bob_received_creator": second.created_by,
+            "second_document_not_reviewed": second.source_file == first.source_file,
+        }
+        print(json.dumps(result))
+        Path(__file__).with_suffix(".json").write_text(
+            json.dumps(result, indent=2), encoding="utf-8"
+        )
+    finally:
+        storage.close()

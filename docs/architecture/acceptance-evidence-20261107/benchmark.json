@@ -1,0 +1,52 @@
+{
+  "scope": "synthetic only; no real model; no enterprise corpus",
+  "benchmark": {
+    "queries": 15,
+    "metrics": {
+      "Hit@1": 0.8667,
+      "Hit@3": 1.0,
+      "Hit@5": 1.0,
+      "Hit@8": 1.0,
+      "MRR": 0.9333,
+      "NDCG@8": 0.9229,
+      "HardNegAvoidance@8": 0.8667
+    }
+  },
+  "rag_evaluation": {
+    "tier": "SYNTHETIC_UNIT_REGRESSION",
+    "metrics": {
+      "Hit@1": 0.9,
+      "Recall@1": 0.9,
+      "Hit@3": 0.9333,
+      "Recall@3": 0.9333,
+      "Hit@5": 0.9333,
+      "Recall@5": 0.9333,
+      "Hit@8": 0.9667,
+      "Recall@8": 0.9667,
+      "MRR": 0.9208,
+      "NDCG@8": 0.9129,
+      "CitationCorrectness": 1.0,
+      "AnswerGroundedness": 1.0
+    }
+  },
+  "review_evaluation": {
+    "evaluation_tier": "SYNTHETIC_UNIT_REGRESSION",
+    "sample_count": 14,
+    "micro_precision": 1.0,
+    "micro_recall": 1.0,
+    "micro_f1": 1.0,
+    "false_positive_rate": 0.0,
+    "false_negative_rate": 0.0,
+    "latency_ms": {
+      "mean_ms": 62.05,
+      "p50_ms": 57.72,
+      "p95_ms": 83.94,
+      "p99_ms": 99.55
+    },
+    "token_cost": {
+      "total_tokens": 0,
+      "estimated_total_cost_usd": "0.000000",
+      "cost_per_contract_usd": "0.000000"
+    }
+  }
+}

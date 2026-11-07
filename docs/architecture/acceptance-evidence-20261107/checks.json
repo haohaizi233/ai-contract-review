@@ -1,0 +1,122 @@
+{
+  "ruff_ci": {
+    "command": [
+      "D:\\Users\\Administrator\\Desktop\\AI合同\\.venv\\Scripts\\python.exe",
+      "-m",
+      "ruff",
+      "check",
+      "contract_kb",
+      "tests",
+      "tools/wecom_wedrive_probe",
+      "--output-format=json"
+    ],
+    "exit_code": 0,
+    "findings": 0,
+    "files": 0,
+    "sample": []
+  },
+  "ruff_all": {
+    "command": [
+      "D:\\Users\\Administrator\\Desktop\\AI合同\\.venv\\Scripts\\python.exe",
+      "-m",
+      "ruff",
+      "check",
+      ".",
+      "--output-format=json"
+    ],
+    "exit_code": 1,
+    "findings": 120,
+    "files": 31,
+    "sample": [
+      {
+        "file": "scripts\\e9_form_attach_export.py",
+        "line": 491,
+        "code": "F841"
+      },
+      {
+        "file": "scripts\\e9_opinion_export.py",
+        "line": 379,
+        "code": "E402"
+      },
+      {
+        "file": "scripts\\e9_opinion_export.py",
+        "line": 479,
+        "code": "E741"
+      },
+      {
+        "file": "tools\\analyze_templates.py",
+        "line": 1,
+        "code": "E401"
+      },
+      {
+        "file": "tools\\analyze_templates.py",
+        "line": 1,
+        "code": "F401"
+      },
+      {
+        "file": "tools\\analyze_templates.py",
+        "line": 21,
+        "code": "F541"
+      },
+      {
+        "file": "tools\\build_knowledge_graph_html.py",
+        "line": 17,
+        "code": "F401"
+      },
+      {
+        "file": "tools\\build_knowledge_graph_html.py",
+        "line": 28,
+        "code": "F841"
+      }
+    ]
+  },
+  "format_ci": {
+    "command": [
+      "D:\\Users\\Administrator\\Desktop\\AI合同\\.venv\\Scripts\\python.exe",
+      "-m",
+      "ruff",
+      "format",
+      "--check",
+      "contract_kb",
+      "tests",
+      "tools/wecom_wedrive_probe",
+      "--output-format=concise"
+    ],
+    "exit_code": 0,
+    "output": "108 files already formatted\n"
+  },
+  "format_all": {
+    "command": [
+      "D:\\Users\\Administrator\\Desktop\\AI合同\\.venv\\Scripts\\python.exe",
+      "-m",
+      "ruff",
+      "format",
+      "--check",
+      ".",
+      "--output-format=concise"
+    ],
+    "exit_code": 1,
+    "output": "on_export.py:31:1: unformatted: File would be reformatted\ntools\\analyze_templates.py:5:1: unformatted: File would be reformatted\ntools\\build_knowledge_graph_html.py:21:30: unformatted: File would be reformatted\ntools\\build_template_5th_layer_rules.py:27:30: unformatted: File would be reformatted\ntools\\check_db_tables.py:3:1: unformatted: File would be reformatted\ntools\\compile_b64_to_png.py:15:1: unformatted: File would be reformatted\ntools\\contract_diff_web.py:679:54: unformatted: File would be reformatted\ntools\\contract_merge_repair.py:6:1: unformatted: File would be reformatted\ntools\\cross_verify_and_merge.py:22:1: unformatted: File would be reformatted\ntools\\diff_contract.py:100:11: unformatted: File would be reformatted\ntools\\download_db_templates.py:6:1: unformatted: File would be reformatted\ntools\\dump_all_col_comments.py:3:1: unformatted: File would be reformatted\ntools\\dump_all_db_templates.py:3:1: unformatted: File would be reformatted\ntools\\dump_db_enums.py:4:29: unformatted: File would be reformatted\ntools\\dump_dict_tables.py:3:1: unformatted: File would be reformatted\ntools\\dump_sample.py:3:11: unformatted: File would be reformatted\ntools\\export_contract_mappings_excel.py:7:1: unformatted: File would be reformatted\ntools\\export_merge_supplement.py:1:12: unformatted: File would be reformatted\ntools\\export_mubu_files.py:21:29: unformatted: File would be reformatted\ntools\\export_prefixes.py:8:11: unformatted: File would be reformatted\ntools\\generate_classification_ledger.py:7:13: unformatted: File would be reformatted\ntools\\inspect_matter.py:3:19: unformatted: File would be reformatted\ntools\\list_ref_files.py:3:24: unformatted: File would be reformatted\ntools\\live_db_merge.py:23:1: unformatted: File would be reformatted\ntools\\match_templates.py:5:36: unformatted: File would be reformatted\ntools\\query_e9_workflows.py:5:18: unformatted: File would be reformatted\ntools\\read_rules_docx.py:4:1: unformatted: File would be reformatted\ntools\\read_sample_templates.py:4:1: unformatted: File would be reformatted\ntools\\reorganize_cases_by_category.py:9:23: unformatted: File would be reformatted\ntools\\sample_prefixes.py:5:11: unformatted: File would be reformatted\ntools\\sync_wecom_wedrive.py:46:24: unformatted: File would be reformatted\ntools\\template_5th_layer_data.py:19:12: unformatted: File would be reformatted\ntools\\tender_attach_export.py:12:1: unformatted: File would be reformatted\ntools\\tender_case_export.py:32:1: unformatted: File would be reformatted\ntools\\tender_case_quality.py:2:1: unformatted: File would be reformatted\ntools\\tender_case_web.py:12:1: unformatted: File would be reformatted\ntools\\tender_fullsync.py:24:1: unformatted: File would be reformatted\ntools\\tender_sync_web.py:13:1: unformatted: File would be reformatted\ntools\\tender_unify_merge.py:19:1: unformatted: File would be reformatted\ntools\\validate_contract_merge_repair.py:2:1: unformatted: File would be reformatted\n41 files would be reformatted, 148 files already formatted\n"
+  },
+  "mypy": {
+    "command": [
+      "D:\\Users\\Administrator\\Desktop\\AI合同\\.venv\\Scripts\\python.exe",
+      "-m",
+      "mypy",
+      "contract_kb",
+      "--ignore-missing-imports"
+    ],
+    "exit_code": 0,
+    "output": "Success: no issues found in 74 source files\n"
+  },
+  "pip_check": {
+    "command": [
+      "D:\\Users\\Administrator\\Desktop\\AI合同\\.venv\\Scripts\\python.exe",
+      "-m",
+      "pip",
+      "check"
+    ],
+    "exit_code": 0,
+    "output": "No broken requirements found.\n"
+  }
+}

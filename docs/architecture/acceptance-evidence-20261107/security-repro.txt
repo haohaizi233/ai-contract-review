@@ -1,0 +1,30 @@
+import hmac,time,os,json,tempfile
+from pathlib import Path
+from unittest.mock import patch
+from starlette.requests import Request
+from contract_kb.auth import TrustedHeaderAuth,Principal
+from contract_kb.infrastructure.observability.redaction import redact_sensitive_text,redact_dict
+from contract_kb.storage import Storage
+import contract_kb.api as api
+out={}
+os.environ['CONTRACT_KB_REQUIRE_AUTH_TIMESTAMP']='1'
+ts=str(time.time()); roles='admin';user='synthetic';tenant='test'
+sig=hmac.new(b'synthetic-key',f'{user}|{roles}|{tenant}|{ts}'.encode(),'sha256').hexdigest()
+headers=[(k.lower().encode(),v.encode()) for k,v in {'X-User':user,'X-Roles':roles,'X-Tenant':tenant,'X-Auth-Timestamp':ts,'X-Auth-Signature':sig}.items()]
+auth=TrustedHeaderAuth('synthetic-key')
+out['replay_accepted']=[auth.authenticate(Request({'type':'http','method':m,'path':p,'headers':headers,'client':('127.0.0.1',1)})).has_role('admin') for m,p in [('GET','/api/v1/contract-kb/documents'),('POST','/api/v1/contract-kb/rules/x/approve'),('POST','/api/v1/contract-kb/rules/x/approve')]]
+s='{"api_key":"synthetic-secret-123"}'
+out['json_secret_redacted']=redact_sensitive_text(s)!=s
+out['list_nested_secret_redacted']=redact_dict({'events':[{'token':'synthetic-token'}]})['events'][0]['token']!='synthetic-token'
+with tempfile.TemporaryDirectory(prefix='arch-security-') as td:
+ st=Storage(Path(td)/'isolated.db');st.log_audit('synthetic','NOTE','target','password=synthetic-only')
+ row=st.conn.execute('SELECT detail FROM audit_log').fetchone();out['audit_secret_stored_plain']=row[0]=='password=synthetic-only';st.close()
+class FakeStore:
+ def list_tasks(self,**kw):
+  items=[{'task_id':'other-user','created_by':'bob'},{'task_id':'my-task','created_by':'alice'}]
+  return items[kw['offset']:kw['offset']+kw['limit']],len(items)
+p=Principal('alice',['reviewer'],'test')
+with patch.object(api,'get_storage',return_value=FakeStore()),patch.object(api,'_principal',return_value=p):
+ out['my_first_page']=api.list_review_tasks(None,None,1,0).model_dump()
+ out['my_second_page']=api.list_review_tasks(None,None,1,1).model_dump()
+print(json.dumps(out,ensure_ascii=False,indent=2))
