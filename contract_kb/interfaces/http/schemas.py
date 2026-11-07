@@ -72,6 +72,7 @@ class ReviewTaskIn(BaseModel):
 class FeedbackIn(BaseModel):
     action: str
     note: str = Field(default="", max_length=2000)
+    expected_state: str | None = None
 
 
 class FormatStandardIn(BaseModel):

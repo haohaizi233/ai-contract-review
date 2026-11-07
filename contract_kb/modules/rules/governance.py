@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import hashlib
 import json
 import time
@@ -216,11 +217,17 @@ class ConflictResolver:
         return resolved
 
 
+class HumanOverrideConflictError(Exception):
+    """人工覆写状态冲突异常（乐观并发控制冲突或已被并发修改）。"""
+
+    pass
+
+
 class HumanOverrideService:
     """带不可篡改审计追踪的人工复核覆盖服务（Human Override with Audit）。
 
     仅变更当次审核任务的发现状态（human_state），并写入 `human_overrides` 与 `audit_log`，
-    严禁静默修改企业正式规则表。
+    在同一事务工作单元（UoW）内保证原子性；严禁静默修改企业正式规则表。
     """
 
     VALID_ACTIONS = frozenset(
@@ -235,23 +242,40 @@ class HumanOverrideService:
         actor: str,
         reason: str = "",
         tenant_id: str | None = None,
+        expected_state: str | None = None,
     ) -> dict[str, Any]:
         if action not in self.VALID_ACTIONS:
             raise ValueError(f"不支持的人工复核动作：{action!r}")
-        issue = storage.get_issue(issue_id)
-        if not issue:
-            raise KeyError(f"未找到审核问题：{issue_id}")
-        if tenant_id is not None and issue.get("task_tenant_id") != tenant_id:
-            raise PermissionError("跨租户人工复核覆盖被拒绝")
 
-        prev_state = issue.get("human_state") or "PENDING"
-        ok = storage.feedback_issue(issue_id, action, actor, reason)
-        if not ok:
-            raise RuntimeError(f"更新审核问题人工状态失败：{issue_id}")
+        uow_factory = getattr(storage, "unit_of_work", None)
+        uow = uow_factory() if callable(uow_factory) else nullcontext()
 
-        override_id = f"ovr_{uuid.uuid4().hex[:12]}"
-        record_fn = getattr(storage, "record_human_override", None)
-        if record_fn is not None:
+        with uow:
+            issue = storage.get_issue(issue_id)
+            if not issue:
+                raise KeyError(f"未找到审核问题：{issue_id}")
+            if tenant_id is not None and issue.get("task_tenant_id") and issue["task_tenant_id"] != tenant_id:
+                raise PermissionError("跨租户人工复核覆盖被拒绝")
+
+            prev_state = issue.get("human_state") or "PENDING"
+            if expected_state is not None and prev_state != expected_state:
+                raise HumanOverrideConflictError(
+                    f"审核问题状态冲突：期望状态 {expected_state}，实际当前状态为 {prev_state}"
+                )
+
+            ok = storage.feedback_issue(
+                issue_id, action, actor, reason, expected_state=expected_state
+            )
+            if not ok:
+                raise HumanOverrideConflictError(
+                    f"更新审核问题人工状态失败（可能发生并发修改）：{issue_id}"
+                )
+
+            override_id = f"ovr_{uuid.uuid4().hex[:12]}"
+            record_fn = getattr(storage, "record_human_override", None)
+            if record_fn is None:
+                raise RuntimeError("存储层未实现 record_human_override 接口，覆写无法留痕")
+
             record_fn(
                 override_id=override_id,
                 task_id=issue["task_id"],
@@ -265,13 +289,13 @@ class HumanOverrideService:
                 created_at=time.time(),
             )
 
-        return {
-            "override_id": override_id,
-            "task_id": issue["task_id"],
-            "issue_id": issue_id,
-            "actor": actor,
-            "previous_state": prev_state,
-            "human_state": action,
-            "finding_source": FindingSource.HUMAN.value,
-            "reason": reason,
-        }
+            return {
+                "override_id": override_id,
+                "task_id": issue["task_id"],
+                "issue_id": issue_id,
+                "actor": actor,
+                "previous_state": prev_state,
+                "human_state": action,
+                "finding_source": FindingSource.HUMAN.value,
+                "reason": reason,
+            }

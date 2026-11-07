@@ -60,7 +60,7 @@ from .interfaces.http import (
     SearchReq,
     install_observability_and_error_handlers,
 )
-from .modules.rules.governance import HumanOverrideService
+from .modules.rules.governance import HumanOverrideConflictError, HumanOverrideService
 from .review_engine import ReviewEngine
 from .storage import Storage, create_storage
 
@@ -641,7 +641,12 @@ def issue_feedback(issue_id: str, fb: FeedbackIn, request: Request):
             actor=p.user_id,
             reason=fb.note,
             tenant_id=p.tenant_id,
+            expected_state=fb.expected_state,
         )
+    except HumanOverrideConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, "invalid action or issue not found") from exc
 

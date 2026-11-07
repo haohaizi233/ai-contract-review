@@ -1584,7 +1584,12 @@ class PgVectorStorage:
             return out
 
     def feedback_issue(
-        self, issue_id: str, action: str, actor: str, note: str = ""
+        self,
+        issue_id: str,
+        action: str,
+        actor: str,
+        note: str = "",
+        expected_state: str | None = None,
     ) -> bool:
         valid = {"ACCEPT", "IGNORE", "EDIT", "NOTE", "FALSE_POSITIVE", "FALSE_NEGATIVE"}
         if action not in valid:
@@ -1593,17 +1598,15 @@ class PgVectorStorage:
         with self._lock:
             try:
                 with self.conn.cursor() as cur:
+                    sql = "UPDATE review_issues SET human_state=%s, human_note=%s"
                     if has_source:
-                        cur.execute(
-                            "UPDATE review_issues SET human_state=%s, human_note=%s, finding_source='HUMAN'"
-                            " WHERE issue_id=%s",
-                            (action, note, issue_id),
-                        )
-                    else:
-                        cur.execute(
-                            "UPDATE review_issues SET human_state=%s, human_note=%s WHERE issue_id=%s",
-                            (action, note, issue_id),
-                        )
+                        sql += ", finding_source='HUMAN'"
+                    sql += " WHERE issue_id=%s"
+                    params: list[Any] = [action, note, issue_id]
+                    if expected_state is not None:
+                        sql += " AND (human_state=%s OR (human_state IS NULL AND %s='PENDING'))"
+                        params.extend([expected_state, expected_state])
+                    cur.execute(sql, tuple(params))
                     updated = cur.rowcount
                     if updated:
                         cur.execute(

@@ -171,12 +171,12 @@ flowchart TD
 
 **契约：**保留 `HumanOverrideService.apply_override(...)`；仓储反馈、完整覆写历史、审计在同一UoW内。新增 `expected_state`或版本令牌用于乐观并发，状态已变化时返回409；生产调用必须携带经过授权的tenant/actor。
 
-- [ ] 写故障测试：分别在状态更新后、history写入、audit写入、commit时注入失败，三类数据必须全部回到原状态。
-- [ ] 写成功断言：一次覆写产生一个历史记录，previous/new/actor/reason正确；跨tenant拒绝；两人并发覆写不会静默丢失前次修改。
-- [ ] 运行 `python -m pytest tests/integration/test_human_override_atomicity.py -q`，确认旧版非原子行为被捕获。
-- [ ] 在服务UoW内组合全部写入；禁止内部方法提前提交外层事务；审计不可用则业务操作失败，不能伪装完整成功。
-- [ ] SQLite与真实PG分别验证嵌套savepoint、rollback、读写混合和提交失败路径。
-- [ ] 通过回归后提交 `fix: make human override and audit atomic`。
+- [x] 写故障测试：分别在状态更新后、history写入、audit写入、commit时注入失败，三类数据必须全部回到原状态。
+- [x] 写成功断言：一次覆写产生一个历史记录，previous/new/actor/reason正确；跨tenant拒绝；两人并发覆写不会静默丢失前次修改。
+- [x] 运行 `python -m pytest tests/integration/test_human_override_atomicity.py -q`，确认旧版非原子行为被捕获。
+- [x] 在服务UoW内组合全部写入；禁止内部方法提前提交外层事务；审计不可用则业务操作失败，不能伪装完整成功。
+- [x] SQLite与真实PG分别验证嵌套savepoint、rollback、读写混合和提交失败路径。
+- [x] 通过回归后提交 `fix: make human override and audit atomic`。
 
 **通过条件：**失败无部分业务状态、成功完整留痕、并发冲突可见；不能只验证history表写成功这一条路径。
 

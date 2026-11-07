@@ -114,7 +114,12 @@ class KnowledgeStoragePort(Protocol):
     def get_issue(self, issue_id: str) -> dict[str, Any] | None: ...
 
     def feedback_issue(
-        self, issue_id: str, action: str, actor: str, note: str = ""
+        self,
+        issue_id: str,
+        action: str,
+        actor: str,
+        note: str = "",
+        expected_state: str | None = None,
     ) -> bool: ...
 
     def log_audit(

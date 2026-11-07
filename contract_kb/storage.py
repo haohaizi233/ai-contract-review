@@ -1535,23 +1535,29 @@ class Storage:
             return dict(r) if r else None
 
     def feedback_issue(
-        self, issue_id: str, action: str, actor: str, note: str = ""
+        self,
+        issue_id: str,
+        action: str,
+        actor: str,
+        note: str = "",
+        expected_state: str | None = None,
     ) -> bool:
         """人工反馈：ACCEPT / IGNORE / EDIT / NOTE / FALSE_POSITIVE / FALSE_NEGATIVE。"""
         valid = {"ACCEPT", "IGNORE", "EDIT", "NOTE", "FALSE_POSITIVE", "FALSE_NEGATIVE"}
         if action not in valid:
             return False
         with self._lock:
-            cur = self.conn.execute(
-                "UPDATE review_issues SET human_state=?, human_note=?, finding_source='HUMAN' "
-                "WHERE issue_id=?",
-                (action, note, issue_id),
-            )
-            self._commit()
+            sql = "UPDATE review_issues SET human_state=?, human_note=?, finding_source='HUMAN' WHERE issue_id=?"
+            params: list[Any] = [action, note, issue_id]
+            if expected_state is not None:
+                sql += " AND (human_state=? OR (human_state IS NULL AND ?='PENDING'))"
+                params.extend([expected_state, expected_state])
+            cur = self.conn.execute(sql, params)
             if cur.rowcount > 0:
                 self.log_audit(
                     actor, "issue_feedback", issue_id, f"{action} {note[:80]}"
                 )
+                self._commit()
                 return True
             return False
 
