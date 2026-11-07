@@ -9,6 +9,12 @@ from .governance import (
     KnowledgeSourceType,
     KnowledgeTrustDescriptor,
 )
+from .query_planner import (
+    ContractAwareQueryPlanner,
+    NumericConstraint,
+    QueryPlanningBudget,
+    RetrievalIntent,
+)
 from .reranker import (
     HttpCrossEncoderReranker,
     LexicalCoverageReranker,
@@ -20,6 +26,7 @@ from .service import GovernedRetrievalBundle, GovernedRetrievalService
 __all__ = [
     "CitationVerificationSummary",
     "CitationVerifier",
+    "ContractAwareQueryPlanner",
     "GovernedRetrievalBundle",
     "GovernedRetrievalService",
     "HttpCrossEncoderReranker",
@@ -28,7 +35,10 @@ __all__ = [
     "KnowledgeSourceType",
     "KnowledgeTrustDescriptor",
     "LexicalCoverageReranker",
+    "NumericConstraint",
+    "QueryPlanningBudget",
     "RerankerPort",
+    "RetrievalIntent",
     "TRUST_MATRIX",
     "reciprocal_rank_fusion",
 ]
