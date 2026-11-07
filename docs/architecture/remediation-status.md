@@ -19,8 +19,8 @@
 | **T04** | 认证签名 V2 与真实防重放 | F08 | **COMPLETED** | `c6e9c93` | `pytest tests/security/test_auth_replay_v2.py` (4 passed) | 无 | 进入 T05 |
 | **T05** | 授权条件下推数据库后再分页 | F10 | **COMPLETED** | `d254129` | `pytest tests/integration/test_authorized_pagination.py` (2 passed) | 无 | 进入 T06 |
 | **T06** | 持久化作业租约、心跳与失联恢复 | F03 | **COMPLETED** | `d8b25e3` | `pytest tests/integration/test_job_lease_recovery.py tests/e2e/test_worker_process_crash.py` (4 passed) | T01, T02 | 进入 T07 |
-| **T07** | 统一 deadline、可取消 IO 与最终提交保护 | F04 | **COMPLETED** | 待提交 | `pytest tests/unit/test_execution_deadline.py tests/integration/test_deadline_finalization.py` (5 passed) | T06 | 进入 T08 |
-| **T08** | 调用前预算预留与并发硬约束 | F05 | **NOT_STARTED** | - | `pytest tests/unit/test_budget_reservations.py` | T07 | - |
+| **T07** | 统一 deadline、可取消 IO 与最终提交保护 | F04 | **COMPLETED** | `55a3d90` | `pytest tests/unit/test_execution_deadline.py tests/integration/test_deadline_finalization.py` (5 passed) | T06 | 进入 T08 |
+| **T08** | 调用前预算预留与并发硬约束 | F05 | **COMPLETED** | 待提交 | `pytest tests/unit/test_budget_reservations.py tests/integration/test_provider_budget_limits.py` (5 passed) | T07 | 进入 T09 |
 | **T09** | 阶段强类型契约、快照和可复现 manifest | F09 | **NOT_STARTED** | - | `pytest tests/contract/test_stage_schemas.py` | T01, T06-T08 | - |
 | **T10** | 稳定合同实体、来源合流和业务版本 | F06 | **NOT_STARTED** | - | `pytest tests/unit/test_canonical_merge.py` | T02, T09 | - |
 | **T11** | 租户水位线、更新捕获和原子同步批次 | F06/F12 | **NOT_STARTED** | - | `pytest tests/integration/test_incremental_sync_recovery.py` | T06, T10 | - |

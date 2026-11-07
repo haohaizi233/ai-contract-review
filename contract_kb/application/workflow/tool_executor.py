@@ -22,6 +22,14 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, ValidationError
 
+from .budget import (
+    BudgetLedgerService,
+    BudgetLimitExceededError,
+    BudgetReservation,
+    ProviderLimitViolationError,
+    TokenUsage,
+)
+
 
 class ToolPermission(str, Enum):
     READ_DOCUMENT = "READ_DOCUMENT"
@@ -140,6 +148,11 @@ class ControlledToolExecutor:
             else set(ToolPermission)
         )
         self.ledger = BudgetLedger()
+        self.budget_service = BudgetLedgerService(
+            max_tokens=self.budget.max_llm_tokens,
+            max_cost_usd=self.budget.max_cost_usd,
+            price_per_1k_tokens_usd=self.budget.price_per_1k_tokens_usd,
+        )
         self.audit_records: list[ToolExecutionAuditRecord] = []
         self._specs: dict[str, ToolSpec] = {}
         self._pool = executor_pool or concurrent.futures.ThreadPoolExecutor(
@@ -284,10 +297,35 @@ class ControlledToolExecutor:
         self.ledger.total_tool_calls += 1
         self.ledger.per_tool_calls[tool_name] = used_for_tool + 1
 
+        reservation: BudgetReservation | None = None
+        if spec.required_permission == ToolPermission.INVOKE_LLM:
+            raw_text = json.dumps(raw_input, ensure_ascii=False, default=str)
+            estimated_input = max(1, len(raw_text) // 2)
+            max_out = getattr(spec, "max_output_tokens", 4000)
+            try:
+                reservation = self.budget_service.reserve_budget(
+                    input_tokens=estimated_input, max_output_tokens=max_out
+                )
+            except BudgetLimitExceededError as exc:
+                msg = f"LLM 调用前预算预留失败：{exc}"
+                self._append_audit(
+                    call_id,
+                    spec,
+                    workflow_state,
+                    ToolCallStatus.BUDGET_EXCEEDED,
+                    t0_wall,
+                    t0_mono,
+                    digest,
+                    msg,
+                )
+                raise ToolInvocationError(ToolCallStatus.BUDGET_EXCEEDED, msg) from exc
+
         try:
             fut = self._pool.submit(spec.handler, validated_in)
             raw_out = fut.result(timeout=spec.timeout_seconds)
         except concurrent.futures.TimeoutError as exc:
+            if reservation is not None:
+                self.budget_service.mark_uncertain(reservation.reservation_id)
             msg = f"工具 {tool_name} 执行超时（>{spec.timeout_seconds}s）"
             self._append_audit(
                 call_id,
@@ -301,6 +339,8 @@ class ControlledToolExecutor:
             )
             raise ToolInvocationError(ToolCallStatus.TIMEOUT, msg) from exc
         except Exception as exc:
+            if reservation is not None:
+                self.budget_service.release_budget(reservation.reservation_id)
             msg = f"{type(exc).__name__}: {exc}"
             self._append_audit(
                 call_id,
@@ -322,6 +362,8 @@ class ControlledToolExecutor:
                 else spec.output_schema.model_validate(raw_out)
             )
         except ValidationError as exc:
+            if reservation is not None:
+                self.budget_service.release_budget(reservation.reservation_id)
             msg = f"工具 {tool_name} 输出契约校验失败：{exc}"
             self._append_audit(
                 call_id,
@@ -336,6 +378,28 @@ class ControlledToolExecutor:
             raise ToolInvocationError(ToolCallStatus.VALIDATION_ERROR, msg) from exc
 
         tokens_used = int(getattr(validated_out, "tokens_used", 0) or 0)
+        if reservation is not None:
+            inp = reservation.input_tokens
+            out = max(0, tokens_used - inp) if tokens_used >= inp else tokens_used
+            try:
+                self.budget_service.settle_budget(
+                    reservation.reservation_id,
+                    TokenUsage(input_tokens=inp, output_tokens=out),
+                )
+            except ProviderLimitViolationError as exc:
+                msg = f"LLM 供应商输出违规：{exc}"
+                self._append_audit(
+                    call_id,
+                    spec,
+                    workflow_state,
+                    ToolCallStatus.FAILED,
+                    t0_wall,
+                    t0_mono,
+                    digest,
+                    msg,
+                )
+                raise ToolInvocationError(ToolCallStatus.FAILED, msg) from exc
+
         if tokens_used > 0:
             self.ledger.record_llm_tokens(
                 tokens_used, self.budget.price_per_1k_tokens_usd
