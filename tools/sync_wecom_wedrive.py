@@ -27,7 +27,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from contract_kb import config
-from contract_kb.storage import Storage
+from contract_kb.storage import Storage, create_storage
 from contract_kb.ingest import import_template_file, security_check_file
 
 logging.basicConfig(
@@ -42,15 +42,14 @@ class WeDriveSyncManager:
     """企业微信微盘同步管理器。"""
 
     def __init__(self, db_path: str | Path | None = None):
-        self.db_path = db_path or config.DB_PATH
-        self.storage = Storage(self.db_path)
+        self.db_path = db_path
+        self.storage = (
+            Storage(db_path) if db_path is not None else create_storage()
+        )
 
     def get_existing_hashes(self) -> dict[str, str]:
         """从知识库读取所有已激活母本的 SHA-256 与文件路径。"""
-        rows = self.storage.conn.execute(
-            "SELECT source_hash, source_file, document_id FROM documents WHERE status='ACTIVE'"
-        ).fetchall()
-        return {r["source_hash"]: r["source_file"] for r in rows}
+        return self.storage.list_active_document_hashes()
 
     def sync_from_directory(self, watch_dir: str | Path) -> dict:
         """从微盘本地同步目录执行增量比对与热更新。"""
@@ -129,7 +128,6 @@ class WeDriveSyncManager:
                 logger.error(f"处理文件异常: {file_path.name} - {e}", exc_info=True)
                 stats["failed"] += 1
 
-        self.storage.conn.commit()
         logger.info(
             f"微盘同步完成：扫描 {stats['scanned']} 份，未变动跳过 {stats['skipped_identical']} 份，"
             f"新增/更新入库 {stats['inserted'] + stats['updated']} 份，失败 {stats['failed']} 份。"

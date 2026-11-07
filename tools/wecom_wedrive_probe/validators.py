@@ -19,6 +19,7 @@ import requests
 
 class ErrorCategory(str, Enum):
     """企业微信微盘 API 错误分类。"""
+
     SUCCESS = "SUCCESS"
     TRUSTED_IP_ERROR = "TRUSTED_IP_ERROR"
     API_UNAUTHORIZED = "API_UNAUTHORIZED"
@@ -86,12 +87,16 @@ def classify_wecom_error(errcode: int, errmsg: str = "") -> dict[str, Any]:
                 f"1. 请企业微信管理员登录后台 (work.weixin.qq.com) ->【应用管理】-> 选中当前自建应用 ->【企业可信IP】；\n"
                 f"2. 将当前出口 IP '{caller_ip}' 追加到可信 IP 列表中（若配置了多台服务器/网关，需依次录入）；\n"
                 f"3. 保存后通常 1-2 分钟在微信服务端生效，即可重新测试；\n"
-                f"4. 若企业使用中转代理服务器（如南山 Caddy/FRP 转发节点），请在 .env 中配置 WECOM_PROXY 走指定代理出口。"
+                f"4. 若企业使用中转代理网关节点，请在 .env 中配置 WECOM_PROXY 走指定代理出口。"
             ),
         }
 
     # 2. 48002: api not authorized
-    if errcode == 48002 or "api not allow" in errmsg_lower or "api forbidden" in errmsg_lower:
+    if (
+        errcode == 48002
+        or "api not allow" in errmsg_lower
+        or "api forbidden" in errmsg_lower
+    ):
         return {
             "category": ErrorCategory.API_UNAUTHORIZED.value,
             "errcode": errcode,
@@ -142,13 +147,13 @@ def classify_wecom_error(errcode: int, errmsg: str = "") -> dict[str, Any]:
             "category": ErrorCategory.SPACE_NO_PERMISSION.value,
             "errcode": errcode,
             "errmsg": errmsg,
-            "description": f"微盘空间无访问权限 (errcode={errcode}: {errmsg})：当前自建应用未获得该微盘空间（法律事务部）的访问权限。",
+            "description": f"微盘空间无访问权限 (errcode={errcode}: {errmsg})：当前自建应用未获得目标微盘空间的访问权限。",
             "suggestion": (
                 "1. 【排查项 A - 检查微盘 API 可调用授权】：\n"
                 "   请企业微信管理员登录后台 (work.weixin.qq.com) ->【协作】->【微盘】->【API】；\n"
-                "   确认已开启 API 接口同步，且在【可调用接口的应用】列表中已添加当前自建应用（AgentId: 1000077），并分配了‘只读’权限。\n"
+                "   确认已开启 API 接口同步，且在【可调用接口的应用】列表中已添加当前自建应用（<YOUR_AGENT_ID>），并分配了‘只读’权限。\n"
                 "2. 【排查项 B - 检查目标空间访问权限】：\n"
-                "   当前空间‘法律事务部’由用户毛世梅手动创建（agent_id=0），受企业微信应用权限隔离保护。\n"
+                "   若目标空间由普通成员手动创建（agent_id=0），受企业微信应用权限隔离保护。\n"
                 "   请在企业微信管理后台【协作】->【微盘】->【空间管理】中检查该空间的权限设置；或由空间管理员在企业微信微盘中将自建应用/操作账号加入空间成员；\n"
                 "3. 【替代方案 - 应用专属空间同步】：\n"
                 "   若企业微信安全机制限制应用访问普通用户手动创建的既有空间，可在后台将需要同步的母本合同归集至由自建应用通过 API 创建的专属业务空间中。"
@@ -185,7 +190,9 @@ def classify_wecom_error(errcode: int, errmsg: str = "") -> dict[str, Any]:
     }
 
 
-def check_dns(host: str = "qyapi.weixin.qq.com", timeout: float = 5.0) -> dict[str, Any]:
+def check_dns(
+    host: str = "qyapi.weixin.qq.com", timeout: float = 5.0
+) -> dict[str, Any]:
     """检测企业微信接口域名的 DNS 解析是否正常。"""
     t0 = time.perf_counter()
     old_timeout = socket.getdefaulttimeout()
@@ -214,7 +221,9 @@ def check_dns(host: str = "qyapi.weixin.qq.com", timeout: float = 5.0) -> dict[s
         socket.setdefaulttimeout(old_timeout)
 
 
-def check_egress_ip(session: requests.Session | None = None, timeout: float = 5.0) -> dict[str, Any]:
+def check_egress_ip(
+    session: requests.Session | None = None, timeout: float = 5.0
+) -> dict[str, Any]:
     """检测当前网络连接的真实公网出口 IP。"""
     req_session = session or requests.Session()
     endpoints = [
@@ -233,17 +242,32 @@ def check_egress_ip(session: requests.Session | None = None, timeout: float = 5.
                     data = resp.json()
                     ip = data.get("ip") or data.get("origin")
                     if ip:
-                        return {"success": True, "ip": ip.split(",")[0].strip(), "source": ep, "raw": text}
+                        return {
+                            "success": True,
+                            "ip": ip.split(",")[0].strip(),
+                            "source": ep,
+                            "raw": text,
+                        }
                 except Exception:
                     pass
                 # 匹配 IP
                 ip_match = re.search(r"((?:\d{1,3}\.){3}\d{1,3})", text)
                 if ip_match:
-                    return {"success": True, "ip": ip_match.group(1), "source": ep, "raw": text}
+                    return {
+                        "success": True,
+                        "ip": ip_match.group(1),
+                        "source": ep,
+                        "raw": text,
+                    }
         except Exception:
             continue
 
-    return {"success": False, "ip": None, "source": None, "error": "无法探测公网出口 IP"}
+    return {
+        "success": False,
+        "ip": None,
+        "source": None,
+        "error": "无法探测公网出口 IP",
+    }
 
 
 def verify_file_integrity(
@@ -283,18 +307,18 @@ def verify_file_integrity(
 
     size_match = True
     if expected_size is not None and expected_size >= 0:
-        size_match = (actual_size == expected_size)
+        size_match = actual_size == expected_size
 
     sha_match = True
     if expected_sha:
         expected_clean = expected_sha.strip().lower()
         # 企业微信返回的 sha 字段通常为 sha1 或 sha256
-        sha_match = (expected_clean in (actual_sha1, actual_sha256))
+        sha_match = expected_clean in (actual_sha1, actual_sha256)
 
     md5_match = True
     if expected_md5:
         expected_clean = expected_md5.strip().lower()
-        md5_match = (expected_clean == actual_md5)
+        md5_match = expected_clean == actual_md5
 
     is_valid = size_match and sha_match and md5_match
 

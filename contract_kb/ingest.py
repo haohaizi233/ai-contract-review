@@ -52,7 +52,8 @@ def security_check_file(path: Path) -> SecurityCheckResult:
         res.rejected_reason = "bad_extension"
         return res
     # MIME：以魔数校验（DOCX=PK\x03\x04）
-    head = path.read_bytes()[:4]
+    with open(path, "rb") as _fh:
+        head = _fh.read(4)
     res.checks.append(
         {"check": "magic_bytes", "value": head.hex(), "passed": head == b"PK\x03\x04"}
     )
@@ -215,7 +216,9 @@ def import_template_file(path: Path) -> tuple[ImportedDoc | None, str | None]:
         source_file=path.name,
         file_size=parsed.file_size,
         sha256=parsed.source_hash,
-        document_type="contract_template" if "合同编号制度" not in path.name else "governance_doc",
+        document_type="contract_template"
+        if "合同编号制度" not in path.name
+        else "governance_doc",
         paragraph_count=parsed.paragraph_count,
         table_count=parsed.table_count,
         category=cls.category,
@@ -241,7 +244,9 @@ def scan_and_import(template_dir: Path) -> dict:
 
     # 递归扫描所有 .docx 文件，忽略以 ~ 开头的 Word 临时锁文件
     all_files = sorted(
-        p for p in template_dir.rglob("*.docx") if p.is_file() and not p.name.startswith("~")
+        p
+        for p in template_dir.rglob("*.docx")
+        if p.is_file() and not p.name.startswith("~")
     )
     files = [p for p in all_files if p.suffix.lower() in _cfg.ALLOWED_EXT]
     skipped = [p.name for p in all_files if p.suffix.lower() not in _cfg.ALLOWED_EXT]

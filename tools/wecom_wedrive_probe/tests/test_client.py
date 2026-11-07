@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -16,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from client import WeComAPIError, WeComWeDriveClient
+from client import WeComWeDriveClient
 from probe import WeDriveProbeRunner
 from validators import (
     ErrorCategory,
@@ -45,7 +44,9 @@ def test_masking_functions():
     assert "RcEz4UYW" not in masked_tok
 
     assert mask_cookie_or_url(None) == "<EMPTY>"
-    assert mask_cookie_or_url("https://example.com/download?sig=abcdef1234567890").startswith("https://")
+    assert mask_cookie_or_url(
+        "https://example.com/download?sig=abcdef1234567890"
+    ).startswith("https://")
 
 
 def test_classify_wecom_error():
@@ -55,11 +56,13 @@ def test_classify_wecom_error():
     assert c0["category"] == ErrorCategory.SUCCESS.value
 
     # 60020 IP 限制
-    c60020 = classify_wecom_error(60020, "not allow to access from your ip, hint: [123], from ip: 183.23.149.121")
+    c60020 = classify_wecom_error(
+        60020, "not allow to access from your ip, hint: [123], from ip: 203.0.113.21"
+    )
     assert c60020["category"] == ErrorCategory.TRUSTED_IP_ERROR.value
-    assert c60020["caller_ip"] == "183.23.149.121"
+    assert c60020["caller_ip"] == "203.0.113.21"
     assert "可信" in c60020["suggestion"]
-    assert "183.23.149.121" in c60020["suggestion"]
+    assert "203.0.113.21" in c60020["suggestion"]
 
     # 48002 微盘未授权
     c48002 = classify_wecom_error(48002, "api not allow")
@@ -158,7 +161,12 @@ def test_client_list_files(mock_post):
         "has_more": False,
         "file_list": {
             "item": [
-                {"fileid": "f_01", "file_name": "合同.docx", "file_type": 2, "file_size": 1024},
+                {
+                    "fileid": "f_01",
+                    "file_name": "合同.docx",
+                    "file_type": 2,
+                    "file_size": 1024,
+                },
                 {"fileid": "d_01", "file_name": "2026模板", "file_type": 1},
             ]
         },
@@ -211,6 +219,7 @@ def test_download_and_verify_file_integrity():
         assert v_res["size_match"] is True
         assert v_res["md5_match"] is True
         assert v_res["sha_match"] is True
+        assert v_res["sha1"] == expected_sha1
 
 
 def test_download_file_size_exceeded():
@@ -258,8 +267,25 @@ def test_probe_runner_mock_happy_path(monkeypatch):
         runner.client = client
 
         # Mock API responses
-        monkeypatch.setattr(client, "get_token", lambda force_refresh=True: ({"errcode": 0, "access_token": "tok", "expires_in": 7200}, 10.0))
-        monkeypatch.setattr(client, "get_space_info", lambda spaceid: ({"errcode": 0, "space_info": {"space_name": "法律部", "space_sub_type": 0}}, 15.0))
+        monkeypatch.setattr(
+            client,
+            "get_token",
+            lambda force_refresh=True: (
+                {"errcode": 0, "access_token": "tok", "expires_in": 7200},
+                10.0,
+            ),
+        )
+        monkeypatch.setattr(
+            client,
+            "get_space_info",
+            lambda spaceid: (
+                {
+                    "errcode": 0,
+                    "space_info": {"space_name": "法律部", "space_sub_type": 0},
+                },
+                15.0,
+            ),
+        )
         monkeypatch.setattr(
             client,
             "list_files",
@@ -269,20 +295,60 @@ def test_probe_runner_mock_happy_path(monkeypatch):
                     "has_more": False,
                     "file_list": {
                         "item": [
-                            {"fileid": "file_1", "file_name": "测试采购合同.docx", "file_type": 2, "file_size": 24, "mtime": 1700000000}
+                            {
+                                "fileid": "file_1",
+                                "file_name": "测试采购合同.docx",
+                                "file_type": 2,
+                                "file_size": 24,
+                                "mtime": 1700000000,
+                            }
                         ]
                     },
                 },
                 20.0,
             ),
         )
-        monkeypatch.setattr(client, "get_file_info", lambda fileid: ({"errcode": 0, "file_info": {"fileid": "file_1", "file_name": "测试采购合同.docx", "file_size": 24, "file_type": 2}}, 12.0))
-        monkeypatch.setattr(client, "get_file_download_ticket", lambda fileid: ({"errcode": 0, "download_url": "https://test.dl", "cookie_name": "K", "cookie_value": "V"}, 14.0))
+        monkeypatch.setattr(
+            client,
+            "get_file_info",
+            lambda fileid: (
+                {
+                    "errcode": 0,
+                    "file_info": {
+                        "fileid": "file_1",
+                        "file_name": "测试采购合同.docx",
+                        "file_size": 24,
+                        "file_type": 2,
+                    },
+                },
+                12.0,
+            ),
+        )
+        monkeypatch.setattr(
+            client,
+            "get_file_download_ticket",
+            lambda fileid: (
+                {
+                    "errcode": 0,
+                    "download_url": "https://test.dl",
+                    "cookie_name": "K",
+                    "cookie_value": "V",
+                },
+                14.0,
+            ),
+        )
 
         # Mock stream download to write small file
-        def mock_dl_stream(download_url, cookie_name, cookie_value, target_path, max_bytes):
+        def mock_dl_stream(
+            download_url, cookie_name, cookie_value, target_path, max_bytes
+        ):
             target_path.write_bytes(b"Mock Contract Data 12345")
-            return {"success": True, "status_code": 200, "downloaded_bytes": 24, "saved_path": str(target_path)}, 25.0
+            return {
+                "success": True,
+                "status_code": 200,
+                "downloaded_bytes": 24,
+                "saved_path": str(target_path),
+            }, 25.0
 
         monkeypatch.setattr(client, "download_file_stream", mock_dl_stream)
 
@@ -312,14 +378,21 @@ def test_probe_runner_trusted_ip_blocked(monkeypatch):
         client._token_expires_at = 9999999999.0
         runner.client = client
 
-        monkeypatch.setattr(client, "get_token", lambda force_refresh=True: ({"errcode": 0, "access_token": "tok", "expires_in": 7200}, 10.0))
+        monkeypatch.setattr(
+            client,
+            "get_token",
+            lambda force_refresh=True: (
+                {"errcode": 0, "access_token": "tok", "expires_in": 7200},
+                10.0,
+            ),
+        )
         monkeypatch.setattr(
             client,
             "get_space_info",
             lambda spaceid: (
                 {
                     "errcode": 60020,
-                    "errmsg": "not allow to access from your ip, hint: [179401], from ip: 183.23.149.121",
+                    "errmsg": "not allow to access from your ip, hint: [179401], from ip: 203.0.113.21",
                 },
                 15.0,
             ),
@@ -330,7 +403,7 @@ def test_probe_runner_trusted_ip_blocked(monkeypatch):
             lambda spaceid, fatherid=None, sort_type=1, start=0, limit=100: (
                 {
                     "errcode": 60020,
-                    "errmsg": "not allow to access from your ip, from ip: 183.23.149.121",
+                    "errmsg": "not allow to access from your ip, from ip: 203.0.113.21",
                 },
                 15.0,
             ),
@@ -341,4 +414,4 @@ def test_probe_runner_trusted_ip_blocked(monkeypatch):
 
         assert runner.result_data["conclusion"]["level"] == "C"
         assert "企业可信IP" in runner.result_data["conclusion"]["title"]
-        assert "183.23.149.121" in runner.result_data["conclusion"]["details"]
+        assert "203.0.113.21" in runner.result_data["conclusion"]["details"]

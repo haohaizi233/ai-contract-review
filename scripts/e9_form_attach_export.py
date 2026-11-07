@@ -17,7 +17,7 @@
   ## 审批表单（主表字段按 dsporder） + ### 明细表（表格） + ## 附件（本地文件相对链接）
 
 用法：
-  python scripts/e9_form_attach_export.py --oa-base http://hc.hcipi.com:8088 --workers 16
+  python scripts/e9_form_attach_export.py --oa-base http://<OA_HOST>:8088 --workers 16
   python scripts/e9_form_attach_export.py --requestmark CIP2024HT02082 --workers 2   # 单案试跑
   python scripts/e9_form_attach_export.py --no-download --skip-existing              # 只补链接断点续跑
 
@@ -760,7 +760,7 @@ def main(argv=None) -> int:
     ap.add_argument("--timeout", type=int, default=300)
     ap.add_argument("--workers", type=int, default=16)
     ap.add_argument("--out", default=str(DEFAULT_OUT))
-    ap.add_argument("--oa-base", default="http://hc.hcipi.com:8088")
+    ap.add_argument("--oa-base", default=os.environ.get("OA_BASE_URL", ""))
     ap.add_argument("--cookie-file", default=str(PROJECT_ROOT / "data" / ".e9_cookie"))
     ap.add_argument("--requestmark", nargs="*", default=None, help="只处理指定案号")
     ap.add_argument("--limit", type=int, default=0)

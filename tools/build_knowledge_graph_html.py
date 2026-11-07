@@ -17,10 +17,10 @@ import json
 import re
 from template_5th_layer_data import TEMPLATE_5TH_LAYER_RULES, DISAMBIGUATION_GROUPS
 
-BASE_DIR = r"d:\Users\Administrator\Desktop\AI合同"
-SCRATCH_DIR = r"C:\Users\Administrator\.gemini\antigravity\brain\7d2ac74e-aac3-470e-bc9e-fe6de56d5876\scratch"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRATCH_DIR = os.environ.get("CONTRACT_KB_SCRATCH_DIR", os.path.join(BASE_DIR, "data", "scratch"))
 OUT_DIR = os.path.join(BASE_DIR, "data", "contract_merged")
-ARTIFACT_DIR = r"C:\Users\Administrator\.gemini\antigravity\brain\7d2ac74e-aac3-470e-bc9e-fe6de56d5876"
+ARTIFACT_DIR = os.environ.get("CONTRACT_KB_ARTIFACT_DIR", OUT_DIR)
 
 
 def build_hierarchy_data():
@@ -48,8 +48,8 @@ def build_hierarchy_data():
         "MB20251205015": ("01 · 国内专利板块 (auth=1)", "1.5 专利实施许可备案类", "专利实施许可合同新增备案代理服务"),
         "MB20251205016": ("01 · 国内专利板块 (auth=1)", "1.5 专利实施许可备案类", "专利实施许可合同备案注销代理服务"),
         "MB20251205027": ("01 · 国内专利板块 (auth=1)", "1.6 专利转让代办类 (非买卖)", "专利转让著录变更登记代办手续 (非买卖)"),
-        "MB20251205045": ("01 · 国内专利板块 (auth=1)", "1.7 专利交易买卖类 (港湾主体)", "港湾作为买方受让外部国内有效专利"),
-        "MB20251205046": ("01 · 国内专利板块 (auth=1)", "1.7 专利交易买卖类 (港湾主体)", "港湾作为卖方转让自有专利给客户"),
+        "MB20251205045": ("01 · 国内专利板块 (auth=1)", "1.7 专利交易买卖类 (运营主体)", "运营主体作为买方受让外部国内有效专利"),
+        "MB20251205046": ("01 · 国内专利板块 (auth=1)", "1.7 专利交易买卖类 (运营主体)", "运营主体作为卖方转让自有专利给客户"),
         "MB20251205024": ("01 · 国内专利板块 (auth=1)", "1.8 专利评价与布图设计类", "实用新型/外观设计专利权评价报告代办"),
         "MB20251205042": ("01 · 国内专利板块 (auth=1)", "1.8 专利评价与布图设计类", "集成电路布图设计专有权登记代理服务"),
         "MB20251205086": ("01 · 国内专利板块 (auth=1)", "1.9 国内专利多事项打包组合类", "国内专利多事项综合打包全流程服务"),
@@ -70,8 +70,8 @@ def build_hierarchy_data():
         "MB20251205049": ("02 · 国内商标板块 (auth=2)", "2.3 商标续展、补证与许可类", "商标注册证遗失补发代办服务"),
         "MB20251205053": ("02 · 国内商标板块 (auth=2)", "2.3 商标续展、补证与许可类", "国内商标使用许可合同备案代理"),
         "MB20251205058": ("02 · 国内商标板块 (auth=2)", "2.4 商标转让代办类 (非买卖)", "国内商标转让著录变更登记代办 (非买卖)"),
-        "MB20251205043": ("02 · 国内商标板块 (auth=2)", "2.5 商标交易买卖类 (港湾主体)", "港湾作为买方受让外部国内有效商标"),
-        "MB20251205044": ("02 · 国内商标板块 (auth=2)", "2.5 商标交易买卖类 (港湾主体)", "港湾作为卖方转让自有商标给客户"),
+        "MB20251205043": ("02 · 国内商标板块 (auth=2)", "2.5 商标交易买卖类 (运营主体)", "运营主体作为买方受让外部国内有效商标"),
+        "MB20251205044": ("02 · 国内商标板块 (auth=2)", "2.5 商标交易买卖类 (运营主体)", "运营主体作为卖方转让自有商标给客户"),
         "MB20251205048": ("02 · 国内商标板块 (auth=2)", "2.6 商标确权攻防与评审类", "商标初审公告期异议申请专项服务"),
         "MB20251205050": ("02 · 国内商标板块 (auth=2)", "2.6 商标确权攻防与评审类", "被他人提出商标异议的答辩代理服务"),
         "MB20251205051": ("02 · 国内商标板块 (auth=2)", "2.6 商标确权攻防与评审类", "商标局驳回通知后的驳回复审申请"),
@@ -301,7 +301,7 @@ def generate_html(data_obj):
         <input
           id="global-search"
           type="text"
-          placeholder="搜产品编码(CNIP0057)、FTO、港湾、包干、MB..."
+          placeholder="搜产品编码(CNIP0057)、FTO、交易运营、包干、MB..."
           oninput="handleSearch(this.value)"
           class="w-72 px-3 py-1.5 text-xs rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)] focus:outline-none focus:border-blue-500"
         />

@@ -58,9 +58,9 @@ pip install -r tools/wecom_wedrive_probe/requirements.txt
 复制 `.env.example` 为 `.env`：
 
 ```dotenv
-WECOM_CORP_ID=wwd0286923ed160e3b
-WECOM_APP_SECRET=OQ1HIYez0eJvXkuUrhzepGgvKdWcGV7Tgg71FCW_u7w
-WECOM_SPACE_ID=s.1970324998235347.648114738G1H
+WECOM_CORP_ID=ww0000000000000000
+WECOM_APP_SECRET=<YOUR_WECOM_APP_SECRET>
+WECOM_SPACE_ID=<YOUR_WECOM_SPACE_ID>
 WECOM_TEST_FILE_ID=
 WECOM_DOWNLOAD_MAX_MB=10
 WECOM_REQUEST_TIMEOUT=20
@@ -93,7 +93,7 @@ python -m pytest tools/wecom_wedrive_probe/tests/test_client.py -v
 ## 四、安全合规与权限限制说明
 
 1. **绝对只读**：代码中仅包含 GET 查询与 POST 读取类接口，没有任何 `file_create`、`file_delete`、`file_move` 或写操作；
-2. **强凭据脱敏**：Secret、Token、下载 URL、Cookie 在任何日志、终端与产物文件中均做掩码脱敏（如 `OQ1H********_u7w`、`DRN3Dl...xXpOFA`）；
+2. **强凭据脱敏**：Secret、Token、下载 URL、Cookie 在任何日志、终端与产物文件中均做掩码脱敏（如 `abcd********wxyz`、`tok123...789xyz`）；
 3. **严格 TLS 校验**：全部 HTTPS 请求保持 `verify=True`，严禁关闭证书校验；
 4. **下载隔离与熔断**：下载文件存入隔离的 `downloads/` 目录，并在 `.gitignore` 中严格排除；下载超过 `WECOM_DOWNLOAD_MAX_MB` 时自动中断并清理临时文件；
 5. **错误码精确分类**：
@@ -111,5 +111,5 @@ python -m pytest tools/wecom_wedrive_probe/tests/test_client.py -v
 
 1. 打开企业微信管理后台 [work.weixin.qq.com](https://work.weixin.qq.com)；
 2. 进入【应用管理】-> 选中当前自建应用（如“AI合同审核”）；
-3. 在【企业可信 IP】一栏点击修改，将探测报告中提示的出口 IP（如 `59.125.75.116` 或 `183.23.149.121`）添加至白名单中；
+3. 在【企业可信 IP】一栏点击修改，将探测报告中提示的出口 IP（如示例文档地址 `203.0.113.10` 或 `198.51.100.20`）添加至白名单中；
 4. 保存后等待 1-2 分钟，重新运行 `python tools/wecom_wedrive_probe/probe.py` 即可完成全流程验证。

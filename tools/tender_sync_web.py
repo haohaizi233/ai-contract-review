@@ -108,7 +108,7 @@ HTML = """<!DOCTYPE html>
     <span id="pill" class="pill running">__STATE_TEXT__</span>
     <span class="spark">✦</span>
   </div>
-  <div class="sub">数据源 192.168.2.125:3308（tender_* 库）· 页面每 2 秒自动刷新 ·
+  <div class="sub">数据源 &lt;TENDER_MYSQL_HOST&gt;（tender_* 库）· 页面每 2 秒自动刷新 ·
     <span id="updated">更新于 __UPDATED__</span> · 已运行 <span id="elapsed">__ELAPSED__</span><br>
     <span id="statline">__STATLINE__</span></div>
 

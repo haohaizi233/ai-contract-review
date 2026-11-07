@@ -22,7 +22,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from contract_kb.storage import Storage
+from contract_kb.storage import create_storage
 from contract_kb.ingest import import_template_file, security_check_file
 from contract_kb.clause_diff import diff_clause_sets
 from contract_kb import config
@@ -45,47 +45,34 @@ def run_diff(docx_path: str | Path, forced_template_id: str | None = None) -> di
         print(f"[解析失败] {err}", file=sys.stderr)
         sys.exit(1)
 
-    # 2. 匹配基准标准模板
-    st = Storage(config.DB_PATH)
-    matched_tpl = None
+    # 2. 匹配基准标准模板（通过统一仓储接口，禁止裸 SQL）
+    st = create_storage()
+    try:
+        matched_tpl = None
 
-    if forced_template_id:
-        row = st.conn.execute(
-            "SELECT * FROM documents WHERE document_id=?", (forced_template_id,)
-        ).fetchone()
-        if row:
-            matched_tpl = dict(row)
-        else:
-            print(f"[警告] 指定的模板 ID {forced_template_id} 在数据库中未找到，尝试自动匹配。")
+        if forced_template_id:
+            matched_tpl = st.get_document(forced_template_id)
+            if not matched_tpl:
+                print(
+                    f"[警告] 指定的模板 ID {forced_template_id} 在数据库中未找到，尝试自动匹配。"
+                )
 
-    if not matched_tpl:
-        # 依分类器自动识别的 subtype 匹配
-        row = st.conn.execute(
-            "SELECT * FROM documents WHERE contract_subtype=? AND status='ACTIVE'",
-            (rec.subtype,),
-        ).fetchone()
-        if row:
-            matched_tpl = dict(row)
-        else:
-            # 兜底：按业务大类匹配首个模板
-            row = st.conn.execute(
-                "SELECT * FROM documents WHERE business_category=? AND status='ACTIVE' LIMIT 1",
-                (rec.category,),
-            ).fetchone()
-            if row:
-                matched_tpl = dict(row)
+        if not matched_tpl:
+            matched_tpl = st.find_active_template(
+                contract_subtype=rec.subtype, business_category=rec.category
+            )
 
-    if not matched_tpl:
-        print(f"[未匹配] 未能在 78 套知识库中找到业务类型 [{rec.subtype}] 的基准模板", file=sys.stderr)
-        sys.exit(1)
+        if not matched_tpl:
+            print(
+                f"[未匹配] 未能在 78 套知识库中找到业务类型 [{rec.subtype}] 的基准模板",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
-    # 3. 读取基准模板的全部标准条款
-    tpl_clauses = [
-        dict(r)
-        for r in st.conn.execute(
-            "SELECT * FROM clauses WHERE document_id=?", (matched_tpl["document_id"],)
-        ).fetchall()
-    ]
+        # 3. 读取基准模板的全部标准条款
+        tpl_clauses = st.get_document_clauses(matched_tpl["document_id"])
+    finally:
+        st.close()
 
     # 待审文档条款
     rev_clauses = rec.clauses or []

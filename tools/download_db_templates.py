@@ -15,33 +15,36 @@ from tender_fullsync import load_env
 import pymysql
 
 
+_ENTITY_SUFFIX = os.environ.get("CONTRACT_KB_TEMPLATE_ENTITY_SUFFIX", "标准代理主体")
+_ENTITY_FULL = os.environ.get("CONTRACT_KB_TEMPLATE_ENTITY_FULL", "标准知识产权代理主体")
+
 REF_EXISTING_MAP = {
-    "MB20251205012": "国内专利服务合同（仅快速预审）-恒程创新代理有限公司.docx",
-    "MB20251205013": "国内专利服务合同（年费缴纳）-恒程创新代理有限公司.docx",
-    "MB20251205014": "国内专利服务合同（申请）-恒程创新代理有限公司.docx",
-    "MB20251205015": "国内专利服务合同（许可备案）-恒程创新代理有限公司.docx",
-    "MB20251205016": "国内专利服务合同（许可备案注销）-恒程创新代理有限公司.docx",
-    "MB20251205017": "国内专利服务合同（优先权等副本）-恒程创新代理有限公司.docx",
+    "MB20251205012": f"国内专利服务合同（仅快速预审）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205013": f"国内专利服务合同（年费缴纳）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205014": f"国内专利服务合同（申请）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205015": f"国内专利服务合同（许可备案）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205016": f"国内专利服务合同（许可备案注销）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205017": f"国内专利服务合同（优先权等副本）-{_ENTITY_SUFFIX}.docx",
     "MB20251205018": "国内专利服务合同（仅优先审查）.docx",
-    "MB20251205019": "国内专利服务合同（著录项目变更）-恒程创新代理有限公司.docx",
-    "MB20251205020": "国内专利服务合同（专利导航分析报告）-恒程创新代理有限公司.docx",
-    "MB20251205021": "国内专利服务合同（专利复审）-恒程创新代理有限公司.docx",
-    "MB20251205022": "国内专利服务合同（专利检索报告）-恒程创新代理有限公司.docx",
-    "MB20251205023": "国内专利服务合同（专利尽职调查报告）-恒程创新代理有限公司.docx",
-    "MB20251205024": "国内专利服务合同（专利评价报告）-恒程创新代理有限公司.docx",
-    "MB20251205025": "国内专利服务合同（专利侵权分析）-恒程创新代理有限公司.docx",
-    "MB20251205026": "国内专利服务合同（专利稳定性分析报告）-恒程创新代理有限公司 .docx",
-    "MB20251205027": "国内专利服务合同（转让）-恒程创新代理有限公司.docx",
-    "MB20251205047": "国内商标服务合同（变更）-恒程创新代理有限公司.docx",
-    "MB20251205048": "国内商标服务合同（驳回复审）-恒程创新代理有限公司.docx",
-    "MB20251205051": "国内商标服务合同（撤三）-恒程创新代理有限公司.docx",
-    "MB20251205053": "国内商标服务合同（许可备案）-恒程创新代理有限公司.docx",
-    "MB20251205054": "国内商标服务合同（续展）-恒程创新代理有限公司.docx",
-    "MB20251205055": "国内商标服务合同（异议）-恒程创新代理有限公司.docx",
-    "MB20251205056": "国内商标服务合同（异议答辩）-恒程创新代理有限公司.docx",
-    "MB20251205057": "国内商标服务合同（注册）-恒程创新代理有限公司.docx",
-    "MB20251205058": "国内商标服务合同（转让）-恒程创新代理有限公司.docx",
-    "MB20251225003": "（含国际业务报价版）知识产权服务合同-深圳市恒程创新知识产权代理有限公司.docx",
+    "MB20251205019": f"国内专利服务合同（著录项目变更）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205020": f"国内专利服务合同（专利导航分析报告）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205021": f"国内专利服务合同（专利复审）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205022": f"国内专利服务合同（专利检索报告）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205023": f"国内专利服务合同（专利尽职调查报告）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205024": f"国内专利服务合同（专利评价报告）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205025": f"国内专利服务合同（专利侵权分析）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205026": f"国内专利服务合同（专利稳定性分析报告）-{_ENTITY_SUFFIX} .docx",
+    "MB20251205027": f"国内专利服务合同（转让）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205047": f"国内商标服务合同（变更）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205048": f"国内商标服务合同（驳回复审）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205051": f"国内商标服务合同（撤三）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205053": f"国内商标服务合同（许可备案）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205054": f"国内商标服务合同（续展）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205055": f"国内商标服务合同（异议）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205056": f"国内商标服务合同（异议答辩）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205057": f"国内商标服务合同（注册）-{_ENTITY_SUFFIX}.docx",
+    "MB20251205058": f"国内商标服务合同（转让）-{_ENTITY_SUFFIX}.docx",
+    "MB20251225003": f"（含国际业务报价版）知识产权服务合同-{_ENTITY_FULL}.docx",
 }
 
 
@@ -103,7 +106,10 @@ def main():
         rows = cur.fetchall()
     conn.close()
 
-    ref_root = r"d:\Users\Administrator\Desktop\AI合同\参考"
+    ref_root = os.environ.get(
+        "CONTRACT_KB_TEMPLATE_DIR",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "参考"),
+    )
     missing_dir = os.path.join(ref_root, "数据库补齐模板_52份")
     all_cat_dir = os.path.join(ref_root, "全量标准模板库_按分类(78份)")
     os.makedirs(missing_dir, exist_ok=True)

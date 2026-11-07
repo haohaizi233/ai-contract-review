@@ -215,13 +215,10 @@ def _exec_field_format(spec: RuleSpec, ctx: ReviewContext) -> RuleExecution:
 
 def _exec_financial(spec: RuleSpec, ctx: ReviewContext) -> RuleExecution:
     """FINANCIAL_CALCULATION：参数 {check: amount_case_consistency | fee_table_total}（Decimal）。"""
-    from decimal import InvalidOperation
-
-    def dec(s: str):
-        try:
-            return Decimal(s.replace(",", "").strip())
-        except (InvalidOperation, AttributeError):
-            return None
+    from .domain.value_objects.amounts import (
+        chinese_num_to_int as _cn_num_to_int,
+        parse_decimal as dec,
+    )
 
     check = spec.parameters.get("check", "amount_case_consistency")
     pair_re = re.compile(
@@ -233,7 +230,7 @@ def _exec_financial(spec: RuleSpec, ctx: ReviewContext) -> RuleExecution:
         for m in pair_re.finditer(c["original_text"]):
             pairs.append((m.group(2), c))
     if check == "amount_case_consistency":
-        from .review_engine import _cn_num_to_int
+        pass
 
         values: dict[str, list] = {}
         for num, c in pairs:

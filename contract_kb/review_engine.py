@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import re
 import uuid
-import json
 from dataclasses import dataclass, field, asdict
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
+from . import config
+from .domain.value_objects.amounts import chinese_num_to_int, parse_decimal
 from .ingest import import_template_file, security_check_file
 from .storage import Storage
 
@@ -156,69 +157,12 @@ class Issue:
 
 
 def _dec(s: str) -> Decimal | None:
-    try:
-        return Decimal(s.replace(",", "").strip())
-    except (InvalidOperation, AttributeError):
-        return None
+    return parse_decimal(s)
 
 
 def _cn_num_to_int(s: str) -> int | None:
-    """中文大写金额 → 整数（支持 到 仟万位 + 零/整）。"""
-    digits = {
-        "零": 0,
-        "一": 1,
-        "二": 2,
-        "三": 3,
-        "四": 4,
-        "五": 5,
-        "六": 6,
-        "七": 7,
-        "八": 8,
-        "九": 9,
-        "壹": 1,
-        "贰": 2,
-        "叁": 3,
-        "肆": 4,
-        "伍": 5,
-        "陆": 6,
-        "柒": 7,
-        "捌": 8,
-        "玖": 9,
-    }
-    units = {
-        "十": 10,
-        "拾": 10,
-        "百": 100,
-        "佰": 100,
-        "千": 1000,
-        "仟": 1000,
-        "万": 10000,
-        "萬": 10000,
-        "亿": 100000000,
-    }
-    s = re.sub(r"[圆圆整元\s]", "", s)
-    if not s:
-        return None
-    total, section, num = 0, 0, 0
-    ok = False
-    for ch in s:
-        if ch in digits:
-            num = digits[ch]
-            ok = True
-        elif ch in units:
-            u = units[ch]
-            if u == 10000 or u == 100000000:
-                section = (section + num) * u
-                total += section
-                section, num = 0, 0
-            else:
-                section += (num if num else 1) * u
-                num = 0
-            ok = True
-        else:
-            return None
-    total += section + num
-    return total if ok else None
+    """中文大写金额 → 整数（委托至 domain.value_objects.amounts）。"""
+    return chinese_num_to_int(s)
 
 
 class ReviewEngine:
@@ -253,10 +197,12 @@ class ReviewEngine:
         docx_path,
         mode: str = "STANDARD",
         custom_requirements: list[str] | None = None,
-        tenant_id: str = "default",
+        tenant_id: str | None = None,
         created_by: str = "system",
     ) -> dict:
         custom_requirements = custom_requirements or []
+        scope_tenant = tenant_id
+        effective_tenant = tenant_id if tenant_id is not None else config.TENANT_ID
         issues: list[Issue] = []
         task_id = uuid.uuid4().hex[:12]
 
@@ -317,8 +263,8 @@ class ReviewEngine:
                 )
             )
 
-        # 3. 模板匹配（按 subtype 找有效模板版本）
-        matched = self._match_template(subtype)
+        # 3. 模板匹配（按 subtype 找有效模板版本，遵守调用者租户边界）
+        matched = self._match_template(subtype, tenant_id=scope_tenant)
         if matched is None:
             issues.append(
                 Issue(
@@ -353,11 +299,18 @@ class ReviewEngine:
         std_rec = None
         get_active = getattr(self.storage, "get_active_format_standard", None)
         if get_active:
-            std_rec = get_active()
+            try:
+                std_rec = get_active(tenant_id=scope_tenant)
+            except TypeError:
+                std_rec = get_active()
         if std_rec is None:
             # 无已审批标准：取最新标准版本（含 DRAFT/示例）作非约束性差异提示依据
             get_latest = getattr(self.storage, "get_format_standard", None)
-            std_rec = get_latest("company_format") if get_latest else None
+            if get_latest:
+                try:
+                    std_rec = get_latest("company_format", tenant_id=scope_tenant)
+                except TypeError:
+                    std_rec = get_latest("company_format")
         fmt = audit_format_from_rec(rec, standard_record=std_rec)
         std_meta = fmt.get("standard") or {}
         std_note = (
@@ -433,13 +386,17 @@ class ReviewEngine:
                 )
 
         # 6. 确定性规则引擎（审批通过的规则才强制执行；DRAFT 仅提示）
-        issues.extend(self._run_rules(rec, clauses, subtype))
+        issues.extend(self._run_rules(rec, clauses, subtype, tenant_id=scope_tenant))
 
         # 7. RAG 检索标准条款（为语义审核提供上下文；无 LLM 时仅输出检索证据）
         rag_context = []
         for kw in ["费用及支付方式", "违约责任", "争议解决", "保密"]:
             for h in self.storage.search(
-                kw, top_k=3, contract_subtype=subtype, rerank=True
+                kw,
+                top_k=3,
+                contract_subtype=subtype,
+                rerank=True,
+                tenant_id=scope_tenant,
             )[:2]:
                 rag_context.append(
                     {
@@ -546,7 +503,9 @@ class ReviewEngine:
                     )
                 )
         if mode in ("STANDARD", "COMBINED") and matched:
-            issues.extend(self._diff_vs_template(rec, clauses, matched))
+            issues.extend(
+                self._diff_vs_template(rec, clauses, matched, tenant_id=scope_tenant)
+            )
 
         # 10. 去重 + 证据校验
         issues = self._dedupe(issues)
@@ -566,7 +525,7 @@ class ReviewEngine:
             "matched_template_id": matched["document_id"] if matched else None,
             "status": "COMPLETED",
             "issue_count": len(issues),
-            "tenant_id": tenant_id,
+            "tenant_id": effective_tenant,
             "created_by": created_by,
             "llm": self.llm_status(),
             "rag_context": rag_context,
@@ -578,20 +537,17 @@ class ReviewEngine:
             mode,
             "COMPLETED",
             {"source_file": rec.source_file, "subtype": subtype},
-            tenant_id=tenant_id,
+            tenant_id=effective_tenant,
             created_by=created_by,
         )
         self.storage.save_issues(task_id, [i.to_dict() for i in issues])
         return task
 
     # ---------- 模板匹配 ----------
-    def _match_template(self, subtype: str):
-        rows = self.storage.conn.execute(
-            "SELECT document_id, source_file, source_hash FROM documents "
-            "WHERE contract_subtype=? AND status='ACTIVE'",
-            (subtype,),
-        ).fetchone()
-        return dict(rows) if rows else None
+    def _match_template(self, subtype: str, tenant_id: str | None = None):
+        return self.storage.find_active_template(
+            contract_subtype=subtype, tenant_id=tenant_id
+        )
 
     # ---------- 确定性检查 ----------
     def _first_clause(self, clauses, pred):
@@ -1123,7 +1079,9 @@ class ReviewEngine:
             )
         return out
 
-    def _run_rules(self, rec, clauses, subtype) -> list[Issue]:
+    def _run_rules(
+        self, rec, clauses, subtype, tenant_id: str | None = None
+    ) -> list[Issue]:
         """Phase 1.1：通过 RuleEngine 真正执行规则。
 
         - APPROVED 且生效期内的规则 → 执行器强制检查（FAIL 转 Issue）；
@@ -1135,7 +1093,11 @@ class ReviewEngine:
         out: list[Issue] = []
         specs = []
         skipped_bad_specs: list[str] = []
-        for r in self.storage.get_rules():
+        try:
+            raw_rules = self.storage.get_rules(tenant_id=tenant_id)
+        except TypeError:
+            raw_rules = self.storage.get_rules()
+        for r in raw_rules:
             try:
                 specs.append(
                     RuleSpec(
@@ -1176,21 +1138,18 @@ class ReviewEngine:
         )
         engine = RuleEngine()
         results = engine.execute(specs, ctx)
-        # 执行留痕（内存 + 数据库）
+        # 执行留痕（通过 Storage 仓储端口持久化）
         for res in results:
-            self.storage.conn.execute(
-                "INSERT OR REPLACE INTO rule_executions VALUES (?,?,?,?,?,?,?,?,?)",
-                (
-                    f"{res.rule_id}:{res.rule_version}:{res.executed_at:.3f}",
-                    res.rule_id,
-                    res.rule_version,
-                    res.rule_type,
-                    res.result,
-                    res.severity,
-                    res.message,
-                    json.dumps(res.evidence, ensure_ascii=False),
-                    res.executed_at,
-                ),
+            self.storage.record_rule_execution(
+                exec_id=f"{res.rule_id}:{res.rule_version}:{res.executed_at:.3f}:{uuid.uuid4().hex[:6]}",
+                rule_id=res.rule_id,
+                rule_version=res.rule_version,
+                rule_type=res.rule_type,
+                result=res.result,
+                severity=res.severity,
+                message=res.message,
+                evidence=res.evidence,
+                executed_at=res.executed_at,
             )
             if res.result == "FAIL":
                 out.append(
@@ -1241,16 +1200,16 @@ class ReviewEngine:
                         requires_human_review=False,
                     )
                 )
-        self.storage.conn.commit()
         return out
 
-    def _diff_vs_template(self, rec, clauses, matched) -> list[Issue]:
+    def _diff_vs_template(
+        self, rec, clauses, matched, tenant_id: str | None = None
+    ) -> list[Issue]:
         """与匹配模板做条款级差异比对（确定性）。"""
         out: list[Issue] = []
-        tpl_clauses = self.storage.conn.execute(
-            "SELECT clause_category, original_text, clause_number FROM clauses WHERE document_id=?",
-            (matched["document_id"],),
-        ).fetchall()
+        tpl_clauses = self.storage.get_document_clauses(
+            matched["document_id"], tenant_id=tenant_id
+        )
         tpl_by_cat: dict[str, list] = {}
         for t in tpl_clauses:
             tpl_by_cat.setdefault(t["clause_category"], []).append(t)

@@ -17,7 +17,7 @@ import urllib.parse
 from template_5th_layer_data import TEMPLATE_5TH_LAYER_RULES, DISAMBIGUATION_GROUPS
 from build_knowledge_graph_html import build_hierarchy_data
 
-BASE_DIR = r"d:\Users\Administrator\Desktop\AI合同"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_MD_CLEAN = os.path.join(BASE_DIR, "data", "contract_merged", "合同分类与78套模板五级思维导图_幕布精简导图版.md")
 OUT_MD_FULL = os.path.join(BASE_DIR, "data", "contract_merged", "合同分类与78套模板五级思维导图_幕布全量产品版.md")
 OUT_OPML = os.path.join(BASE_DIR, "data", "contract_merged", "合同分类与78套模板五级思维导图_幕布满血备注版.opml")

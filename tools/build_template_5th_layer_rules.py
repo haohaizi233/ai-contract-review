@@ -23,8 +23,8 @@ from template_5th_layer_data import TEMPLATE_5TH_LAYER_RULES, DISAMBIGUATION_GRO
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-BASE_DIR = r"d:\Users\Administrator\Desktop\AI合同"
-SCRATCH_DIR = r"C:\Users\Administrator\.gemini\antigravity\brain\7d2ac74e-aac3-470e-bc9e-fe6de56d5876\scratch"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRATCH_DIR = os.environ.get("CONTRACT_KB_SCRATCH_DIR", os.path.join(BASE_DIR, "data", "scratch"))
 OUT_DIR = os.path.join(BASE_DIR, "data", "contract_merged")
 
 

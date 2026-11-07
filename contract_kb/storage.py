@@ -3,9 +3,9 @@
 
 数据库适配说明（如实标注）：
 - 本地/测试默认 **SQLite（FTS5 全文 + numpy 向量）**，全部测试真实执行；
-- 生产拓扑为 PostgreSQL + pgvector（storage_pg.PgVectorStorage），迁移脚本
-  migrations/001_init_pgvector.sql + 002_embedding_meta_task_tenant_format_std.sql，
-  运行时行为**已在真实 PG + pgvector 实例验证**（迁移/导入/检索/回滚/维度校验/租户）；
+- 生产拓扑为 PostgreSQL + pgvector（storage_pg.PgVectorStorage），通过 `create_storage()`
+  统一工厂按 `CONTRACT_KB_STORAGE_BACKEND` / `CONTRACT_KB_PG_DSN` 注入（fail-closed，
+  显式配置 PostgreSQL 时绝不静默回退到 SQLite）；
 - 同一 Storage 接口下可替换 PgVectorStorage；Embedding 维度/提供方变更必须 rebuild_index（版本化），
   否则 EmbeddingConfigMismatch（fail-closed，禁止混用不同模型的向量）。
 """
@@ -13,21 +13,34 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
+import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
+from . import config
 from .embeddings import EmbeddingProvider, get_embedding_provider
+from .storage_errors import EmbeddingConfigMismatch, StorageConfigError
+
+__all__ = [
+    "EmbeddingConfigMismatch",
+    "StorageConfigError",
+    "Storage",
+    "create_storage",
+]
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS documents (
     document_id TEXT PRIMARY KEY,
-    source_file TEXT, source_hash TEXT UNIQUE, source_version TEXT,
-    tenant_id TEXT, business_category TEXT, contract_subtype TEXT,
-    document_type TEXT, imported_at REAL, status TEXT, raw_meta TEXT
+    source_file TEXT, source_hash TEXT, source_version TEXT,
+    tenant_id TEXT NOT NULL DEFAULT 'default', business_category TEXT, contract_subtype TEXT,
+    document_type TEXT, imported_at REAL, status TEXT, raw_meta TEXT,
+    UNIQUE (tenant_id, source_hash)
 );
 CREATE TABLE IF NOT EXISTS nodes (
     node_id TEXT PRIMARY KEY, document_id TEXT, node_type TEXT, ord INTEGER,
@@ -48,9 +61,11 @@ CREATE TABLE IF NOT EXISTS fields (
 );
 CREATE TABLE IF NOT EXISTS rules (
     rule_id TEXT, version INTEGER, name TEXT, rule_type TEXT,
-    execution_mode TEXT, severity TEXT, contract_types TEXT,
-    params TEXT, source_clauses TEXT, status TEXT,
-    approved_by TEXT, effective_at REAL, PRIMARY KEY (rule_id, version)
+    execution_mode TEXT, severity TEXT, priority INTEGER NOT NULL DEFAULT 100,
+    contract_types TEXT, params TEXT, source_clauses TEXT, status TEXT,
+    approved_by TEXT, effective_at REAL, effective_until REAL,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    PRIMARY KEY (rule_id, version)
 );
 CREATE TABLE IF NOT EXISTS review_tasks (
     task_id TEXT PRIMARY KEY, document_id TEXT, mode TEXT, status TEXT,
@@ -91,21 +106,64 @@ CREATE TABLE IF NOT EXISTS embedding_index_meta (
 CREATE TABLE IF NOT EXISTS format_standards (
     standard_id TEXT, version INTEGER, params TEXT, status TEXT,
     created_by TEXT, approved_by TEXT, approved_at REAL, effective_at REAL,
-    note TEXT, PRIMARY KEY (standard_id, version)
+    note TEXT, tenant_id TEXT NOT NULL DEFAULT 'default',
+    PRIMARY KEY (standard_id, version)
 );
 """
-
-
-# 嵌入索引配置不一致（换模型/换维度）时必须显式 rebuild_index，禁止静默混用
-class EmbeddingConfigMismatch(RuntimeError):
-    pass
-
 
 _CLEAN_RE = re.compile(r"[\s\u3000，。；：、“”‘’（）()《》\-—_/%‰]")
 
 
 def _norm_text(t: str) -> str:
     return _CLEAN_RE.sub("", t).lower()
+
+
+def create_storage(
+    backend: str | None = None,
+    db_path: str | Path | None = None,
+    dsn: str | None = None,
+    emb: EmbeddingProvider | None = None,
+    rebuild_on_mismatch: bool = False,
+) -> Any:
+    """统一存储工厂（fail-closed）：
+    - backend='postgres'/'postgresql'/'pg' 或显式配置 dsn/CONTRACT_KB_PG_DSN 时返回 PgVectorStorage；
+      若缺少 DSN 或连接失败则直接抛出异常，绝不静默回退到 SQLite。
+    - 默认 backend='sqlite' 时返回本地 SQLite Storage。
+    """
+    raw_backend = (
+        backend
+        if backend is not None
+        else os.environ.get("CONTRACT_KB_STORAGE_BACKEND", config.STORAGE_BACKEND)
+    )
+    resolved_backend = (raw_backend or "sqlite").strip().lower()
+    resolved_dsn = (
+        dsn if dsn is not None else os.environ.get("CONTRACT_KB_PG_DSN", config.PG_DSN)
+    ).strip()
+
+    if resolved_backend in ("postgres", "postgresql", "pg") or (
+        backend is None and bool(resolved_dsn) and resolved_backend == "sqlite"
+    ):
+        if not resolved_dsn:
+            raise StorageConfigError(
+                "已指定 PostgreSQL 存储后端但未配置 CONTRACT_KB_PG_DSN；"
+                "fail-closed 拒绝静默回退到 SQLite。"
+            )
+        from .storage_pg import PgVectorStorage
+
+        return PgVectorStorage(
+            resolved_dsn,
+            emb=emb,
+            rebuild_on_mismatch=rebuild_on_mismatch,
+        )
+
+    if resolved_backend == "sqlite":
+        config.ensure_dirs()
+        target_db = db_path if db_path is not None else config.DB_PATH
+        return Storage(target_db, emb=emb, rebuild_on_mismatch=rebuild_on_mismatch)
+
+    raise StorageConfigError(
+        f"不支持的存储后端配置：{resolved_backend!r}（可选 sqlite | postgres）"
+    )
 
 
 class Storage:
@@ -118,31 +176,57 @@ class Storage:
         rebuild_on_mismatch: bool = False,
     ):
         self.db_path = str(db_path)
+        self._lock = threading.RLock()
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        self.conn.executescript(SCHEMA_SQL)
-        self.emb = emb or get_embedding_provider()
-        self._apply_column_migrations()
-        try:
-            self._check_embedding_compat()
-        except EmbeddingConfigMismatch:
-            if not rebuild_on_mismatch:
-                raise
-            # 显式授权后全量重建索引（版本递增留痕）
-            self.rebuild_index()
+        with self._lock:
+            self.conn.executescript(SCHEMA_SQL)
+            self.emb = emb or get_embedding_provider()
+            self._apply_column_migrations()
+            try:
+                self._check_embedding_compat()
+            except EmbeddingConfigMismatch:
+                if not rebuild_on_mismatch:
+                    raise
+                self.rebuild_index()
 
-    def _apply_column_migrations(self):
-        """既有库的增量列迁移（幂等）：任务租户/创建者、向量维度登记。"""
-        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(review_tasks)")}
-        if "tenant_id" not in cols:
+    def _table_cols(self, table: str) -> set[str]:
+        return {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+
+    def _apply_column_migrations(self) -> None:
+        """既有库的增量列迁移（幂等）：租户隔离列、优先级列、索引登记。"""
+        task_cols = self._table_cols("review_tasks")
+        if "tenant_id" not in task_cols:
             self.conn.execute(
                 "ALTER TABLE review_tasks ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'"
             )
-        if "created_by" not in cols:
+        if "created_by" not in task_cols:
             self.conn.execute("ALTER TABLE review_tasks ADD COLUMN created_by TEXT")
+
+        rule_cols = self._table_cols("rules")
+        if "priority" not in rule_cols:
+            self.conn.execute(
+                "ALTER TABLE rules ADD COLUMN priority INTEGER NOT NULL DEFAULT 100"
+            )
+        if "effective_until" not in rule_cols:
+            self.conn.execute("ALTER TABLE rules ADD COLUMN effective_until REAL")
+        if "tenant_id" not in rule_cols:
+            self.conn.execute(
+                "ALTER TABLE rules ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'"
+            )
+
+        fmt_cols = self._table_cols("format_standards")
+        if "tenant_id" not in fmt_cols:
+            self.conn.execute(
+                "ALTER TABLE format_standards ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'"
+            )
+
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_docs_tenant_status ON documents(tenant_id, status)"
+        )
         self.conn.commit()
 
-    def _check_embedding_compat(self):
+    def _check_embedding_compat(self) -> None:
         """Embedding 维度/提供方校验：与已建索引不一致时 fail-closed，要求 rebuild_index。"""
         row = self.conn.execute(
             "SELECT provider, dim FROM embedding_index_meta WHERE status='ACTIVE' "
@@ -157,7 +241,7 @@ class Storage:
                 "重建索引（版本化留痕）后再使用。"
             )
 
-    def _validate_vec(self, vec, context: str):
+    def _validate_vec(self, vec: Any, context: str) -> np.ndarray:
         """向量维度校验：任何写入/查询向量必须与当前 Embedding 维度一致。"""
         arr = np.asarray(vec, dtype=np.float32)
         if arr.ndim != 1 or arr.shape[0] != int(self.emb.dim):
@@ -167,76 +251,114 @@ class Storage:
             )
         return arr
 
-    def close(self):
-        self.conn.close()
+    def close(self) -> None:
+        with self._lock:
+            self.conn.close()
 
-    # ---------- 导入（幂等 + 增量） ----------
-    def upsert_document(self, doc: dict, tenant: str = "default") -> tuple[str, bool]:
-        """按 source_hash 幂等：同哈希→跳过（返回 inserted=False）；新哈希→插入新版本。"""
-        cur = self.conn.execute(
-            "SELECT document_id, status FROM documents WHERE source_hash=?",
-            (doc["sha256"],),
-        )
-        row = cur.fetchone()
-        if row:
-            return row["document_id"], False
-        did = doc["template_id"]
-        self.conn.execute(
-            "INSERT INTO documents VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                did,
-                doc["source_file"],
-                doc["sha256"],
-                doc.get("template_version", "v1"),
-                tenant,
-                doc.get("category", ""),
-                doc.get("subtype", ""),
-                doc.get("document_type", "contract_template"),
-                time.time(),
-                "ACTIVE",
-                json.dumps(
-                    {
-                        "clause_count": doc.get("clause_count", 0),
-                        "table_count": doc.get("table_count", 0),
-                        "paragraph_count": doc.get("paragraph_count", 0),
-                        "unhandled": doc.get("unhandled_structures", []),
-                    },
-                    ensure_ascii=False,
-                ),
-            ),
-        )
-        for c in doc.get("clauses", []):
-            self.conn.execute(
-                "INSERT OR REPLACE INTO clauses (clause_id, document_id, clause_number, "
-                "clause_category, clause_subcategory, original_text, normalized_summary, "
-                "is_company_standard, approval_status, source_node_ids, knowledge_type, "
-                "effective_time) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    c["clause_id"],
-                    did,
-                    c.get("clause_number"),
-                    c.get("clause_category"),
-                    c.get("clause_subcategory"),
-                    c["original_text"],
-                    c.get("normalized_summary", ""),
-                    1 if c.get("is_company_standard") else 0,
-                    c.get("approval_status", "PENDING_REVIEW"),
-                    json.dumps(c.get("source_node_ids", []), ensure_ascii=False),
-                    "LAYER_A_RAW_CLAUSE",
-                    None,
-                ),
+    # ---------- 导入（幂等 + 增量 + 原子事务） ----------
+    def upsert_document(self, doc: dict, tenant: str | None = None) -> tuple[str, bool]:
+        """按 source_hash 幂等：显式传入 tenant 时按 (tenant_id, source_hash) 隔离判重；单租户默认调用按全局哈希判重。"""
+        effective_tenant = tenant if tenant is not None else config.TENANT_ID
+        with self._lock:
+            if tenant is not None:
+                cur = self.conn.execute(
+                    "SELECT document_id, status FROM documents WHERE source_hash=? AND tenant_id=?",
+                    (doc["sha256"], tenant),
+                )
+            else:
+                cur = self.conn.execute(
+                    "SELECT document_id, status FROM documents WHERE source_hash=?",
+                    (doc["sha256"],),
+                )
+            row = cur.fetchone()
+            if row:
+                return row["document_id"], False
+
+            base_did = doc["template_id"]
+            existing_id = self.conn.execute(
+                "SELECT tenant_id FROM documents WHERE document_id=?",
+                (base_did,),
+            ).fetchone()
+            did = (
+                f"{effective_tenant}:{base_did}"
+                if existing_id and existing_id["tenant_id"] != effective_tenant
+                else base_did
             )
-        self.conn.commit()
-        self._index_clauses(did)
-        self._ensure_index_meta()
-        return did, True
+            prefix_clause = did != base_did
 
-    def _index_clauses(self, document_id: str):
+            try:
+                self.conn.execute(
+                    "INSERT INTO documents (document_id, source_file, source_hash, source_version, "
+                    "tenant_id, business_category, contract_subtype, document_type, imported_at, "
+                    "status, raw_meta) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        did,
+                        doc["source_file"],
+                        doc["sha256"],
+                        doc.get("template_version", "v1"),
+                        effective_tenant,
+                        doc.get("category", ""),
+                        doc.get("subtype", ""),
+                        doc.get("document_type", "contract_template"),
+                        time.time(),
+                        doc.get("status", "ACTIVE"),
+                        json.dumps(
+                            {
+                                "clause_count": doc.get("clause_count", 0),
+                                "table_count": doc.get("table_count", 0),
+                                "paragraph_count": doc.get("paragraph_count", 0),
+                                "unhandled": doc.get("unhandled_structures", []),
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ),
+                )
+                for c in doc.get("clauses", []):
+                    cid = (
+                        f"{effective_tenant}:{c['clause_id']}"
+                        if prefix_clause
+                        else c["clause_id"]
+                    )
+                    self.conn.execute(
+                        "INSERT OR REPLACE INTO clauses (clause_id, document_id, clause_number, "
+                        "clause_category, clause_subcategory, original_text, normalized_summary, "
+                        "is_company_standard, approval_status, source_node_ids, knowledge_type, "
+                        "effective_time) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            cid,
+                            did,
+                            c.get("clause_number"),
+                            c.get("clause_category"),
+                            c.get("clause_subcategory"),
+                            c["original_text"],
+                            c.get("normalized_summary", ""),
+                            1 if c.get("is_company_standard") else 0,
+                            c.get("approval_status", "PENDING_REVIEW"),
+                            json.dumps(
+                                c.get("source_node_ids", []), ensure_ascii=False
+                            ),
+                            c.get("knowledge_type") or "LAYER_A_RAW_CLAUSE",
+                            c.get("effective_time"),
+                        ),
+                    )
+                self._index_clauses(did, commit=False)
+                self._ensure_index_meta(commit=False)
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+            return did, True
+
+    def _index_clauses(self, document_id: str, commit: bool = True) -> None:
         rows = self.conn.execute(
             "SELECT rowid, clause_id, original_text, normalized_summary, clause_category, "
-            "clause_subcategory FROM clauses WHERE document_id=?",
+            "clause_subcategory, approval_status, knowledge_type FROM clauses WHERE document_id=?",
             (document_id,),
         ).fetchall()
+        meta = self.conn.execute(
+            "SELECT business_category, contract_subtype, source_hash FROM documents WHERE document_id=?",
+            (document_id,),
+        ).fetchone()
         texts = []
         for r in rows:
             self.conn.execute(
@@ -249,48 +371,49 @@ class Storage:
                     r["clause_category"],
                 ),
             )
-            meta = self.conn.execute(
-                "SELECT business_category, contract_subtype FROM documents WHERE document_id=?",
-                (document_id,),
-            ).fetchone()
             texts.append((r, meta))
-        vecs = np.asarray(
-            self.emb.embed([r["original_text"] for r, _ in texts]), dtype=np.float32
-        )
-        if len(texts) and vecs.shape != (len(texts), int(self.emb.dim)):
-            raise EmbeddingConfigMismatch(
-                f"Embedding 输出维度校验失败：期望 {(len(texts), int(self.emb.dim))}，实际 {vecs.shape}"
+        if texts:
+            vecs = np.asarray(
+                self.emb.embed([r["original_text"] for r, _ in texts]), dtype=np.float32
             )
-        for (r, meta), vec in zip(texts, vecs):
-            self.conn.execute(
-                "INSERT OR REPLACE INTO embeddings VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    f"{document_id}:{r['clause_id']}",
-                    document_id,
-                    r["clause_id"],
-                    meta["business_category"] if meta else "",
-                    meta["contract_subtype"] if meta else "",
-                    "LAYER_D_RAG",
-                    "PENDING_REVIEW",
-                    None,
-                    document_id,
-                    r["original_text"],
-                    self._validate_vec(vec, "index_write").tobytes(),
-                ),
-            )
-        self.conn.commit()
+            if vecs.shape != (len(texts), int(self.emb.dim)):
+                raise EmbeddingConfigMismatch(
+                    f"Embedding 输出维度校验失败：期望 {(len(texts), int(self.emb.dim))}，实际 {vecs.shape}"
+                )
+            for (r, m), vec in zip(texts, vecs):
+                ktype = (
+                    r["knowledge_type"]
+                    if r["knowledge_type"]
+                    and r["knowledge_type"] != "LAYER_A_RAW_CLAUSE"
+                    else "LAYER_D_RAG"
+                )
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO embeddings VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        f"{document_id}:{r['clause_id']}",
+                        document_id,
+                        r["clause_id"],
+                        m["business_category"] if m else "",
+                        m["contract_subtype"] if m else "",
+                        ktype,
+                        r["approval_status"] or "PENDING_REVIEW",
+                        None,
+                        m["source_hash"] if m else document_id,
+                        r["original_text"],
+                        self._validate_vec(vec, "index_write").tobytes(),
+                    ),
+                )
+        if commit:
+            self.conn.commit()
 
-    def _ensure_index_meta(self):
-        """确保存在与当前 Embedding 一致的 ACTIVE 索引版本：
-        - 无记录 → 登记 version=1；
-        - 记录不一致 → fail-closed 报错（换模型必须 rebuild_index）；
-        - 一致 → 直接返回当前版本。"""
+    def _ensure_index_meta(self, commit: bool = True) -> int:
+        """确保存在与当前 Embedding 一致的 ACTIVE 索引版本。"""
         row = self.conn.execute(
             "SELECT version, provider, dim FROM embedding_index_meta WHERE status='ACTIVE' "
             "ORDER BY version DESC LIMIT 1"
         ).fetchone()
         if not row:
-            return self._bump_index_version()
+            return self._bump_index_version(commit=commit)
         if row["provider"] != self.emb.name or int(row["dim"]) != int(self.emb.dim):
             raise EmbeddingConfigMismatch(
                 f"Embedding 配置与现有索引不一致：索引={row['provider']}/dim={row['dim']}，"
@@ -298,7 +421,7 @@ class Storage:
             )
         return int(row["version"])
 
-    def _bump_index_version(self) -> int:
+    def _bump_index_version(self, commit: bool = True) -> int:
         self.conn.execute(
             "UPDATE embedding_index_meta SET status='SUPERSEDED' WHERE status='ACTIVE'"
         )
@@ -313,7 +436,8 @@ class Storage:
                 "ACTIVE",
             ),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return int(
             self.conn.execute(
                 "SELECT MAX(version) AS v FROM embedding_index_meta"
@@ -321,57 +445,255 @@ class Storage:
         )
 
     def get_index_version(self) -> dict | None:
-        row = self.conn.execute(
-            "SELECT * FROM embedding_index_meta WHERE status='ACTIVE' ORDER BY version DESC LIMIT 1"
-        ).fetchone()
-        return dict(row) if row else None
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM embedding_index_meta WHERE status='ACTIVE' ORDER BY version DESC LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else None
 
-    def rebuild_index(self):
+    def rebuild_index(self) -> int:
         """全量重建索引（幂等）：换 Embedding 模型/维度后必须调用，版本号递增留痕。"""
-        self.conn.execute("DELETE FROM clauses_fts")
-        self.conn.execute("DELETE FROM embeddings")
-        self.conn.commit()
-        for (did,) in self.conn.execute("SELECT document_id FROM documents").fetchall():
-            self._index_clauses(did)
-        return self._bump_index_version()
+        with self._lock:
+            try:
+                self.conn.execute("DELETE FROM clauses_fts")
+                self.conn.execute("DELETE FROM embeddings")
+                for (did,) in self.conn.execute(
+                    "SELECT document_id FROM documents"
+                ).fetchall():
+                    self._index_clauses(did, commit=False)
+                ver = self._bump_index_version(commit=False)
+                self.conn.commit()
+                return ver
+            except Exception:
+                self.conn.rollback()
+                raise
 
-    def delete_document(self, document_id: str):
-        for table in ("clauses", "nodes", "fields", "embeddings"):
+    def delete_document(self, document_id: str) -> None:
+        with self._lock:
+            for table in ("clauses", "nodes", "fields", "embeddings"):
+                self.conn.execute(
+                    f"DELETE FROM {table} WHERE document_id=?", (document_id,)
+                )
             self.conn.execute(
-                f"DELETE FROM {table} WHERE document_id=?", (document_id,)
+                "DELETE FROM documents WHERE document_id=?", (document_id,)
             )
-        self.conn.execute("DELETE FROM documents WHERE document_id=?", (document_id,))
-        self.conn.execute(
-            "INSERT INTO audit_log VALUES (NULL,?,?,?,?,?)",
-            (time.time(), "system", "delete_document", document_id, ""),
-        )
-        self.conn.commit()
-        self.rebuild_index()
+            self.conn.execute(
+                "INSERT INTO audit_log VALUES (NULL,?,?,?,?,?)",
+                (time.time(), "system", "delete_document", document_id, ""),
+            )
+            self.conn.commit()
+            self.rebuild_index()
 
     def rollback_to_version(self, document_id: str, source_hash: str) -> bool:
         """回滚：旧哈希仍保留在库（文档版本化），重新激活指定版本并重建索引。"""
-        row = self.conn.execute(
-            "SELECT * FROM documents WHERE source_hash=?", (source_hash,)
-        ).fetchone()
-        if not row:
-            return False
-        self.conn.execute(
-            "UPDATE documents SET status='ACTIVE' WHERE source_hash=?", (source_hash,)
-        )
-        self.conn.execute(
-            "UPDATE documents SET status='SUPERSEDED' WHERE document_id<>? AND source_file=?",
-            (row["document_id"], row["source_file"]),
-        )
-        self.conn.commit()
-        self.rebuild_index()
-        return True
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM documents WHERE source_hash=?", (source_hash,)
+            ).fetchone()
+            if not row:
+                return False
+            self.conn.execute(
+                "UPDATE documents SET status='ACTIVE' WHERE source_hash=?",
+                (source_hash,),
+            )
+            self.conn.execute(
+                "UPDATE documents SET status='SUPERSEDED' WHERE document_id<>? AND source_file=? AND tenant_id=?",
+                (row["document_id"], row["source_file"], row["tenant_id"]),
+            )
+            self.conn.commit()
+            self.rebuild_index()
+            return True
 
-    def log_audit(self, actor: str, action: str, target: str, detail: str = ""):
-        self.conn.execute(
-            "INSERT INTO audit_log VALUES (NULL,?,?,?,?,?)",
-            (time.time(), actor, action, target, detail),
+    def log_audit(self, actor: str, action: str, target: str, detail: str = "") -> None:
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO audit_log VALUES (NULL,?,?,?,?,?)",
+                (time.time(), actor, action, target, detail),
+            )
+            self.conn.commit()
+
+    # ---------- 文档/条款仓储查询方法（消除外部裸 .conn.execute） ----------
+    def get_document(
+        self, document_id: str, tenant_id: str | None = None
+    ) -> dict | None:
+        with self._lock:
+            sql = "SELECT * FROM documents WHERE document_id=?"
+            params: list[Any] = [document_id]
+            if tenant_id is not None:
+                sql += " AND tenant_id=?"
+                params.append(tenant_id)
+            row = self.conn.execute(sql, params).fetchone()
+            return dict(row) if row else None
+
+    def find_document_by_hash(
+        self, source_hash: str, tenant_id: str | None = None
+    ) -> dict | None:
+        with self._lock:
+            sql = "SELECT * FROM documents WHERE source_hash=?"
+            params: list[Any] = [source_hash]
+            if tenant_id is not None:
+                sql += " AND tenant_id=?"
+                params.append(tenant_id)
+            row = self.conn.execute(sql, params).fetchone()
+            return dict(row) if row else None
+
+    def list_active_document_hashes(
+        self, tenant_id: str | None = None
+    ) -> dict[str, str]:
+        with self._lock:
+            sql = "SELECT source_hash, source_file FROM documents WHERE status='ACTIVE'"
+            params: list[Any] = []
+            if tenant_id is not None:
+                sql += " AND tenant_id=?"
+                params.append(tenant_id)
+            rows = self.conn.execute(sql, params).fetchall()
+            return {
+                r["source_hash"]: r["source_file"] for r in rows if r["source_hash"]
+            }
+
+    def set_document_status(
+        self, document_id: str, status: str, tenant_id: str | None = None
+    ) -> bool:
+        with self._lock:
+            sql = "UPDATE documents SET status=? WHERE document_id=?"
+            params: list[Any] = [status, document_id]
+            if tenant_id is not None:
+                sql += " AND tenant_id=?"
+                params.append(tenant_id)
+            cur = self.conn.execute(sql, params)
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def find_active_template(
+        self,
+        contract_subtype: str | None = None,
+        business_category: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict | None:
+        with self._lock:
+            if contract_subtype:
+                sql = (
+                    "SELECT document_id, source_file, source_hash, business_category, "
+                    "contract_subtype, tenant_id FROM documents "
+                    "WHERE contract_subtype=? AND status='ACTIVE'"
+                )
+                params: list[Any] = [contract_subtype]
+                if tenant_id is not None:
+                    sql += " AND tenant_id=?"
+                    params.append(tenant_id)
+                sql += " ORDER BY imported_at DESC LIMIT 1"
+                row = self.conn.execute(sql, params).fetchone()
+                if row:
+                    return dict(row)
+            if business_category:
+                sql = (
+                    "SELECT document_id, source_file, source_hash, business_category, "
+                    "contract_subtype, tenant_id FROM documents "
+                    "WHERE business_category=? AND status='ACTIVE'"
+                )
+                params = [business_category]
+                if tenant_id is not None:
+                    sql += " AND tenant_id=?"
+                    params.append(tenant_id)
+                sql += " ORDER BY imported_at DESC LIMIT 1"
+                row = self.conn.execute(sql, params).fetchone()
+                if row:
+                    return dict(row)
+            return None
+
+    def get_document_clauses(
+        self,
+        document_id: str,
+        clause_category: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[dict]:
+        with self._lock:
+            sql = (
+                "SELECT c.clause_id, c.document_id, c.clause_number, c.clause_category, "
+                "c.clause_subcategory, c.original_text, c.normalized_summary, "
+                "c.is_company_standard, c.approval_status, c.source_node_ids, "
+                "c.knowledge_type, c.effective_time "
+                "FROM clauses c JOIN documents d ON d.document_id=c.document_id "
+                "WHERE c.document_id=?"
+            )
+            params: list[Any] = [document_id]
+            if clause_category:
+                sql += " AND c.clause_category=?"
+                params.append(clause_category)
+            if tenant_id is not None:
+                sql += " AND d.tenant_id=?"
+                params.append(tenant_id)
+            sql += " ORDER BY c.rowid"
+            rows = self.conn.execute(sql, params).fetchall()
+            out = []
+            for r in rows:
+                d = dict(r)
+                if isinstance(d.get("source_node_ids"), str):
+                    try:
+                        d["source_node_ids"] = json.loads(d["source_node_ids"])
+                    except json.JSONDecodeError:
+                        d["source_node_ids"] = []
+                out.append(d)
+            return out
+
+    def record_rule_execution(
+        self,
+        exec_id: str,
+        rule_id: str,
+        rule_version: int,
+        rule_type: str,
+        result: str,
+        severity: str,
+        message: str,
+        evidence: dict | list | str,
+        executed_at: float | None = None,
+    ) -> None:
+        ev_str = (
+            evidence
+            if isinstance(evidence, str)
+            else json.dumps(evidence, ensure_ascii=False)
         )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO rule_executions (exec_id, rule_id, rule_version, "
+                "rule_type, result, severity, message, evidence, executed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    exec_id,
+                    rule_id,
+                    int(rule_version),
+                    rule_type,
+                    result,
+                    severity,
+                    message,
+                    ev_str,
+                    executed_at if executed_at is not None else time.time(),
+                ),
+            )
+            self.conn.commit()
+
+    def list_rule_executions(
+        self, rule_id: str | None = None, limit: int = 100
+    ) -> list[dict]:
+        with self._lock:
+            sql = "SELECT * FROM rule_executions"
+            params: list[Any] = []
+            if rule_id:
+                sql += " WHERE rule_id=?"
+                params.append(rule_id)
+            sql += " ORDER BY executed_at DESC LIMIT ?"
+            params.append(int(limit))
+            rows = self.conn.execute(sql, params).fetchall()
+            out = []
+            for r in rows:
+                d = dict(r)
+                if isinstance(d.get("evidence"), str) and d["evidence"]:
+                    try:
+                        d["evidence"] = json.loads(d["evidence"])
+                    except json.JSONDecodeError:
+                        pass
+                out.append(d)
+            return out
 
     # ---------- 混合检索 ----------
     def search(
@@ -387,51 +709,51 @@ class Storage:
         rerank: bool = True,
         tenant_id: str | None = None,
     ) -> list[dict]:
-        # tenant_id 过滤：embeddings 层已带 document_id，租户约束在文档准入时生效；
-        # 此处显式接受参数保持与 PgVectorStorage 接口一致。
-        fts_hits = self._fts_search(
-            keyword or query,
-            top_k * 3,
-            business_category,
-            contract_subtype,
-            clause_number,
-            knowledge_type,
-            approved_only,
-            tenant_id=tenant_id,
-        )
-        vec_hits = self._vector_search(
-            query,
-            top_k * 3,
-            business_category,
-            contract_subtype,
-            knowledge_type,
-            approved_only,
-            tenant_id=tenant_id,
-        )
-        fused = self._rrf(fts_hits, vec_hits)
-        if clause_number:
-            fused = [
-                h
-                for h in fused
-                if (
-                    h.get("clause_number") == clause_number
-                    or self._clause_num(h["clause_id"]) == clause_number
-                )
-            ]
-        if rerank:
-            fused = self._rerank(query, fused)
-        return fused[:top_k]
+        with self._lock:
+            fts_hits = self._fts_search(
+                keyword or query,
+                top_k * 3,
+                business_category,
+                contract_subtype,
+                clause_number,
+                knowledge_type,
+                approved_only,
+                tenant_id=tenant_id,
+            )
+            vec_hits = self._vector_search(
+                query,
+                top_k * 3,
+                business_category,
+                contract_subtype,
+                knowledge_type,
+                approved_only,
+                tenant_id=tenant_id,
+            )
+            fused = self._rrf(fts_hits, vec_hits)
+            if clause_number:
+                fused = [
+                    h
+                    for h in fused
+                    if (
+                        h.get("clause_number") == clause_number
+                        or self._clause_num(h["clause_id"]) == clause_number
+                    )
+                ]
+            if rerank:
+                fused = self._rerank(query, fused)
+            return fused[:top_k]
 
     def _filters(
         self,
-        business_category,
-        contract_subtype,
-        knowledge_type,
-        approved_only,
-        alias="e",
-        tenant_id=None,
-    ):
-        sql, params = "", []
+        business_category: str | None,
+        contract_subtype: str | None,
+        knowledge_type: str | None,
+        approved_only: bool,
+        alias: str = "e",
+        tenant_id: str | None = None,
+    ) -> tuple[str, list[Any]]:
+        sql = " AND documents.status='ACTIVE'"
+        params: list[Any] = []
         if business_category:
             sql += f" AND {alias}.business_category=?"
             params.append(business_category)
@@ -443,23 +765,22 @@ class Storage:
             params.append(knowledge_type)
         if approved_only:
             sql += f" AND {alias}.approved_status='APPROVED'"
-        if tenant_id:
+        if tenant_id is not None:
             sql += " AND documents.tenant_id=?"
             params.append(tenant_id)
         return sql, params
 
     def _fts_search(
         self,
-        query,
-        limit,
-        business_category,
-        contract_subtype,
-        clause_number,
-        knowledge_type,
-        approved_only,
-        tenant_id=None,
+        query: str,
+        limit: int,
+        business_category: str | None,
+        contract_subtype: str | None,
+        clause_number: str | None,
+        knowledge_type: str | None,
+        approved_only: bool,
+        tenant_id: str | None = None,
     ) -> list[dict]:
-        # 中文 FTS5 默认分词不足：提取中文词组 + 字符双字组合做 OR 查询
         words = [w for w in re.findall(r"[\u4e00-\u9fff]{2,}|[a-zA-Z0-9]+", query)][:8]
         for w in list(words):
             if len(w) >= 3:
@@ -483,7 +804,8 @@ class Storage:
         try:
             rows = self.conn.execute(
                 "SELECT c.clause_id, c.document_id, c.original_text, c.clause_number, "
-                "e.chunk_id, e.business_category, e.contract_subtype FROM clauses_fts f "
+                "c.clause_category, e.chunk_id, e.business_category, e.contract_subtype, "
+                "e.knowledge_type, e.approved_status FROM clauses_fts f "
                 "JOIN clauses c ON c.rowid=f.rowid "
                 "JOIN embeddings e ON e.clause_id=c.clause_id "
                 "JOIN documents ON documents.document_id=c.document_id "
@@ -501,22 +823,25 @@ class Storage:
                     "document_id": r["document_id"],
                     "text": r["original_text"],
                     "clause_number": r["clause_number"],
+                    "clause_category": r["clause_category"],
                     "channel": "fts",
                     "business_category": r["business_category"],
                     "contract_subtype": r["contract_subtype"],
+                    "knowledge_type": r["knowledge_type"],
+                    "approved_status": r["approved_status"],
                 }
             )
         return out
 
     def _vector_search(
         self,
-        query,
-        limit,
-        business_category,
-        contract_subtype,
-        knowledge_type,
-        approved_only,
-        tenant_id=None,
+        query: str,
+        limit: int,
+        business_category: str | None,
+        contract_subtype: str | None,
+        knowledge_type: str | None,
+        approved_only: bool,
+        tenant_id: str | None = None,
     ) -> list[dict]:
         fsql, fparams = self._filters(
             business_category,
@@ -527,10 +852,11 @@ class Storage:
             tenant_id=tenant_id,
         )
         rows = self.conn.execute(
-            "SELECT embeddings.*, ? AS clause_number FROM embeddings "
-            "JOIN documents ON documents.document_id=embeddings.document_id WHERE 1=1"
+            "SELECT embeddings.*, clauses.clause_number, clauses.clause_category FROM embeddings "
+            "JOIN documents ON documents.document_id=embeddings.document_id "
+            "LEFT JOIN clauses ON clauses.clause_id=embeddings.clause_id WHERE 1=1"
             + fsql,
-            [None] + fparams,
+            fparams,
         ).fetchall()
         if not rows:
             return []
@@ -547,16 +873,19 @@ class Storage:
                     "clause_id": r["clause_id"],
                     "document_id": r["document_id"],
                     "text": r["text"],
-                    "clause_number": self._clause_num(r["clause_id"]),
+                    "clause_number": r["clause_number"],
+                    "clause_category": r["clause_category"],
                     "channel": "vector",
                     "score": float(sims[int(i)]),
                     "business_category": r["business_category"],
                     "contract_subtype": r["contract_subtype"],
+                    "knowledge_type": r["knowledge_type"],
+                    "approved_status": r["approved_status"],
                 }
             )
         return out
 
-    def _clause_num(self, clause_id: str):
+    def _clause_num(self, clause_id: str) -> str | None:
         row = self.conn.execute(
             "SELECT clause_number FROM clauses WHERE clause_id=?", (clause_id,)
         ).fetchone()
@@ -589,10 +918,7 @@ class Storage:
 
     @staticmethod
     def _rerank(query: str, hits: list[dict]) -> list[dict]:
-        """轻量确定性 Reranker：字符 2-gram 覆盖度 + 数值匹配加权。
-
-        （生产建议替换为 cross-encoder reranker，接口已隔离在此方法内。）
-        """
+        """轻量确定性 Reranker：字符 2-gram 覆盖度 + 数值匹配加权。"""
         qn = _norm_text(query)
         qgrams = {qn[i : i + 2] for i in range(len(qn) - 1)} or {qn}
         qnums = set(re.findall(r"\d+(?:\.\d+)?", query))
@@ -606,76 +932,134 @@ class Storage:
         return sorted(hits, key=lambda h: -h["rerank_score"])
 
     # ---------- 查询辅助 ----------
-    def get_clause(self, clause_id: str):
-        return self.conn.execute(
-            "SELECT * FROM clauses WHERE clause_id=?", (clause_id,)
-        ).fetchone()
+    def get_clause(self, clause_id: str) -> Any:
+        with self._lock:
+            return self.conn.execute(
+                "SELECT * FROM clauses WHERE clause_id=?", (clause_id,)
+            ).fetchone()
 
-    def list_documents(self, tenant_id: str | None = None):
-        """按租户过滤（SQL 级强制）。tenant_id=None 仅供内部评估/管理使用；
-        API 层必须传入调用者租户——零匹配时返回空列表，绝不回退到全量数据。"""
-        sql = (
-            "SELECT document_id, source_file, source_hash, business_category, contract_subtype, "
-            "status, imported_at, tenant_id FROM documents"
-        )
-        params: tuple = ()
-        if tenant_id is not None:
-            sql += " WHERE tenant_id=?"
-            params = (tenant_id,)
-        sql += " ORDER BY imported_at"
-        return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
+    def list_documents(self, tenant_id: str | None = None) -> list[dict]:
+        """按租户过滤（SQL 级强制）。tenant_id=None 仅供内部评估/管理使用。"""
+        with self._lock:
+            sql = (
+                "SELECT document_id, source_file, source_hash, business_category, contract_subtype, "
+                "status, imported_at, tenant_id FROM documents"
+            )
+            params: tuple[Any, ...] = ()
+            if tenant_id is not None:
+                sql += " WHERE tenant_id=?"
+                params = (tenant_id,)
+            sql += " ORDER BY imported_at"
+            return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
 
-    def save_rule(self, rule: dict):
-        self.conn.execute(
-            "INSERT OR REPLACE INTO rules (rule_id, version, name, rule_type, execution_mode, "
-            "severity, contract_types, params, source_clauses, status, approved_by, effective_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                rule["rule_id"],
-                rule.get("version", 1),
-                rule["name"],
-                rule["rule_type"],
-                rule["execution_mode"],
-                rule["severity"],
-                json.dumps(rule.get("contract_types", ["*"])),
-                json.dumps(rule.get("parameters", {}), ensure_ascii=False),
-                json.dumps(rule.get("source_clauses", []), ensure_ascii=False),
-                rule.get("status", "DRAFT"),
-                rule.get("approved_by"),
-                rule.get("effective_at"),
-            ),
-        )
-        self.conn.commit()
+    # ---------- 规则治理（支持租户隔离与版本递增） ----------
+    def save_rule(self, rule: dict, tenant_id: str | None = None) -> int:
+        resolved_tenant = tenant_id or rule.get("tenant_id") or "default"
+        with self._lock:
+            version = rule.get("version")
+            if version is None:
+                row = self.conn.execute(
+                    "SELECT MAX(version) AS v FROM rules WHERE rule_id=?",
+                    (rule["rule_id"],),
+                ).fetchone()
+                version = int((row["v"] if row and row["v"] is not None else 0) + 1)
+            else:
+                existing = self.conn.execute(
+                    "SELECT tenant_id FROM rules WHERE rule_id=? AND version=?",
+                    (rule["rule_id"], int(version)),
+                ).fetchone()
+                if existing and existing["tenant_id"] != resolved_tenant:
+                    row = self.conn.execute(
+                        "SELECT MAX(version) AS v FROM rules WHERE rule_id=?",
+                        (rule["rule_id"],),
+                    ).fetchone()
+                    version = int((row["v"] if row and row["v"] is not None else 0) + 1)
 
-    def approve_rule(self, rule_id: str, approver: str, version: int = 1) -> bool:
-        cur = self.conn.execute(
-            "UPDATE rules SET status='APPROVED', approved_by=?, effective_at=? "
-            "WHERE rule_id=? AND version=? AND status='DRAFT'",
-            (approver, time.time(), rule_id, version),
-        )
-        self.conn.commit()
-        if cur.rowcount:
-            self.log_audit(approver, "approve_rule", rule_id, f"version={version}")
-            return True
-        return False
+            params_obj = (
+                rule["parameters"] if "parameters" in rule else rule.get("params", {})
+            )
+            self.conn.execute(
+                "INSERT OR REPLACE INTO rules (rule_id, version, name, rule_type, execution_mode, "
+                "severity, priority, contract_types, params, source_clauses, status, approved_by, "
+                "effective_at, effective_until, tenant_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    rule["rule_id"],
+                    int(version),
+                    rule["name"],
+                    rule["rule_type"],
+                    rule["execution_mode"],
+                    rule["severity"],
+                    int(rule.get("priority", 100)),
+                    json.dumps(rule.get("contract_types", ["*"])),
+                    json.dumps(params_obj, ensure_ascii=False),
+                    json.dumps(rule.get("source_clauses", []), ensure_ascii=False),
+                    rule.get("status", "DRAFT"),
+                    rule.get("approved_by"),
+                    rule.get("effective_at"),
+                    rule.get("effective_until"),
+                    resolved_tenant,
+                ),
+            )
+            self.conn.commit()
+            return int(version)
 
-    def get_rules(self, status: str | None = None) -> list[dict]:
-        if status:
-            rows = self.conn.execute(
-                "SELECT * FROM rules WHERE status=?", (status,)
-            ).fetchall()
-        else:
-            rows = self.conn.execute("SELECT * FROM rules").fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
-            d["contract_types"] = json.loads(d["contract_types"])
-            d["params"] = json.loads(d["params"])
-            d["source_clauses"] = json.loads(d["source_clauses"])
-            out.append(d)
-        return out
+    def approve_rule(
+        self,
+        rule_id: str,
+        approver: str,
+        version: int | None = 1,
+        tenant_id: str | None = None,
+    ) -> bool:
+        with self._lock:
+            if version is None:
+                sql_v = "SELECT MAX(version) AS v FROM rules WHERE rule_id=? AND status='DRAFT'"
+                p_v: list[Any] = [rule_id]
+                if tenant_id is not None:
+                    sql_v += " AND tenant_id=?"
+                    p_v.append(tenant_id)
+                rv = self.conn.execute(sql_v, p_v).fetchone()
+                if not rv or rv["v"] is None:
+                    return False
+                version = int(rv["v"])
+            sql = (
+                "UPDATE rules SET status='APPROVED', approved_by=?, effective_at=? "
+                "WHERE rule_id=? AND version=? AND status='DRAFT'"
+            )
+            params: list[Any] = [approver, time.time(), rule_id, int(version)]
+            if tenant_id is not None:
+                sql += " AND tenant_id=?"
+                params.append(tenant_id)
+            cur = self.conn.execute(sql, params)
+            self.conn.commit()
+            if cur.rowcount:
+                self.log_audit(approver, "approve_rule", rule_id, f"version={version}")
+                return True
+            return False
 
-    # 审核任务与问题（含人工反馈）
+    def get_rules(
+        self, status: str | None = None, tenant_id: str | None = None
+    ) -> list[dict]:
+        with self._lock:
+            sql = "SELECT * FROM rules WHERE 1=1"
+            params: list[Any] = []
+            if status:
+                sql += " AND status=?"
+                params.append(status)
+            if tenant_id is not None:
+                sql += " AND tenant_id=?"
+                params.append(tenant_id)
+            sql += " ORDER BY priority ASC, rule_id ASC, version DESC"
+            rows = self.conn.execute(sql, params).fetchall()
+            out = []
+            for r in rows:
+                d = dict(r)
+                d["contract_types"] = json.loads(d["contract_types"])
+                d["params"] = json.loads(d["params"])
+                d["source_clauses"] = json.loads(d["source_clauses"])
+                out.append(d)
+            return out
+
+    # ---------- 审核任务与问题（含人工反馈） ----------
     def save_task(
         self,
         task_id: str,
@@ -685,98 +1069,127 @@ class Storage:
         meta: dict,
         tenant_id: str = "default",
         created_by: str = "system",
-    ):
-        self.conn.execute(
-            "INSERT OR REPLACE INTO review_tasks (task_id, document_id, mode, status, created_at, "
-            "updated_at, meta, tenant_id, created_by) VALUES (?,?,?,?,?,?,?,?,?)",
-            (
-                task_id,
-                document_id,
-                mode,
-                status,
-                time.time(),
-                time.time(),
-                json.dumps(meta, ensure_ascii=False),
-                tenant_id,
-                created_by,
-            ),
-        )
-        self.conn.commit()
-
-    def get_task(self, task_id: str):
-        r = self.conn.execute(
-            "SELECT * FROM review_tasks WHERE task_id=?", (task_id,)
-        ).fetchone()
-        return dict(r) if r else None
-
-    def save_issues(self, task_id: str, issues: list[dict]):
-        for it in issues:
+    ) -> None:
+        now = time.time()
+        with self._lock:
+            existing = self.conn.execute(
+                "SELECT created_at FROM review_tasks WHERE task_id=?", (task_id,)
+            ).fetchone()
+            created_ts = existing["created_at"] if existing else now
             self.conn.execute(
-                "INSERT OR REPLACE INTO review_issues (issue_id, task_id, rule_id, severity, "
-                "category, title, description, expected_value, actual_value, source_ref, "
-                "knowledge_refs, suggestion, execution_mode, requires_human_review, confidence, "
-                "human_state, human_note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO review_tasks (task_id, document_id, mode, status, created_at, "
+                "updated_at, meta, tenant_id, created_by) VALUES (?,?,?,?,?,?,?,?,?)",
                 (
-                    it["issue_id"],
                     task_id,
-                    it.get("rule_id"),
-                    it["severity"],
-                    it["category"],
-                    it["title"],
-                    it["description"],
-                    json.dumps(it.get("expected_value"), ensure_ascii=False),
-                    json.dumps(it.get("actual_value"), ensure_ascii=False),
-                    json.dumps(it["source_reference"], ensure_ascii=False),
-                    json.dumps(it.get("knowledge_references", []), ensure_ascii=False),
-                    it.get("suggestion", ""),
-                    it.get("execution_mode", "DETERMINISTIC"),
-                    1 if it.get("requires_human_review") else 0,
-                    it.get("confidence"),
-                    "PENDING",
-                    None,
+                    document_id,
+                    mode,
+                    status,
+                    created_ts,
+                    now,
+                    json.dumps(meta, ensure_ascii=False),
+                    tenant_id,
+                    created_by,
                 ),
             )
-        self.conn.commit()
+            self.conn.commit()
+
+    def get_task(self, task_id: str) -> dict | None:
+        with self._lock:
+            r = self.conn.execute(
+                "SELECT * FROM review_tasks WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if not r:
+                return None
+            d = dict(r)
+            if isinstance(d.get("meta"), str) and d["meta"]:
+                try:
+                    d["meta"] = json.loads(d["meta"])
+                except json.JSONDecodeError:
+                    pass
+            return d
+
+    def save_issues(self, task_id: str, issues: list[dict]) -> None:
+        with self._lock:
+            for it in issues:
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO review_issues (issue_id, task_id, rule_id, severity, "
+                    "category, title, description, expected_value, actual_value, source_ref, "
+                    "knowledge_refs, suggestion, execution_mode, requires_human_review, confidence, "
+                    "human_state, human_note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        it["issue_id"],
+                        task_id,
+                        it.get("rule_id"),
+                        it["severity"],
+                        it["category"],
+                        it["title"],
+                        it["description"],
+                        json.dumps(it.get("expected_value"), ensure_ascii=False),
+                        json.dumps(it.get("actual_value"), ensure_ascii=False),
+                        json.dumps(it.get("source_reference"), ensure_ascii=False),
+                        json.dumps(
+                            it.get("knowledge_references", []), ensure_ascii=False
+                        ),
+                        it.get("suggestion", ""),
+                        it.get("execution_mode", "DETERMINISTIC"),
+                        1 if it.get("requires_human_review") else 0,
+                        it.get("confidence"),
+                        it.get("human_state", "PENDING"),
+                        it.get("human_note"),
+                    ),
+                )
+            self.conn.commit()
 
     def get_issues(self, task_id: str) -> list[dict]:
-        rows = self.conn.execute(
-            "SELECT * FROM review_issues WHERE task_id=?", (task_id,)
-        ).fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
-            for k in ("source_ref", "knowledge_refs", "expected_value", "actual_value"):
-                d[k] = json.loads(d[k]) if d[k] else None
-            out.append(d)
-        return out
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM review_issues WHERE task_id=?", (task_id,)
+            ).fetchall()
+            out = []
+            for r in rows:
+                d = dict(r)
+                for k in (
+                    "source_ref",
+                    "knowledge_refs",
+                    "expected_value",
+                    "actual_value",
+                ):
+                    d[k] = json.loads(d[k]) if d[k] else None
+                out.append(d)
+            return out
 
     def get_issue(self, issue_id: str) -> dict | None:
         """问题详情 + 所属任务的租户/创建者（供所有权检查）。"""
-        r = self.conn.execute(
-            "SELECT i.*, t.tenant_id AS task_tenant_id, t.created_by AS task_created_by "
-            "FROM review_issues i JOIN review_tasks t ON t.task_id=i.task_id "
-            "WHERE i.issue_id=?",
-            (issue_id,),
-        ).fetchone()
-        return dict(r) if r else None
+        with self._lock:
+            r = self.conn.execute(
+                "SELECT i.*, t.tenant_id AS task_tenant_id, t.created_by AS task_created_by "
+                "FROM review_issues i JOIN review_tasks t ON t.task_id=i.task_id "
+                "WHERE i.issue_id=?",
+                (issue_id,),
+            ).fetchone()
+            return dict(r) if r else None
 
     def feedback_issue(
         self, issue_id: str, action: str, actor: str, note: str = ""
     ) -> bool:
-        """人工反馈：ACCEPT / IGNORE / EDIT / NOTE / FALSE_POSITIVE / FALSE_NEGATIVE。
-        仅记录状态，不自动修改企业正式规则（规则升级需单独审批）。"""
+        """人工反馈：ACCEPT / IGNORE / EDIT / NOTE / FALSE_POSITIVE / FALSE_NEGATIVE。"""
         valid = {"ACCEPT", "IGNORE", "EDIT", "NOTE", "FALSE_POSITIVE", "FALSE_NEGATIVE"}
         if action not in valid:
             return False
-        cur = self.conn.execute(
-            "UPDATE review_issues SET human_state=?, human_note=? WHERE issue_id=?",
-            (action, note, issue_id),
-        )
-        self.conn.commit()
-        self.log_audit(actor, "issue_feedback", issue_id, f"{action} {note[:80]}")
-        return cur.rowcount > 0
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE review_issues SET human_state=?, human_note=? WHERE issue_id=?",
+                (action, note, issue_id),
+            )
+            self.conn.commit()
+            if cur.rowcount > 0:
+                self.log_audit(
+                    actor, "issue_feedback", issue_id, f"{action} {note[:80]}"
+                )
+                return True
+            return False
 
-    # ---------- 公司格式标准（可配置 / 可审批 / 可版本化） ----------
+    # ---------- 公司格式标准（可配置 / 可审批 / 可版本化 / 租户隔离） ----------
     def save_format_standard(
         self,
         standard_id: str,
@@ -784,94 +1197,123 @@ class Storage:
         created_by: str,
         version: int | None = None,
         note: str = "",
+        tenant_id: str | None = None,
     ) -> dict:
         """保存格式标准版本。version 不传则在既有最新版本上 +1（版本化留痕，不覆盖旧版）。"""
-        if version is None:
-            row = self.conn.execute(
-                "SELECT MAX(version) AS v FROM format_standards WHERE standard_id=?",
-                (standard_id,),
-            ).fetchone()
-            version = (row["v"] or 0) + 1
-        self.conn.execute(
-            "INSERT INTO format_standards (standard_id, version, params, status, created_by, "
-            "approved_by, approved_at, effective_at, note) VALUES (?,?,?,?,?,NULL,NULL,NULL,?)",
-            (
-                standard_id,
-                int(version),
-                json.dumps(params, ensure_ascii=False),
-                "DRAFT",
-                created_by,
-                note,
-            ),
-        )
-        self.conn.commit()
-        self.log_audit(
-            created_by, "save_format_standard", standard_id, f"version={version}"
-        )
-        rec = self.get_format_standard(standard_id, int(version))
-        if rec is None:
-            raise RuntimeError(
-                f"格式标准保存失败（写入后无法读取）：{standard_id} v{version}"
+        resolved_tenant = tenant_id or "default"
+        with self._lock:
+            if version is None:
+                row = self.conn.execute(
+                    "SELECT MAX(version) AS v FROM format_standards WHERE standard_id=?",
+                    (standard_id,),
+                ).fetchone()
+                version = int((row["v"] or 0) + 1)
+            self.conn.execute(
+                "INSERT INTO format_standards (standard_id, version, params, status, created_by, "
+                "approved_by, approved_at, effective_at, note, tenant_id) "
+                "VALUES (?,?,?,?,?,NULL,NULL,NULL,?,?)",
+                (
+                    standard_id,
+                    int(version),
+                    json.dumps(params, ensure_ascii=False),
+                    "DRAFT",
+                    created_by,
+                    note,
+                    resolved_tenant,
+                ),
             )
-        return rec
+            self.conn.commit()
+            self.log_audit(
+                created_by, "save_format_standard", standard_id, f"version={version}"
+            )
+            rec = self.get_format_standard(
+                standard_id, int(version), tenant_id=tenant_id
+            )
+            if rec is None:
+                raise RuntimeError(
+                    f"格式标准保存失败（写入后无法读取）：{standard_id} v{version}"
+                )
+            return rec
 
     def approve_format_standard(
-        self, standard_id: str, version: int, approver: str
+        self,
+        standard_id: str,
+        version: int,
+        approver: str,
+        tenant_id: str | None = None,
     ) -> bool:
-        """审批：仅 DRAFT 可审批；审批后成为 ACTIVE（同标准旧 ACTIVE 版本转 SUPERSEDED）。"""
-        cur = self.conn.execute(
-            "UPDATE format_standards SET status='APPROVED' WHERE standard_id=? "
-            "AND version=? AND status='DRAFT'",
-            (standard_id, int(version)),
-        )
-        if not cur.rowcount:
-            self.conn.commit()
-            return False
-        self.conn.execute(
-            "UPDATE format_standards SET status='SUPERSEDED' WHERE standard_id=? AND status='ACTIVE'",
-            (standard_id,),
-        )
-        self.conn.execute(
-            "UPDATE format_standards SET status='ACTIVE', approved_by=?, approved_at=?, "
-            "effective_at=? WHERE standard_id=? AND version=?",
-            (approver, time.time(), time.time(), standard_id, int(version)),
-        )
-        self.conn.commit()
-        self.log_audit(
-            approver, "approve_format_standard", standard_id, f"version={version}"
-        )
-        return True
-
-    def get_format_standard(
-        self, standard_id: str, version: int | None = None
-    ) -> dict | None:
-        if version is None:
-            r = self.conn.execute(
-                "SELECT * FROM format_standards WHERE standard_id=? ORDER BY version DESC LIMIT 1",
-                (standard_id,),
-            ).fetchone()
-        else:
-            r = self.conn.execute(
-                "SELECT * FROM format_standards WHERE standard_id=? AND version=?",
+        """审批：仅 DRAFT 可审批；审批后成为 ACTIVE（同租户同标准旧 ACTIVE 版本转 SUPERSEDED）。"""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT tenant_id FROM format_standards WHERE standard_id=? AND version=? AND status='DRAFT'",
                 (standard_id, int(version)),
             ).fetchone()
-        if not r:
-            return None
-        d = dict(r)
-        d["params"] = json.loads(d["params"])
-        return d
+            if not row:
+                return False
+            if tenant_id is not None and row["tenant_id"] != tenant_id:
+                return False
+            target_tenant = row["tenant_id"]
+            self.conn.execute(
+                "UPDATE format_standards SET status='SUPERSEDED' "
+                "WHERE standard_id=? AND status='ACTIVE' AND tenant_id=?",
+                (standard_id, target_tenant),
+            )
+            now = time.time()
+            self.conn.execute(
+                "UPDATE format_standards SET status='ACTIVE', approved_by=?, approved_at=?, "
+                "effective_at=? WHERE standard_id=? AND version=?",
+                (approver, now, now, standard_id, int(version)),
+            )
+            self.conn.commit()
+            self.log_audit(
+                approver, "approve_format_standard", standard_id, f"version={version}"
+            )
+            return True
+
+    def get_format_standard(
+        self,
+        standard_id: str,
+        version: int | None = None,
+        tenant_id: str | None = None,
+    ) -> dict | None:
+        with self._lock:
+            if version is None:
+                sql = "SELECT * FROM format_standards WHERE standard_id=?"
+                params: list[Any] = [standard_id]
+                if tenant_id is not None:
+                    sql += " AND tenant_id=?"
+                    params.append(tenant_id)
+                sql += " ORDER BY version DESC LIMIT 1"
+                r = self.conn.execute(sql, params).fetchone()
+            else:
+                sql = "SELECT * FROM format_standards WHERE standard_id=? AND version=?"
+                params = [standard_id, int(version)]
+                if tenant_id is not None:
+                    sql += " AND tenant_id=?"
+                    params.append(tenant_id)
+                r = self.conn.execute(sql, params).fetchone()
+            if not r:
+                return None
+            d = dict(r)
+            d["params"] = json.loads(d["params"])
+            return d
 
     def get_active_format_standard(
-        self, standard_id: str = "company_format"
+        self, standard_id: str = "company_format", tenant_id: str | None = None
     ) -> dict | None:
         """仅返回审批通过（ACTIVE）的标准；未审批标准不得用于产生正式违规结论。"""
-        r = self.conn.execute(
-            "SELECT * FROM format_standards WHERE standard_id=? AND status='ACTIVE' "
-            "ORDER BY version DESC LIMIT 1",
-            (standard_id,),
-        ).fetchone()
-        if not r:
-            return None
-        d = dict(r)
-        d["params"] = json.loads(d["params"])
-        return d
+        with self._lock:
+            sql = (
+                "SELECT * FROM format_standards WHERE standard_id=? AND status='ACTIVE'"
+            )
+            params: list[Any] = [standard_id]
+            if tenant_id is not None:
+                sql += " AND tenant_id=?"
+                params.append(tenant_id)
+            sql += " ORDER BY version DESC LIMIT 1"
+            r = self.conn.execute(sql, params).fetchone()
+            if not r:
+                return None
+            d = dict(r)
+            d["params"] = json.loads(d["params"])
+            return d

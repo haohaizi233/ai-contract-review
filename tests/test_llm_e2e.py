@@ -42,16 +42,24 @@ REAL_LLM_ENV = (
 )
 
 
-def _write_evidence(payload: dict) -> dict:
-    """脱敏证据落盘：绝不写入合同原文、密钥、完整端点；同类型仅保留最近 2 次运行。"""
-    EVIDENCE_PATH.parent.mkdir(parents=True, exist_ok=True)
+def _write_evidence(payload: dict, out_path: Path | None = None) -> dict:
+    """脱敏证据落盘：默认写入临时路径避免污染 Git 跟踪目录；显式设置 CONTRACT_KB_WRITE_EVIDENCE=1 时写入 reports/。"""
+    import tempfile
+
+    target = out_path
+    if target is None:
+        if os.environ.get("CONTRACT_KB_WRITE_EVIDENCE", "0") == "1":
+            target = EVIDENCE_PATH
+        else:
+            target = Path(tempfile.gettempdir()) / "contract-kb-llm-e2e-evidence.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
     existing = []
-    if EVIDENCE_PATH.exists():
-        existing = json.loads(EVIDENCE_PATH.read_text(encoding="utf-8")).get("runs", [])
+    if target.exists():
+        existing = json.loads(target.read_text(encoding="utf-8")).get("runs", [])
     same_kind = [r for r in existing if r.get("run_kind") == payload.get("run_kind")]
     other_kind = [r for r in existing if r.get("run_kind") != payload.get("run_kind")]
     runs = other_kind + same_kind[-1:] + [payload]
-    EVIDENCE_PATH.write_text(
+    target.write_text(
         json.dumps(
             {
                 "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

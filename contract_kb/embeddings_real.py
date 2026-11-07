@@ -1,16 +1,14 @@
 # -*- coding: utf-8 -*-
-"""真实 Embedding 提供方（Phase 2）：sentence-transformers 中文模型（BGE-M3 系列）可插拔。
-
-- LocalHashEmbedding：离线基线（既有）；
-- SentenceTransformerEmbedding：真实语义向量（需安装 sentence-transformers + 授权模型）；
-- get_embedding_provider(spec)：按配置选择，未安装时明确报错/降级并由调用方标注。
-"""
+"""真实 Embedding 提供方（Phase 2）：sentence-transformers 中文模型（BGE-M3 系列）可插拔。"""
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
-from .embeddings import EmbeddingProvider
+from . import config
+from .embeddings_base import CloudEmbedding, EmbeddingProvider, LocalHashEmbedding
 
 
 class SentenceTransformerEmbedding(EmbeddingProvider):
@@ -46,11 +44,22 @@ class SentenceTransformerEmbedding(EmbeddingProvider):
 
 
 def get_embedding_provider_by_spec(spec: str | None = None) -> EmbeddingProvider:
-    """spec：local_hash | st:<model> | cloud:<provider>；None 用配置默认。
-
-    与 embeddings.get_embedding_provider 同源（单一工厂），SentenceTransformerEmbedding
-    已接入默认工厂与 Storage（storage.py 默认调用 get_embedding_provider）。
-    """
-    from .embeddings import get_embedding_provider
-
-    return get_embedding_provider(spec)
+    """spec：local_hash | st:<model> | cloud:<provider>；None 用配置默认。"""
+    resolved = (
+        spec
+        if spec is not None
+        else os.environ.get("CONTRACT_KB_EMBEDDING", config.EMBEDDING_PROVIDER)
+    ).strip()
+    if resolved.startswith("st:"):
+        return SentenceTransformerEmbedding(resolved.split(":", 1)[1])
+    if resolved.startswith("cloud:"):
+        allow_ext = (
+            os.environ.get("CONTRACT_KB_ALLOW_EXTERNAL_LLM", "0") == "1"
+            or config.ALLOW_EXTERNAL_LLM
+        )
+        if not allow_ext:
+            raise RuntimeError(
+                f"云 Embedding 服务商 {resolved} 未获外发授权（需显式设置 CONTRACT_KB_ALLOW_EXTERNAL_LLM=1）。"
+            )
+        return CloudEmbedding(resolved.split(":", 1)[1])
+    return LocalHashEmbedding(config.EMBEDDING_DIM)

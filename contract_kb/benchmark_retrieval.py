@@ -56,11 +56,7 @@ def build_bench_storage(emb, tmp_db) -> Storage:
         }
         st.upsert_document(doc)
         if hn.status != "ACTIVE":
-            st.conn.execute(
-                "UPDATE documents SET status=? WHERE document_id=?",
-                (hn.status, hn.doc_id),
-            )
-    st.conn.commit()
+            st.set_document_status(hn.doc_id, hn.status)
     return st
 
 

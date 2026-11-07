@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""合同分类器：支持全量 78 套标准模板、8 大业务板块与五级分类体系。
+"""合同分类器：支持全量 78 套标准模板、标准业务板块与五级分类体系。
 
 分类证据来源（按权重）：
 1. 模板编码（MB...）权威映射（最高置信度，链接五级路由与排他规则）
@@ -12,35 +12,23 @@
 
 from __future__ import annotations
 
-import json
 import re
-import sys
-from dataclasses import dataclass, field, asdict
-from pathlib import Path
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
-# 尝试载入五级路由与排他规则字典
-_TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
-if str(_TOOLS_DIR) not in sys.path:
-    sys.path.append(str(_TOOLS_DIR))
+from .modules.templates.catalog_data import (
+    TEMPLATE_5TH_LAYER_RULES,
+    get_template_leaf_map,
+)
 
-try:
-    from template_5th_layer_data import TEMPLATE_5TH_LAYER_RULES
-except ImportError:
-    TEMPLATE_5TH_LAYER_RULES = {}
+_TPL_LEAF_MAP = get_template_leaf_map()
 
-try:
-    from build_knowledge_graph_html import build_hierarchy_data
-    # 提取预定义的三级架构配置
-    _DATA = build_hierarchy_data()
-    _TPL_LEAF_MAP = {t["code"]: t for t in _DATA.get("templates", [])}
-except Exception:
-    _TPL_LEAF_MAP = {}
-
-# 8大业务板块基础代码与中文映射
+# 业务板块基础代码与中文映射（兼容基线 IP_GENERAL 与 78 模板细分板块）
 CATEGORY_NAMES = {
     "PATENT": "国内专利代理",
     "TRADEMARK": "国内商标代理",
     "COPYRIGHT": "国内著作权代理",
+    "IP_GENERAL": "综合知识产权框架与保密",
     "MIXED_IP": "跨板块综合业务",
     "INT_IP": "国际专利与商标",
     "PROJECT_AUDIT": "科创项目与财税认证",
@@ -51,21 +39,21 @@ CATEGORY_NAMES = {
     "GOVERNANCE_RULE": "管理制度与规范",
 }
 
-# 二级分类关键词字典：key=子类代码, value=(中文名, [正文关键词], [文件名关键词], [特征列头/条款关键词])
-SUBTYPES: dict[str, dict] = {
+# 二级分类关键词字典
+SUBTYPES: dict[str, dict[str, Any]] = {
     # 1. 国内专利
     "PATENT_APPLICATION": {
         "name": "专利常规申请",
         "category": "PATENT",
         "matter_kw": ["专利申请", "申请文件初稿", "技术交底书"],
         "fname_kw": ["（申请）", "(申请)"],
-        "feature_kw": ["超权费", "实审阶段", "费减"],
+        "feature_kw": ["超权费", "实审阶段", "费减", "申请类型", "发明人名称"],
     },
     "PATENT_APPLICATION_RISK": {
         "name": "专利风险代理申请",
         "category": "PATENT",
         "matter_kw": ["风险专利", "授权奖励", "风险排查"],
-        "fname_kw": ["风险代理", "风险"],
+        "fname_kw": ["风险代理"],
         "feature_kw": ["风险专利申请", "未授权退还", "IPO上市前"],
     },
     "PATENT_FAST_PRESCREEN": {
@@ -73,14 +61,14 @@ SUBTYPES: dict[str, dict] = {
         "category": "PATENT",
         "matter_kw": ["快速预审服务事项", "预审服务事项"],
         "fname_kw": ["快速预审"],
-        "feature_kw": ["预审历史记录", "永久取消资格"],
+        "feature_kw": ["保护中心预审"],
     },
     "PATENT_PRIORITY_REVIEW": {
         "name": "专利优先审查",
         "category": "PATENT",
         "matter_kw": ["优先审查服务事项"],
         "fname_kw": ["优先审查"],
-        "feature_kw": ["专利状态", "优先审查"],
+        "feature_kw": ["专利状态", "优先审查请求"],
     },
     "PATENT_REEXAMINATION": {
         "name": "专利复审",
@@ -100,8 +88,8 @@ SUBTYPES: dict[str, dict] = {
         "name": "专利年费代缴",
         "category": "PATENT",
         "matter_kw": ["年费代缴", "年费期限"],
-        "fname_kw": ["年费缴纳"],
-        "feature_kw": ["第    年专利年费", "年费期限"],
+        "fname_kw": ["年费缴纳", "(年费缴纳)"],
+        "feature_kw": ["专利年费", "年费期限"],
     },
     "PATENT_DOCUMENT_COPY": {
         "name": "专利文件副本",
@@ -131,12 +119,12 @@ SUBTYPES: dict[str, dict] = {
         "fname_kw": ["许可备案注销"],
         "feature_kw": ["备案号"],
     },
-    "PATENT_TRANSFER_AGENCY": {
-        "name": "专利转让代理过户",
+    "PATENT_TRANSFER": {
+        "name": "专利转让",
         "category": "PATENT",
-        "matter_kw": ["专利转让事宜", "转让人名称"],
-        "fname_kw": ["（转让）"],
-        "feature_kw": ["受让人名称"],
+        "matter_kw": ["专利转让事宜", "专利转让服务", "转让人名称"],
+        "fname_kw": ["（转让）", "(转让)", "patent_transfer"],
+        "feature_kw": ["受让人名称", "转让人名称"],
     },
     "PATENT_EVALUATION_REPORT": {
         "name": "专利评价报告",
@@ -156,15 +144,22 @@ SUBTYPES: dict[str, dict] = {
         "name": "国内专利组合服务",
         "category": "PATENT",
         "matter_kw": ["国内专利组合", "专利综合服务"],
-        "fname_kw": ["（综合）", "（组合）"],
+        "fname_kw": ["国内专利综合", "专利组合"],
         "feature_kw": ["打包服务"],
     },
     "PATENT_SEARCH_REPORT": {
         "name": "专利检索报告",
         "category": "HIGH_END_CONSULTING",
-        "matter_kw": ["专利检索报告", "专利检索"],
+        "matter_kw": ["专利检索报告", "专利查新检索"],
         "fname_kw": ["（专利检索报告）"],
         "feature_kw": ["检索范围"],
+    },
+    "PATENT_DUE_DILIGENCE_REPORT": {
+        "name": "专利尽职调查报告",
+        "category": "HIGH_END_CONSULTING",
+        "matter_kw": ["专利尽职调查", "专利盘点"],
+        "fname_kw": ["尽职调查报告"],
+        "feature_kw": ["分级管理"],
     },
     "PATENT_STABILITY_REPORT": {
         "name": "专利稳定性分析",
@@ -176,9 +171,9 @@ SUBTYPES: dict[str, dict] = {
     "PATENT_INFRINGEMENT_REPORT": {
         "name": "专利侵权比对分析",
         "category": "HIGH_END_CONSULTING",
-        "matter_kw": ["侵权比对分析报告", "侵权分析"],
+        "matter_kw": ["侵权比对分析报告", "专利侵权分析"],
         "fname_kw": ["专利侵权分析"],
-        "feature_kw": ["比对", "全面覆盖原则"],
+        "feature_kw": ["全面覆盖原则"],
     },
     "PATENT_NAVIGATION_REPORT": {
         "name": "专利导航分析报告",
@@ -191,31 +186,30 @@ SUBTYPES: dict[str, dict] = {
         "name": "专利FTO防侵权检索与尽调",
         "category": "HIGH_END_CONSULTING",
         "matter_kw": ["FTO", "自由实施", "防侵权调查"],
-        "fname_kw": ["FTO", "尽调"],
-        "feature_kw": ["自由实施", "目标市场"],
+        "fname_kw": ["FTO"],
+        "feature_kw": ["自由实施", "风险专利清单"],
     },
     "PATENT_CONSULTANT": {
         "name": "常年知识产权顾问",
         "category": "HIGH_END_CONSULTING",
-        "matter_kw": ["常年知识产权顾问", "知识产权顾问"],
+        "matter_kw": ["常年知识产权顾问", "年度知识产权顾问"],
         "fname_kw": ["顾问合同"],
         "feature_kw": ["顾问期限", "定期辅导"],
     },
-
     # 2. 国内商标
     "TRADEMARK_REGISTRATION": {
         "name": "商标新注册",
         "category": "TRADEMARK",
         "matter_kw": ["商标注册服务事宜", "商标注册申请单"],
-        "fname_kw": ["（注册）"],
-        "feature_kw": ["商标图样/文字", "商标字体", "类别"],
+        "fname_kw": ["（注册）", "(注册)"],
+        "feature_kw": ["商标图样/文字", "商标字体"],
     },
     "TRADEMARK_CONSULTATION": {
         "name": "商标咨询与包过服务",
         "category": "TRADEMARK",
-        "matter_kw": ["商标咨询服务", "包过", "担保注册"],
+        "matter_kw": ["商标咨询服务", "担保注册"],
         "fname_kw": ["商标咨询服务"],
-        "feature_kw": ["全额退款", "不过退费"],
+        "feature_kw": ["未获准注册退", "不过退费"],
     },
     "TRADEMARK_CHANGE": {
         "name": "商标变更",
@@ -227,15 +221,15 @@ SUBTYPES: dict[str, dict] = {
     "TRADEMARK_CHANGE_WORD_ONLY": {
         "name": "商标变更(纯文字版)",
         "category": "TRADEMARK",
-        "matter_kw": ["商标变更", "名址变更"],
-        "fname_kw": ["纯文字", "文字版"],
+        "matter_kw": ["纯文字商标变更", "文字商标名址变更"],
+        "fname_kw": ["变更-文字商标", "纯文字"],
         "feature_kw": ["变更后名址"],
     },
     "TRADEMARK_RENEWAL": {
         "name": "商标续展",
         "category": "TRADEMARK",
         "matter_kw": ["商标续展"],
-        "fname_kw": ["（续展）"],
+        "fname_kw": ["（续展）", "(续展)"],
         "feature_kw": ["宽展期", "专有权期限"],
     },
     "TRADEMARK_CERTIFICATE_REISSUE": {
@@ -243,7 +237,7 @@ SUBTYPES: dict[str, dict] = {
         "category": "TRADEMARK",
         "matter_kw": ["补发商标注册证", "补发注册证"],
         "fname_kw": ["补证"],
-        "feature_kw": ["注册号"],
+        "feature_kw": ["补发注册证"],
     },
     "TRADEMARK_LICENSE_RECORDAL": {
         "name": "商标许可备案",
@@ -257,7 +251,7 @@ SUBTYPES: dict[str, dict] = {
         "category": "TRADEMARK",
         "matter_kw": ["商标转让服务", "商标转让代理"],
         "fname_kw": ["商标服务合同（转让）"],
-        "feature_kw": ["转让人名称", "受让人名称"],
+        "feature_kw": ["转让注册商标"],
     },
     "TRADEMARK_REFUSAL_REVIEW": {
         "name": "商标驳回复审",
@@ -298,7 +292,7 @@ SUBTYPES: dict[str, dict] = {
         "name": "商标无效宣告",
         "category": "TRADEMARK",
         "matter_kw": ["商标无效宣告", "注册商标无效宣告"],
-        "fname_kw": ["无效宣告"],
+        "fname_kw": ["商标无效宣告"],
         "feature_kw": ["争议商标", "裁定书"],
     },
     "TRADEMARK_PACKAGE_COMBO": {
@@ -308,102 +302,106 @@ SUBTYPES: dict[str, dict] = {
         "fname_kw": ["商标综合", "商标组合"],
         "feature_kw": ["多项商标业务"],
     },
-
     # 3. 国内著作权
     "COPYRIGHT_REGISTRATION": {
         "name": "软著与作品版权登记",
         "category": "COPYRIGHT",
-        "matter_kw": ["著作权服务", "著作权登记", "计算机软件著作权登记", "作品著作权登记", "版权登记", "版权服务", "著作权"],
-        "fname_kw": ["版权服务合同", "著作权服务合同", "著作权", "版权"],
+        "matter_kw": [
+            "著作权服务",
+            "著作权登记",
+            "计算机软件著作权登记",
+            "作品著作权登记",
+            "版权登记",
+            "版权服务",
+        ],
+        "fname_kw": ["版权服务合同", "著作权服务合同"],
         "feature_kw": ["软件全称", "著作权人", "著作权服务内容"],
     },
     "COPYRIGHT_URGENT": {
         "name": "计算机软著加急登记",
         "category": "COPYRIGHT",
-        "matter_kw": ["加急登记", "加急软著", "快速出证"],
-        "fname_kw": ["加急"],
+        "matter_kw": ["加急软著", "软著快速出证"],
+        "fname_kw": ["软著加急"],
         "feature_kw": ["加急工作日", "出证时限"],
     },
-
     # 4. 跨板块组合合同
     "MIXED_PATENT_TRADEMARK": {
         "name": "专利+商标综合服务",
         "category": "MIXED_IP",
-        "matter_kw": ["专利+商标", "专利及商标", "专利、商标", "专利类：", "商标类："],
+        "matter_kw": ["专利+商标", "专利及商标", "专利、商标"],
         "fname_kw": ["专利+商标", "国内专利+国内商标", "（专利+商标）"],
-        "feature_kw": ["专利申请", "商标注册"],
+        "feature_kw": ["专利类：", "商标类："],
     },
     "MIXED_PATENT_TRADEMARK_CHANGE": {
         "name": "专利+商标同步变更",
         "category": "MIXED_IP",
-        "matter_kw": ["著录项目变更", "商标变更"],
-        "fname_kw": ["变更服务合同", "变更）知识产权"],
+        "matter_kw": ["专利及商标变更", "专利著录变更及商标变更"],
+        "fname_kw": ["变更）知识产权"],
         "feature_kw": ["变更前名址", "变更后名址"],
     },
     "MIXED_PATENT_TRADEMARK_TRANSFER": {
         "name": "专利+商标同步转让过户",
         "category": "MIXED_IP",
-        "matter_kw": ["专利转让", "商标转让"],
+        "matter_kw": ["专利转让及商标转让", "商标转让+专利转让"],
         "fname_kw": ["商标转让+专利转让", "转让）知识产权"],
-        "feature_kw": ["转让人", "受让人"],
+        "feature_kw": [],
     },
     "MIXED_PATENT_COPYRIGHT": {
         "name": "专利+著作权综合服务",
         "category": "MIXED_IP",
-        "matter_kw": ["专利", "著作权", "版权"],
+        "matter_kw": ["专利+著作权", "专利及著作权", "专利+版权"],
         "fname_kw": ["专利+著作权", "专利+版权"],
-        "feature_kw": ["软件著作权", "专利申请"],
+        "feature_kw": [],
     },
     "MIXED_TRADEMARK_COPYRIGHT": {
         "name": "商标+著作权综合服务",
         "category": "MIXED_IP",
-        "matter_kw": ["商标", "著作权", "版权"],
+        "matter_kw": ["商标+著作权", "商标及著作权", "商标+版权"],
         "fname_kw": ["商标+著作权", "商标+版权"],
-        "feature_kw": ["商标注册", "软件著作权"],
+        "feature_kw": [],
     },
     "MIXED_PATENT_TM_COPYRIGHT": {
         "name": "专利+商标+著作权三栖综合服务",
         "category": "MIXED_IP",
-        "matter_kw": ["专利", "商标", "著作权"],
+        "matter_kw": ["专利+商标+著作权", "专利、商标及著作权"],
         "fname_kw": ["专利+商标+著作权", "三合一"],
-        "feature_kw": ["三栖代理", "全案综合"],
+        "feature_kw": ["三栖代理"],
     },
-
     # 5. 国际专利与商标
     "INT_PATENT_PCT_STAGE": {
         "name": "PCT国际申请阶段",
         "category": "INT_IP",
         "matter_kw": ["PCT国际申请", "RO/CN", "国际检索局"],
         "fname_kw": ["PCT国际申请"],
-        "feature_kw": ["国际申请费", "检索费", "PCT19条"],
+        "feature_kw": ["国际申请费", "PCT19条"],
     },
     "INT_PATENT_NATIONAL_LUMPSUM": {
         "name": "涉外专利国家阶段(包干费版)",
         "category": "INT_IP",
-        "matter_kw": ["包干制方式结算", "包干费版", "国家阶段"],
+        "matter_kw": ["包干制方式结算", "包干费版"],
         "fname_kw": ["(包干费版)PCT", "包干费版"],
         "feature_kw": ["包干费用", "巴黎公约"],
     },
     "INT_PATENT_NATIONAL_STAGES": {
         "name": "涉外专利国家阶段(分阶段费用版)",
         "category": "INT_IP",
-        "matter_kw": ["申请阶段", "审查阶段", "授权阶段", "涉外专利申请"],
+        "matter_kw": ["涉外专利申请"],
         "fname_kw": ["(分阶段费用版)涉外专利申请", "分阶段费用版"],
-        "feature_kw": ["申请途径", "翻译费", "外所律师费"],
+        "feature_kw": ["申请途径", "外所律师费"],
     },
     "INT_PATENT_OA_LUMPSUM": {
         "name": "涉外专利答复复审(包干费版)",
         "category": "INT_IP",
-        "matter_kw": ["审查意见答复", "包干费用", "涉外答复"],
-        "fname_kw": ["(包干费版)涉外专利专利答复", "答复、复审"],
+        "matter_kw": ["涉外答复包干"],
+        "fname_kw": ["(包干费版)涉外专利专利答复"],
         "feature_kw": ["OA答复", "包干收费"],
     },
     "INT_PATENT_OA_STAGES": {
         "name": "涉外专利答复复审(分阶段费用版)",
         "category": "INT_IP",
-        "matter_kw": ["审查意见答复", "分阶段计费", "涉外答复"],
-        "fname_kw": ["(分阶段费用版)涉外专利专利答复", "分阶段"],
-        "feature_kw": ["IDS", "RCE", "实报实销"],
+        "matter_kw": ["涉外答复分阶段"],
+        "fname_kw": ["(分阶段费用版)涉外专利专利答复"],
+        "feature_kw": ["IDS", "RCE"],
     },
     "INT_TRADEMARK_SINGLE_COUNTRY": {
         "name": "单一国家商标注册",
@@ -426,7 +424,6 @@ SUBTYPES: dict[str, dict] = {
         "fname_kw": ["变更等国际商标案件"],
         "feature_kw": ["宣誓", "后续程序"],
     },
-
     # 6. 科创项目与财税审计
     "PROJECT_TECH_CONSULTATION": {
         "name": "高企/贯标/专精特新咨询",
@@ -466,44 +463,43 @@ SUBTYPES: dict[str, dict] = {
     "AUDIT_REPORT_GUANGDONG": {
         "name": "专项审计报告(广东版)",
         "category": "PROJECT_AUDIT",
-        "matter_kw": ["专项审计报告", "研发费用辅助账", "广东"],
+        "matter_kw": ["广东专项审计"],
         "fname_kw": ["广东专项审计"],
         "feature_kw": ["广东地区", "高企专项审计"],
     },
     "AUDIT_REPORT_NON_GUANGDONG": {
         "name": "专项审计报告(非广东版)",
         "category": "PROJECT_AUDIT",
-        "matter_kw": ["专项审计报告", "研发费用辅助账"],
+        "matter_kw": ["非广东专项审计"],
         "fname_kw": ["非广东专项审计"],
         "feature_kw": ["非广东地区", "全国审计"],
     },
-
     # 7. 法律服务与维权诉讼
     "LEGAL_PATENT_LITIGATION": {
         "name": "专利维权诉讼专项",
         "category": "LEGAL_LITIGATION",
-        "matter_kw": ["专利侵权诉讼", "民事起诉", "侵权维权"],
+        "matter_kw": ["专利侵权诉讼", "侵权维权"],
         "fname_kw": ["专利侵权维权诉讼"],
-        "feature_kw": ["法院管辖", "赔偿请求"],
+        "feature_kw": ["赔偿请求"],
     },
     "LEGAL_PATENT_LIT_AND_INVALIDATION": {
         "name": "专利诉讼及无效联动",
         "category": "LEGAL_LITIGATION",
         "matter_kw": ["侵权诉讼及专利无效宣告", "诉无联动"],
         "fname_kw": ["诉讼及专利无效宣告"],
-        "feature_kw": ["侵权诉讼", "无效宣告请求"],
+        "feature_kw": ["诉无联动"],
     },
     "LEGAL_TRADEMARK_ADMIN_LITIGATION": {
         "name": "商标行政诉讼",
         "category": "LEGAL_LITIGATION",
         "matter_kw": ["商标行政诉讼", "北京知识产权法院"],
         "fname_kw": ["商标行政诉讼"],
-        "feature_kw": ["国家知识产权局", "起诉状"],
+        "feature_kw": ["起诉状"],
     },
     "LEGAL_GENERAL_LITIGATION": {
         "name": "专项法律服务(诉讼类)",
         "category": "LEGAL_LITIGATION",
-        "matter_kw": ["专项法律服务", "诉讼委托", "律师代理"],
+        "matter_kw": ["专项法律服务", "诉讼委托"],
         "fname_kw": ["（诉讼类）"],
         "feature_kw": ["诉讼代理费", "出庭"],
     },
@@ -517,14 +513,14 @@ SUBTYPES: dict[str, dict] = {
     "LEGAL_MASS_ENFORCEMENT_FULL_RISK": {
         "name": "维权打假专项(全风险代理)",
         "category": "LEGAL_LITIGATION",
-        "matter_kw": ["维权打假", "全风险代理", "分成比例"],
+        "matter_kw": ["全风险代理维权打假"],
         "fname_kw": ["（全风险代理）"],
         "feature_kw": ["0前期费", "赔偿款分成"],
     },
     "LEGAL_MASS_ENFORCEMENT_BASE_SPLIT": {
         "name": "维权打假专项(基础费+分成)",
         "category": "LEGAL_LITIGATION",
-        "matter_kw": ["维权打假", "基础费用", "风险提成"],
+        "matter_kw": ["维权打假"],
         "fname_kw": ["维权打假专项委托合同"],
         "feature_kw": ["基础服务费", "赔偿款分成"],
     },
@@ -547,65 +543,68 @@ SUBTYPES: dict[str, dict] = {
         "category": "LEGAL_LITIGATION",
         "matter_kw": ["民事+行政+刑事", "三合一维权", "全方位维权"],
         "fname_kw": ["综合打击维权"],
-        "feature_kw": ["多维打击", "全案委托"],
+        "feature_kw": ["多维打击"],
     },
     "LEGAL_STRATEGIC_PROTECTION": {
         "name": "知识产权战略保护合作",
         "category": "LEGAL_LITIGATION",
         "matter_kw": ["战略保护合作", "全方位知识产权战略"],
         "fname_kw": ["战略保护合作协议"],
-        "feature_kw": ["战略大客户", "框架保护"],
+        "feature_kw": ["框架保护"],
     },
-
-    # 8. 知产交易与运营 (港湾买卖)
+    # 8. 知产交易与运营（买卖双向，不含真实企业字号）
     "TRADE_PATENT_BUY": {
-        "name": "专利权转让(港湾买受方)",
+        "name": "专利权转让(运营买受方)",
         "category": "IP_OPERATION",
-        "matter_kw": ["专利权转让", "买方：港湾", "受让人出资"],
-        "fname_kw": ["（甲方买方：港湾）"],
-        "feature_kw": ["买断", "资产收购"],
+        "matter_kw": ["甲方向乙方购买如下专利", "专利收购合同"],
+        "fname_kw": ["甲方买方"],
+        "feature_kw": ["资产收购"],
     },
     "TRADE_PATENT_SELL": {
-        "name": "专利权转让(港湾出让方)",
+        "name": "专利权转让(运营出让方)",
         "category": "IP_OPERATION",
-        "matter_kw": ["专利权转让", "卖方：港湾", "转让人：港湾"],
-        "fname_kw": ["（乙方卖方：港湾）"],
-        "feature_kw": ["专利出让", "现成专利转让"],
+        "matter_kw": ["购买现成专利", "专利出售合同"],
+        "fname_kw": ["乙方卖方"],
+        "feature_kw": ["现成专利转让"],
     },
     "TRADE_TRADEMARK_BUY": {
-        "name": "商标权转让(港湾买受方)",
+        "name": "商标权转让(运营买受方)",
         "category": "IP_OPERATION",
-        "matter_kw": ["商标权转让", "买方：港湾", "受让商标"],
-        "fname_kw": ["商标权转让合同模板（甲方买方：港湾）"],
-        "feature_kw": ["商标收购", "受让人"],
+        "matter_kw": ["甲方向乙方购买如下商标", "商标收购"],
+        "fname_kw": ["商标权转让合同模板（甲方买方"],
+        "feature_kw": ["商标收购"],
     },
     "TRADE_TRADEMARK_SELL": {
-        "name": "商标权转让(港湾出让方)",
+        "name": "商标权转让(运营出让方)",
         "category": "IP_OPERATION",
-        "matter_kw": ["商标权转让", "卖方：港湾", "出让商标"],
-        "fname_kw": ["商标权转让合同模板（乙方卖方：港湾）"],
+        "matter_kw": ["购买现成商标", "出售商标"],
+        "fname_kw": ["商标权转让合同模板（乙方卖方"],
         "feature_kw": ["商标出售", "转让总价款"],
     },
-
-    # 9. 总委框架与保密协议
-    "FRAMEWORK_DOMESTIC_ONLY": {
-        "name": "知识产权总委框架(纯国内版)",
-        "category": "FRAMEWORK_NDA",
-        "matter_kw": ["总委托", "知识产权服务指示函", "年度框架"],
-        "fname_kw": ["知识产权服务合同（总委框架）"],
-        "feature_kw": ["指示函", "框架协议"],
+    # 9. 总委框架与保密协议（保持与历史基线 IP_GENERAL 契约一致）
+    "IP_GENERAL_FRAMEWORK": {
+        "name": "知识产权总委框架协议",
+        "category": "IP_GENERAL",
+        "matter_kw": ["总委托", "知识产权服务指示函", "年度框架", "单个事项服务关系"],
+        "fname_kw": [
+            "知识产权服务合同（总委框架）",
+            "(框架协议)",
+            "（框架协议）",
+            "ip_framework",
+        ],
+        "feature_kw": ["指示函", "框架协议", "知识产权服务价格表"],
     },
-    "FRAMEWORK_WITH_INTERNATIONAL": {
+    "IP_GENERAL_FRAMEWORK_INTL": {
         "name": "知识产权总委框架(含国际版)",
-        "category": "FRAMEWORK_NDA",
-        "matter_kw": ["总委托", "涉外专利", "含国际专利"],
-        "fname_kw": ["（含涉外专利版）"],
-        "feature_kw": ["涉外价格表", "PCT"],
+        "category": "IP_GENERAL",
+        "matter_kw": ["总委托", "含国际专利"],
+        "fname_kw": ["（含涉外专利版）", "含国际业务报价版"],
+        "feature_kw": ["涉外价格表"],
     },
-    "CONFIDENTIALITY_NDA": {
+    "IP_GENERAL_NDA": {
         "name": "商业秘密保密协议(NDA)",
-        "category": "FRAMEWORK_NDA",
-        "matter_kw": ["保密信息", "商业秘密", "技术交底"],
+        "category": "IP_GENERAL",
+        "matter_kw": ["保密协议", "商业秘密保密"],
         "fname_kw": ["保密协议"],
         "feature_kw": ["保密期限", "泄密责任"],
     },
@@ -621,6 +620,96 @@ SUBTYPES: dict[str, dict] = {
 # 一级分类归属字典
 L1_OF = {k: v["category"] for k, v in SUBTYPES.items()}
 
+# 78 套标准模板编号 → (category, subtype) 声明式权威映射表（O(1) 查表，消除高复杂度分支）
+TEMPLATE_CODE_SUBTYPE_MAP: dict[str, tuple[str, str]] = {
+    # 01_国内专利 (24)
+    "MB20251205014": ("PATENT", "PATENT_APPLICATION"),
+    "MB20251209001": ("PATENT", "PATENT_APPLICATION_RISK"),
+    "MB20251205012": ("PATENT", "PATENT_FAST_PRESCREEN"),
+    "MB20251205018": ("PATENT", "PATENT_PRIORITY_REVIEW"),
+    "MB20251205021": ("PATENT", "PATENT_REEXAMINATION"),
+    "MB20251205013": ("PATENT", "PATENT_ANNUAL_FEE"),
+    "MB20251205019": ("PATENT", "PATENT_BIBLIO_CHANGE"),
+    "MB20251205027": ("PATENT", "PATENT_TRANSFER"),
+    "MB20251205045": ("IP_OPERATION", "TRADE_PATENT_BUY"),
+    "MB20251205046": ("IP_OPERATION", "TRADE_PATENT_SELL"),
+    "MB20251205015": ("PATENT", "PATENT_LICENSE_RECORDAL"),
+    "MB20251205016": ("PATENT", "PATENT_LICENSE_CHANGE_CANCEL"),
+    "MB20251205017": ("PATENT", "PATENT_DOCUMENT_COPY"),
+    "MB20251205024": ("PATENT", "PATENT_EVALUATION_REPORT"),
+    "MB20251205020": ("HIGH_END_CONSULTING", "PATENT_NAVIGATION_REPORT"),
+    "MB20251205022": ("HIGH_END_CONSULTING", "PATENT_SEARCH_REPORT"),
+    "MB20251205023": ("HIGH_END_CONSULTING", "PATENT_DUE_DILIGENCE_REPORT"),
+    "MB20251205025": ("HIGH_END_CONSULTING", "PATENT_INFRINGEMENT_REPORT"),
+    "MB20251229002": ("HIGH_END_CONSULTING", "PATENT_FTO_REPORT"),
+    "MB20251205026": ("HIGH_END_CONSULTING", "PATENT_STABILITY_REPORT"),
+    "MB20251205028": ("HIGH_END_CONSULTING", "PATENT_CONSULTANT"),
+    "MB20251205029": ("HIGH_END_CONSULTING", "PATENT_INVALIDATION"),
+    "MB20251205042": ("PATENT", "PATENT_LAYOUT_DESIGN"),
+    "MB20251205086": ("PATENT", "PATENT_PACKAGE_COMBO"),
+    # 02_国内商标 (17)
+    "MB20251205057": ("TRADEMARK", "TRADEMARK_REGISTRATION"),
+    "MB20251205059": ("TRADEMARK", "TRADEMARK_CONSULTATION"),
+    "MB20251205047": ("TRADEMARK", "TRADEMARK_CHANGE"),
+    "MB20260729001": ("TRADEMARK", "TRADEMARK_CHANGE_WORD_ONLY"),
+    "MB20251205058": ("TRADEMARK", "TRADEMARK_TRANSFER_AGENCY"),
+    "MB20251205043": ("IP_OPERATION", "TRADE_TRADEMARK_BUY"),
+    "MB20251205044": ("IP_OPERATION", "TRADE_TRADEMARK_SELL"),
+    "MB20251205054": ("TRADEMARK", "TRADEMARK_RENEWAL"),
+    "MB20251205049": ("TRADEMARK", "TRADEMARK_CERTIFICATE_REISSUE"),
+    "MB20251205053": ("TRADEMARK", "TRADEMARK_LICENSE_RECORDAL"),
+    "MB20251205048": ("TRADEMARK", "TRADEMARK_REFUSAL_REVIEW"),
+    "MB20251205055": ("TRADEMARK", "TRADEMARK_OPPOSITION"),
+    "MB20251205056": ("TRADEMARK", "TRADEMARK_OPPOSITION_DEFENSE"),
+    "MB20251205050": ("TRADEMARK", "TRADEMARK_NON_REGISTRATION_REVIEW"),
+    "MB20251205051": ("TRADEMARK", "TRADEMARK_CANCELLATION"),
+    "MB20251205052": ("TRADEMARK", "TRADEMARK_INVALIDATION"),
+    "MB20251205085": ("TRADEMARK", "TRADEMARK_PACKAGE_COMBO"),
+    # 03_国内著作权 (2)
+    "MB20251205087": ("COPYRIGHT", "COPYRIGHT_REGISTRATION"),
+    "MB20251205088": ("COPYRIGHT", "COPYRIGHT_URGENT"),
+    # 04_跨板块组合 (6)
+    "MB20251205069": ("MIXED_IP", "MIXED_PATENT_TRADEMARK"),
+    "MB20251205072": ("MIXED_IP", "MIXED_PATENT_TRADEMARK_CHANGE"),
+    "MB20251205068": ("MIXED_IP", "MIXED_PATENT_TRADEMARK_TRANSFER"),
+    "MB20251205078": ("MIXED_IP", "MIXED_PATENT_COPYRIGHT"),
+    "MB20251205065": ("MIXED_IP", "MIXED_TRADEMARK_COPYRIGHT"),
+    "MB20251205074": ("MIXED_IP", "MIXED_PATENT_TM_COPYRIGHT"),
+    # 05_国际专利与商标 (8)
+    "MB20251205041": ("INT_IP", "INT_PATENT_PCT_STAGE"),
+    "MB20251205037": ("INT_IP", "INT_PATENT_NATIONAL_LUMPSUM"),
+    "MB20251205039": ("INT_IP", "INT_PATENT_NATIONAL_STAGES"),
+    "MB20251205038": ("INT_IP", "INT_PATENT_OA_LUMPSUM"),
+    "MB20251205040": ("INT_IP", "INT_PATENT_OA_STAGES"),
+    "MB20251205035": ("INT_IP", "INT_TRADEMARK_SINGLE_COUNTRY"),
+    "MB20251205036": ("INT_IP", "INT_TRADEMARK_MADRID"),
+    "MB20251205030": ("INT_IP", "INT_TRADEMARK_POST_CASE"),
+    # 06_科创项目与财税审计 (7)
+    "MB20251205061": ("PROJECT_AUDIT", "AUDIT_REPORT_GUANGDONG"),
+    "MB20251205062": ("PROJECT_AUDIT", "AUDIT_REPORT_NON_GUANGDONG"),
+    "MB20251205063": ("PROJECT_AUDIT", "PROJECT_TECH_SEARCH_TEST"),
+    "MB20251205064": ("PROJECT_AUDIT", "PROJECT_SOFTWARE_ASSESSMENT"),
+    "MB20251205080": ("PROJECT_AUDIT", "PROJECT_BUD_FUND"),
+    "MB20251205082": ("PROJECT_AUDIT", "PROJECT_TECH_CONSULTATION"),
+    "MB20251205084": ("PROJECT_AUDIT", "PROJECT_DATA_IP"),
+    # 07_法律服务与维权诉讼 (11)
+    "MB20251205071": ("LEGAL_LITIGATION", "LEGAL_PATENT_LITIGATION"),
+    "MB20251205066": ("LEGAL_LITIGATION", "LEGAL_PATENT_LIT_AND_INVALIDATION"),
+    "MB20251205067": ("LEGAL_LITIGATION", "LEGAL_TRADEMARK_ADMIN_LITIGATION"),
+    "MB20251205075": ("LEGAL_LITIGATION", "LEGAL_GENERAL_LITIGATION"),
+    "MB20251205073": ("LEGAL_LITIGATION", "LEGAL_NON_LITIGATION"),
+    "MB20251205076": ("LEGAL_LITIGATION", "LEGAL_MASS_ENFORCEMENT_FULL_RISK"),
+    "MB20251205077": ("LEGAL_LITIGATION", "LEGAL_MASS_ENFORCEMENT_BASE_SPLIT"),
+    "MB20251205079": ("LEGAL_LITIGATION", "LEGAL_CRIMINAL_ENFORCEMENT"),
+    "MB20251205081": ("LEGAL_LITIGATION", "LEGAL_ADMIN_ENFORCEMENT"),
+    "MB20251205083": ("LEGAL_LITIGATION", "LEGAL_COMPREHENSIVE_ENFORCEMENT"),
+    "MB20251205070": ("LEGAL_LITIGATION", "LEGAL_STRATEGIC_PROTECTION"),
+    # 08_总委框架与保密协议 (3)
+    "MB20251205089": ("IP_GENERAL", "IP_GENERAL_FRAMEWORK"),
+    "MB20251225003": ("IP_GENERAL", "IP_GENERAL_FRAMEWORK_INTL"),
+    "MB20251205011": ("IP_GENERAL", "IP_GENERAL_NDA"),
+}
+
 
 @dataclass
 class Classification:
@@ -633,8 +722,75 @@ class Classification:
     classification_conflicts: list = field(default_factory=list)
     review_status: str = "APPROVED"
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _score_subtype_features(
+    filename: str,
+    title: str,
+    subtitle: str,
+    matter_text: str,
+    table_headers: list[str],
+    full_text: str,
+) -> tuple[dict[str, float], dict[str, list[str]]]:
+    """对所有候选子类按结构化文本特征打分，纯函数无副作用。"""
+    scores: dict[str, float] = {}
+    evidence: dict[str, list[str]] = {}
+    joined_headers = " ".join(table_headers)
+
+    def add(s_name: str, weight: float, ev: str) -> None:
+        scores[s_name] = scores.get(s_name, 0.0) + weight
+        evidence.setdefault(s_name, []).append(ev)
+
+    for sub_code, spec in SUBTYPES.items():
+        for kw in spec.get("matter_kw", []):
+            if kw in matter_text:
+                add(sub_code, 5.0, f"第一条合同事项含关键词『{kw}』")
+            if kw in title or kw in subtitle:
+                add(sub_code, 3.5, f"文档标题含『{kw}』")
+        for kw in spec.get("fname_kw", []):
+            if kw in filename:
+                add(sub_code, 2.5, f"文件名含『{kw}』")
+            clean_kw = re.sub(r"[（）()【】\[\]\s]", "", kw)
+            if clean_kw and (clean_kw in subtitle or clean_kw in title):
+                add(sub_code, 6.0, f"文档标题/副标题显式包含业务标识『{clean_kw}』")
+        sname = spec.get("name", "")
+        if sname and (sname in title or sname in subtitle):
+            add(sub_code, 5.0, f"文档标题直接命中子类名称『{sname}』")
+        for kw in spec.get("feature_kw", []):
+            if kw in full_text:
+                add(sub_code, 2.0, f"特征条款含『{kw}』")
+            if kw in joined_headers:
+                add(sub_code, 2.5, f"表格列头含『{kw}』")
+    return scores, evidence
+
+
+def _classify_by_template_code(
+    document_id: str, tcode: str, base_evidence: list[str]
+) -> Classification:
+    """命中权威 5 级模板编号时的确定性分类。"""
+    rule = TEMPLATE_5TH_LAYER_RULES[tcode]
+    leaf = _TPL_LEAF_MAP.get(tcode, {})
+    cat, sub = TEMPLATE_CODE_SUBTYPE_MAP.get(tcode, ("PATENT", "PATENT_PACKAGE_COMBO"))
+    l1_name = str(leaf.get("l1", CATEGORY_NAMES.get(cat, cat)))
+    l2_name = str(leaf.get("l2", SUBTYPES.get(sub, {}).get("name", sub)))
+    l3_name = str(leaf.get("l3", rule.get("sub_scene", sub)))
+    evs = list(base_evidence) + [
+        f"【五级知识图谱权威路由】{l1_name} → {l2_name} → {l3_name}",
+        f"【核心排他决策红线】{rule['disambiguation_rule']}",
+        f"【绑定新系统产品】共 {len(rule['new_products'])} 项产品编码",
+    ]
+    return Classification(
+        template_id=document_id,
+        category=cat,
+        subtype=sub,
+        subtype_name=str(SUBTYPES.get(sub, {}).get("name", l2_name)),
+        classification_evidence=evs,
+        classification_confidence=0.99,
+        classification_conflicts=[],
+        review_status="APPROVED",
+    )
 
 
 def classify(
@@ -645,208 +801,56 @@ def classify(
     matter_text: str,
     table_headers: list[str],
     full_text: str,
+    storage: Any = None,
+    tenant_id: str | None = None,
 ) -> Classification:
-    """对单份模板分类。优先结合 5 级映射权威字典与文本证据。"""
-    # 1. 尝试从 filename 或 document_id 中提取 MB 模板代码
-    tcode_match = re.search(r"MB\d{11}", filename) or re.search(r"MB\d{11}", document_id)
-    tcode = tcode_match.group(0) if tcode_match else None
-
-    # 如果是制度文件
+    """对单份合同/模板分类。不隐式创建全局数据库连接，保证纯函数可复现性。"""
     if "合同编号制度" in filename or "合同编号制度" in title:
         return Classification(
             template_id=document_id,
             category="GOVERNANCE_RULE",
             subtype="GOVERNANCE_NUMBERING",
             subtype_name="合同编号与归档管理制度",
-            classification_evidence=["匹配到《合同编号制度20260108》管理规范文件"],
+            classification_evidence=["匹配到合同编号与归档管理规范文件"],
             classification_confidence=1.0,
             classification_conflicts=[],
             review_status="APPROVED",
         )
 
-    # 提取特征证据
-    matched_evs = []
+    matched_evs: list[str] = []
     if matter_text:
         first_line = matter_text.strip().split("\n")[0][:40]
         matched_evs.append(f"第一条事项正文摘要：{first_line}")
     if table_headers:
-        top_cols = "、".join([c.replace("\n", " ") for c in table_headers[:4]])
+        top_cols = "、".join(c.replace("\n", " ") for c in table_headers[:4])
         matched_evs.append(f"表格特征列头：{top_cols}")
 
-    # 2. 如果命中了权威 5 级路由规则（全量 78 套标准模板）
+    tcode_match = re.search(r"MB\d{11}", filename) or re.search(
+        r"MB\d{11}", document_id
+    )
+    tcode = tcode_match.group(0) if tcode_match else None
     if tcode and tcode in TEMPLATE_5TH_LAYER_RULES:
-        rule = TEMPLATE_5TH_LAYER_RULES[tcode]
-        leaf = _TPL_LEAF_MAP.get(tcode, {})
+        return _classify_by_template_code(document_id, tcode, matched_evs)
 
-        # 根据模板编号前缀与特征分配标准 category 与 subtype
-        cat = "PATENT"
-        sub = "PATENT_APPLICATION"
+    scores, evidence = _score_subtype_features(
+        filename, title, subtitle, matter_text, table_headers, full_text
+    )
 
-        if tcode in [f"MB202512050{i}" for i in range(43, 47)]:
-            cat = "IP_OPERATION"
-            sub = "TRADE_PATENT_BUY" if "45" in tcode else ("TRADE_PATENT_SELL" if "46" in tcode else ("TRADE_TRADEMARK_BUY" if "43" in tcode else "TRADE_TRADEMARK_SELL"))
-        elif tcode in ["MB20251205011", "MB20251205089", "MB20251225003"]:
-            cat = "FRAMEWORK_NDA"
-            sub = "CONFIDENTIALITY_NDA" if "011" in tcode else ("FRAMEWORK_WITH_INTERNATIONAL" if "25003" in tcode else "FRAMEWORK_DOMESTIC_ONLY")
-        elif tcode in [f"MB202512050{i:02d}" for i in range(66, 84)] and ("维权" in filename or "诉讼" in filename or "专项委托" in filename or "战略保护" in filename):
-            cat = "LEGAL_LITIGATION"
-            if "071" in tcode: sub = "LEGAL_PATENT_LITIGATION"
-            elif "066" in tcode: sub = "LEGAL_PATENT_LIT_AND_INVALIDATION"
-            elif "067" in tcode: sub = "LEGAL_TRADEMARK_ADMIN_LITIGATION"
-            elif "075" in tcode: sub = "LEGAL_GENERAL_LITIGATION"
-            elif "073" in tcode: sub = "LEGAL_NON_LITIGATION"
-            elif "076" in tcode: sub = "LEGAL_MASS_ENFORCEMENT_FULL_RISK"
-            elif "077" in tcode: sub = "LEGAL_MASS_ENFORCEMENT_BASE_SPLIT"
-            elif "079" in tcode: sub = "LEGAL_CRIMINAL_ENFORCEMENT"
-            elif "081" in tcode: sub = "LEGAL_ADMIN_ENFORCEMENT"
-            elif "083" in tcode: sub = "LEGAL_COMPREHENSIVE_ENFORCEMENT"
-            elif "070" in tcode: sub = "LEGAL_STRATEGIC_PROTECTION"
-            else: sub = "LEGAL_GENERAL_LITIGATION"
-        elif tcode in ["MB20251205061", "MB20251205062", "MB20251205063", "MB20251205064", "MB20251205080", "MB20251205082", "MB20251205084"]:
-            cat = "PROJECT_AUDIT"
-            if "061" in tcode: sub = "AUDIT_REPORT_GUANGDONG"
-            elif "062" in tcode: sub = "AUDIT_REPORT_NON_GUANGDONG"
-            elif "063" in tcode: sub = "PROJECT_TECH_SEARCH_TEST"
-            elif "064" in tcode: sub = "PROJECT_SOFTWARE_ASSESSMENT"
-            elif "080" in tcode: sub = "PROJECT_BUD_FUND"
-            elif "084" in tcode: sub = "PROJECT_DATA_IP"
-            else: sub = "PROJECT_TECH_CONSULTATION"
-        elif tcode.startswith("MB2025120503") or tcode in ["MB20251205041", "MB20251205030"]:
-            cat = "INT_IP"
-            if "041" in tcode: sub = "INT_PATENT_PCT_STAGE"
-            elif "037" in tcode: sub = "INT_PATENT_NATIONAL_LUMPSUM"
-            elif "039" in tcode: sub = "INT_PATENT_NATIONAL_STAGES"
-            elif "038" in tcode: sub = "INT_PATENT_OA_LUMPSUM"
-            elif "040" in tcode: sub = "INT_PATENT_OA_STAGES"
-            elif "035" in tcode: sub = "INT_TRADEMARK_SINGLE_COUNTRY"
-            elif "036" in tcode: sub = "INT_TRADEMARK_MADRID"
-            else: sub = "INT_TRADEMARK_POST_CASE"
-        elif tcode in ["MB20251205087", "MB20251205088"]:
-            cat = "COPYRIGHT"
-            sub = "COPYRIGHT_URGENT" if "088" in tcode else "COPYRIGHT_REGISTRATION"
-        elif tcode in ["MB20251205065", "MB20251205068", "MB20251205069", "MB20251205072", "MB20251205074", "MB20251205078"]:
-            cat = "MIXED_IP"
-            if "069" in tcode: sub = "MIXED_PATENT_TRADEMARK"
-            elif "072" in tcode: sub = "MIXED_PATENT_TRADEMARK_CHANGE"
-            elif "068" in tcode: sub = "MIXED_PATENT_TRADEMARK_TRANSFER"
-            elif "078" in tcode: sub = "MIXED_PATENT_COPYRIGHT"
-            elif "065" in tcode: sub = "MIXED_TRADEMARK_COPYRIGHT"
-            else: sub = "MIXED_PATENT_TM_COPYRIGHT"
-        elif tcode in ["MB20251205020", "MB20251205022", "MB20251205023", "MB20251205025", "MB20251205026", "MB20251205028", "MB20251229002", "MB20251205029"]:
-            cat = "HIGH_END_CONSULTING"
-            if "029" in tcode: sub = "PATENT_INVALIDATION"
-            elif "020" in tcode: sub = "PATENT_NAVIGATION_REPORT"
-            elif "022" in tcode: sub = "PATENT_SEARCH_REPORT"
-            elif "023" in tcode: sub = "PATENT_INFRINGEMENT_REPORT"
-            elif "025" in tcode: sub = "PATENT_SEARCH_REPORT"
-            elif "026" in tcode: sub = "PATENT_STABILITY_REPORT"
-            elif "028" in tcode: sub = "PATENT_CONSULTANT"
-            else: sub = "PATENT_FTO_REPORT"
-        elif tcode in ["MB20251205047", "MB20251205048", "MB20251205049", "MB20251205050", "MB20251205051", "MB20251205052", "MB20251205053", "MB20251205054", "MB20251205055", "MB20251205056", "MB20251205057", "MB20251205058", "MB20251205059", "MB20251205085", "MB20260729001"]:
-            cat = "TRADEMARK"
-            if "057" in tcode: sub = "TRADEMARK_REGISTRATION"
-            elif "059" in tcode: sub = "TRADEMARK_CONSULTATION"
-            elif "047" in tcode: sub = "TRADEMARK_CHANGE"
-            elif "001" in tcode: sub = "TRADEMARK_CHANGE_WORD_ONLY"
-            elif "054" in tcode: sub = "TRADEMARK_RENEWAL"
-            elif "049" in tcode: sub = "TRADEMARK_CERTIFICATE_REISSUE"
-            elif "053" in tcode: sub = "TRADEMARK_LICENSE_RECORDAL"
-            elif "058" in tcode: sub = "TRADEMARK_TRANSFER_AGENCY"
-            elif "048" in tcode: sub = "TRADEMARK_REFUSAL_REVIEW"
-            elif "055" in tcode: sub = "TRADEMARK_OPPOSITION"
-            elif "056" in tcode: sub = "TRADEMARK_OPPOSITION_DEFENSE"
-            elif "050" in tcode: sub = "TRADEMARK_NON_REGISTRATION_REVIEW"
-            elif "051" in tcode: sub = "TRADEMARK_CANCELLATION"
-            elif "052" in tcode: sub = "TRADEMARK_INVALIDATION"
-            else: sub = "TRADEMARK_PACKAGE_COMBO"
-        else:
-            cat = "PATENT"
-            if "014" in tcode: sub = "PATENT_APPLICATION"
-            elif "001" in tcode: sub = "PATENT_APPLICATION_RISK"
-            elif "012" in tcode: sub = "PATENT_FAST_PRESCREEN"
-            elif "018" in tcode: sub = "PATENT_PRIORITY_REVIEW"
-            elif "021" in tcode: sub = "PATENT_REEXAMINATION"
-            elif "013" in tcode: sub = "PATENT_ANNUAL_FEE"
-            elif "017" in tcode: sub = "PATENT_DOCUMENT_COPY"
-            elif "019" in tcode: sub = "PATENT_BIBLIO_CHANGE"
-            elif "015" in tcode: sub = "PATENT_LICENSE_RECORDAL"
-            elif "016" in tcode: sub = "PATENT_LICENSE_CHANGE_CANCEL"
-            elif "027" in tcode: sub = "PATENT_TRANSFER_AGENCY"
-            elif "024" in tcode: sub = "PATENT_EVALUATION_REPORT"
-            elif "042" in tcode: sub = "PATENT_LAYOUT_DESIGN"
-            else: sub = "PATENT_PACKAGE_COMBO"
-
-        l1_name = leaf.get("l1", CATEGORY_NAMES.get(cat, cat))
-        l2_name = leaf.get("l2", SUBTYPES.get(sub, {}).get("name", sub))
-        l3_name = leaf.get("l3", rule.get("sub_scene", sub))
-
-        matched_evs.append(f"【五级知识图谱权威路由】{l1_name} → {l2_name} → {l3_name}")
-        matched_evs.append(f"【核心排他决策红线】{rule['disambiguation_rule']}")
-        matched_evs.append(f"【绑定新系统产品】共 {len(rule['new_products'])} 项产品编码")
-
-        return Classification(
-            template_id=document_id,
-            category=cat,
-            subtype=sub,
-            subtype_name=SUBTYPES.get(sub, {}).get("name", l2_name),
-            classification_evidence=matched_evs,
-            classification_confidence=0.99,
-            classification_conflicts=[],
-            review_status="APPROVED",
+    # 可选注入存储端口的 RAG 增强（严格经统一存储接口，绝不直接访问 .conn 或隐式打开全局 DB）
+    if storage is not None:
+        clean_seed = re.sub(
+            r"\{\{.*?\}\}|\[.*?\]", " ", f"{title} {subtitle} {matter_text[:200]}"
         )
-
-    # 3. 常规启发式特征打分（供未知或合成语料兜底）
-    scores: dict[str, float] = {}
-    evidence: dict[str, list] = {}
-
-    def add(s_name: str, w: float, ev: str):
-        scores[s_name] = scores.get(s_name, 0.0) + w
-        evidence.setdefault(s_name, []).append(ev)
-
-    for sub_code, spec in SUBTYPES.items():
-        for kw in spec.get("matter_kw", []):
-            if kw in matter_text:
-                add(sub_code, 5.0, f"第一条合同事项含关键词『{kw}』")
-        for kw in spec.get("fname_kw", []):
-            if kw in filename:
-                add(sub_code, 2.0, f"文件名含『{kw}』")
-            clean_kw = re.sub(r"[（）()【】\[\]\s]", "", kw)
-            if clean_kw and (clean_kw in subtitle or clean_kw in title):
-                add(sub_code, 6.0, f"文档标题/副标题显式包含业务标识『{clean_kw}』")
-        sname = spec.get("name", "")
-        if sname and (sname in title or sname in subtitle):
-            add(sub_code, 5.0, f"文档标题直接命中子类名称『{sname}』")
-        for kw in spec.get("feature_kw", []):
-            if kw in full_text:
-                add(sub_code, 2.0, f"特征条款含『{kw}』")
-        for kw in spec.get("matter_kw", []):
-            if kw in title or kw in subtitle:
-                add(sub_code, 3.5, f"文档标题含『{kw}』")
-        joined = " ".join(table_headers)
-        for kw in spec.get("feature_kw", []):
-            if kw in joined:
-                add(sub_code, 2.5, f"表格列头含『{kw}』")
-
-    # 4. RAG 语义双向检索增强（解决用户纯盲传附件、零前置信息的母本确认难题）
-    clean_seed = re.sub(r"\{\{.*?\}\}|\[.*?\]", " ", f"{title} {subtitle} {matter_text[:200]}")
-    clean_seed = re.sub(r"(甲方|乙方|地址|合同编号|联系人|电话|传真|邮箱)[:：\s]+", " ", clean_seed)
-    query_seed = " ".join(clean_seed.split())[:120]
-    if query_seed:
-        try:
-            from .storage import Storage
-            from . import config
-            st = Storage(config.DB_PATH)
-            hits = st.search(query_seed, top_k=3, rerank=True)
+        query_seed = " ".join(clean_seed.split())[:120]
+        if query_seed and hasattr(storage, "search"):
+            hits = storage.search(query_seed, top_k=3, rerank=True, tenant_id=tenant_id)
             for h in hits:
-                doc = st.conn.execute(
-                    "SELECT contract_subtype FROM documents WHERE document_id=?",
-                    (h["document_id"],),
-                ).fetchone()
-                if doc and doc["contract_subtype"] in SUBTYPES:
-                    sub = doc["contract_subtype"]
-                    add(sub, 5.5, f"RAG语义检索命中母本 {h['document_id']} ({SUBTYPES[sub]['name']})")
-        except Exception:
-            pass
+                sub = h.get("contract_subtype")
+                if sub in SUBTYPES:
+                    scores[sub] = scores.get(sub, 0.0) + 4.5
+                    evidence.setdefault(sub, []).append(
+                        f"RAG语义检索命中母本 {h['document_id']} ({SUBTYPES[sub]['name']})"
+                    )
 
     if not scores:
         return Classification(
@@ -860,24 +864,36 @@ def classify(
             "NEEDS_MANUAL_REVIEW",
         )
 
-    ranked = sorted(scores.items(), key=lambda kv: -kv[1])
+    ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
     best, best_score = ranked[0]
-    second = ranked[1][1] if len(ranked) > 1 else 0.0
-    total = sum(scores.values()) or 1.0
-    conf = round(
-        min(
-            0.99, best_score / total + (best_score - second) / max(best_score, 1) * 0.3
-        ),
-        3,
-    )
+    second_sub, second_score = ranked[1] if len(ranked) > 1 else ("", 0.0)
+    top3_total = sum(v for _, v in ranked[:3]) or 1.0
+    margin = (best_score - second_score) / max(best_score, 1.0)
+    raw_conf = (best_score / top3_total) * 0.72 + margin * 0.28
+    if best_score < 4.0:
+        raw_conf = min(raw_conf, 0.55)
+    conf = round(min(0.99, raw_conf), 3)
 
-    best_cat = SUBTYPES[best].get("category", "PATENT")
-    cls = Classification(
-        document_id,
-        best_cat,
-        best,
-        SUBTYPES[best]["name"],
-        evidence.get(best, []),
-        conf,
+    conflicts = []
+    if second_score > 0 and (best_score - second_score) / max(best_score, 1.0) < 0.12:
+        conflicts.append(
+            {
+                "candidate": second_sub,
+                "candidate_score": second_score,
+                "best_score": best_score,
+            }
+        )
+
+    best_cat = str(SUBTYPES[best].get("category", "PATENT"))
+    return Classification(
+        template_id=document_id,
+        category=best_cat,
+        subtype=best,
+        subtype_name=str(SUBTYPES[best]["name"]),
+        classification_evidence=evidence.get(best, []) or matched_evs,
+        classification_confidence=conf,
+        classification_conflicts=conflicts,
+        review_status="APPROVED"
+        if conf >= 0.7 and not conflicts
+        else "NEEDS_MANUAL_REVIEW",
     )
-    return cls

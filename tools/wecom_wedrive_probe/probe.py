@@ -23,8 +23,8 @@ CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
-from client import WeComWeDriveClient
-from validators import (
+from client import WeComWeDriveClient  # noqa: E402
+from validators import (  # noqa: E402
     ErrorCategory,
     check_dns,
     check_egress_ip,
@@ -74,7 +74,9 @@ class WeDriveProbeRunner:
         self.download_max_mb = int(os.getenv("WECOM_DOWNLOAD_MAX_MB", "10"))
         self.timeout = int(os.getenv("WECOM_REQUEST_TIMEOUT", "20"))
         self.proxy = os.getenv("WECOM_PROXY", "").strip() or None
-        self.disable_system_proxy = os.getenv("WECOM_DISABLE_SYSTEM_PROXY", "false").lower() in ("true", "1", "yes")
+        self.disable_system_proxy = os.getenv(
+            "WECOM_DISABLE_SYSTEM_PROXY", "false"
+        ).lower() in ("true", "1", "yes")
 
         self.client: WeComWeDriveClient | None = None
         self.result_data: dict[str, Any] = {
@@ -131,18 +133,26 @@ class WeDriveProbeRunner:
 
         # DNS 探测
         dns_res = check_dns("qyapi.weixin.qq.com", timeout=5.0)
-        logger.info(f"DNS 解析 qyapi.weixin.qq.com: {dns_res['resolved']} (IP: {dns_res['ips']}, 耗时: {dns_res['duration_ms']}ms)")
+        logger.info(
+            f"DNS 解析 qyapi.weixin.qq.com: {dns_res['resolved']} (IP: {dns_res['ips']}, 耗时: {dns_res['duration_ms']}ms)"
+        )
 
         # 出口 IP 探测
-        probe_session = WeComWeDriveClient(
-            corp_id="dummy",
-            app_secret="dummy",
-            proxy=self.proxy,
-            disable_system_proxy=self.disable_system_proxy,
-        ).session if (self.corp_id and self.app_secret) else None
+        probe_session = (
+            WeComWeDriveClient(
+                corp_id="dummy",
+                app_secret="dummy",
+                proxy=self.proxy,
+                disable_system_proxy=self.disable_system_proxy,
+            ).session
+            if (self.corp_id and self.app_secret)
+            else None
+        )
 
         egress_res = check_egress_ip(probe_session)
-        logger.info(f"当前执行环境公网出口 IP: {egress_res.get('ip')} (探测来源: {egress_res.get('source')})")
+        logger.info(
+            f"当前执行环境公网出口 IP: {egress_res.get('ip')} (探测来源: {egress_res.get('source')})"
+        )
 
         env_status["dns"] = dns_res
         env_status["egress_ip"] = egress_res
@@ -197,7 +207,7 @@ class WeDriveProbeRunner:
         errmsg = token_data.get("errmsg", "")
         diag = classify_wecom_error(errcode, errmsg)
 
-        token_success = (errcode == 0 and "access_token" in token_data)
+        token_success = errcode == 0 and "access_token" in token_data
         tests["token"] = {
             "name": "获取 Token",
             "endpoint": "GET /cgi-bin/gettoken",
@@ -228,12 +238,14 @@ class WeDriveProbeRunner:
         # 2. POST /cgi-bin/wedrive/space_info
         # ----------------------------------------------------
         test_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(f"--> [2/7] 测试获取空间信息 (wedrive/space_info) - SpaceID: {self.space_id}...")
+        logger.info(
+            f"--> [2/7] 测试获取空间信息 (wedrive/space_info) - SpaceID: {self.space_id}..."
+        )
         space_data, duration_ms = self.client.get_space_info(self.space_id)
         errcode = space_data.get("errcode", -1)
         errmsg = space_data.get("errmsg", "")
         diag = classify_wecom_error(errcode, errmsg)
-        space_success = (errcode == 0)
+        space_success = errcode == 0
 
         space_info_obj = space_data.get("space_info", {})
         tests["space_info"] = {
@@ -257,7 +269,7 @@ class WeDriveProbeRunner:
         # 3. POST /cgi-bin/wedrive/file_list (根目录列表)
         # ----------------------------------------------------
         test_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(f"--> [3/7] 测试根目录列表读取 (wedrive/file_list)...")
+        logger.info("--> [3/7] 测试根目录列表读取 (wedrive/file_list)...")
         list_data, duration_ms = self.client.list_files(
             spaceid=self.space_id,
             fatherid=self.space_id,
@@ -268,7 +280,7 @@ class WeDriveProbeRunner:
         errcode = list_data.get("errcode", -1)
         errmsg = list_data.get("errmsg", "")
         diag = classify_wecom_error(errcode, errmsg)
-        root_list_success = (errcode == 0)
+        root_list_success = errcode == 0
 
         raw_items = list_data.get("file_list", {}).get("item", [])
         tests["root_file_list"] = {
@@ -315,7 +327,9 @@ class WeDriveProbeRunner:
             t0_rec = time.perf_counter()
             # 维护已访问文件夹集合，防止循环与重复遍历
             visited_folder_ids: set[str] = set()
-            queue: list[dict[str, Any]] = [{"fileid": self.space_id, "file_name": "根目录", "path": "/"}]
+            queue: list[dict[str, Any]] = [
+                {"fileid": self.space_id, "file_name": "根目录", "path": "/"}
+            ]
 
             while queue:
                 current_folder = queue.pop(0)
@@ -337,7 +351,9 @@ class WeDriveProbeRunner:
                         limit=100,
                     )
                     if page_data.get("errcode") != 0:
-                        logger.warning(f"遍历目录 {folder_path} (ID: {folder_id}) 失败: {page_data.get('errmsg')}")
+                        logger.warning(
+                            f"遍历目录 {folder_path} (ID: {folder_id}) 失败: {page_data.get('errmsg')}"
+                        )
                         break
 
                     items = page_data.get("file_list", {}).get("item", [])
@@ -349,39 +365,47 @@ class WeDriveProbeRunner:
 
                         # file_type: 1 文件夹, 2 普通文件, 3 微文档, 4 微表格, 5 收集表, 6 幻灯片
                         if item_type == 1:
-                            all_folders.append({
-                                "fileid": item_id,
-                                "file_name": item_name,
-                                "path": current_item_path,
-                                "fatherid": item.get("fatherid"),
-                                "mtime": item.get("mtime"),
-                            })
-                            queue.append({
-                                "fileid": item_id,
-                                "file_name": item_name,
-                                "path": f"{current_item_path}/",
-                            })
+                            all_folders.append(
+                                {
+                                    "fileid": item_id,
+                                    "file_name": item_name,
+                                    "path": current_item_path,
+                                    "fatherid": item.get("fatherid"),
+                                    "mtime": item.get("mtime"),
+                                }
+                            )
+                            queue.append(
+                                {
+                                    "fileid": item_id,
+                                    "file_name": item_name,
+                                    "path": f"{current_item_path}/",
+                                }
+                            )
                         elif item_type == 2:
-                            all_files.append({
-                                "fileid": item_id,
-                                "file_name": item_name,
-                                "path": current_item_path,
-                                "file_size": item.get("file_size", 0),
-                                "file_type": item_type,
-                                "ctime": item.get("ctime"),
-                                "mtime": item.get("mtime"),
-                                "sha": item.get("sha"),
-                                "md5": item.get("md5"),
-                            })
+                            all_files.append(
+                                {
+                                    "fileid": item_id,
+                                    "file_name": item_name,
+                                    "path": current_item_path,
+                                    "file_size": item.get("file_size", 0),
+                                    "file_type": item_type,
+                                    "ctime": item.get("ctime"),
+                                    "mtime": item.get("mtime"),
+                                    "sha": item.get("sha"),
+                                    "md5": item.get("md5"),
+                                }
+                            )
                         else:
-                            all_other_docs.append({
-                                "fileid": item_id,
-                                "file_name": item_name,
-                                "path": current_item_path,
-                                "file_type": item_type,
-                                "url": item.get("url"),
-                                "mtime": item.get("mtime"),
-                            })
+                            all_other_docs.append(
+                                {
+                                    "fileid": item_id,
+                                    "file_name": item_name,
+                                    "path": current_item_path,
+                                    "file_type": item_type,
+                                    "url": item.get("url"),
+                                    "mtime": item.get("mtime"),
+                                }
+                            )
 
                     has_more = page_data.get("has_more", False)
                     start = page_data.get("next_start", 0)
@@ -421,8 +445,16 @@ class WeDriveProbeRunner:
             if f.get("sha") or f.get("md5"):
                 has_hash_in_api = True
 
-        mtime_min_str = datetime.datetime.fromtimestamp(min(mtimes)).strftime("%Y-%m-%d %H:%M:%S") if mtimes else None
-        mtime_max_str = datetime.datetime.fromtimestamp(max(mtimes)).strftime("%Y-%m-%d %H:%M:%S") if mtimes else None
+        mtime_min_str = (
+            datetime.datetime.fromtimestamp(min(mtimes)).strftime("%Y-%m-%d %H:%M:%S")
+            if mtimes
+            else None
+        )
+        mtime_max_str = (
+            datetime.datetime.fromtimestamp(max(mtimes)).strftime("%Y-%m-%d %H:%M:%S")
+            if mtimes
+            else None
+        )
 
         self.result_data["catalog_statistics"] = {
             "accessible_spaces_count": 1 if space_success else 0,
@@ -472,7 +504,7 @@ class WeDriveProbeRunner:
             errcode = file_info_data.get("errcode", -1)
             errmsg = file_info_data.get("errmsg", "")
             diag = classify_wecom_error(errcode, errmsg)
-            file_info_success = (errcode == 0)
+            file_info_success = errcode == 0
 
             fi_obj = file_info_data.get("file_info", {})
             tests["file_info"] = {
@@ -488,7 +520,8 @@ class WeDriveProbeRunner:
                 "description": diag["description"],
                 "suggestion": diag["suggestion"],
                 "fileid": target_file_id,
-                "file_name": fi_obj.get("file_name") or (target_file_meta.get("file_name") if target_file_meta else None),
+                "file_name": fi_obj.get("file_name")
+                or (target_file_meta.get("file_name") if target_file_meta else None),
                 "file_size": fi_obj.get("file_size"),
                 "file_type": fi_obj.get("file_type"),
                 "sha": fi_obj.get("sha"),
@@ -517,7 +550,9 @@ class WeDriveProbeRunner:
                 "suggestion": "在空间中准备小型普通文件（<=10MB）",
             }
         else:
-            ticket_data, duration_ticket_ms = self.client.get_file_download_ticket(target_file_id)
+            ticket_data, duration_ticket_ms = self.client.get_file_download_ticket(
+                target_file_id
+            )
             errcode = ticket_data.get("errcode", -1)
             errmsg = ticket_data.get("errmsg", "")
             diag = classify_wecom_error(errcode, errmsg)
@@ -628,12 +663,17 @@ class WeDriveProbeRunner:
                 "errmsg": integrity_res.get("error") or "ok",
                 "duration_ms": 1.0,
                 "status": "PASS" if integrity_res["valid"] else "FAIL",
-                "category": ErrorCategory.SUCCESS.value if integrity_res["valid"] else ErrorCategory.PARAMETER_ERROR.value,
+                "category": ErrorCategory.SUCCESS.value
+                if integrity_res["valid"]
+                else ErrorCategory.PARAMETER_ERROR.value,
                 "description": (
                     f"完整性校验通过 (大小: {integrity_res['actual_size']} 字节, SHA256: {integrity_res['sha256'][:12]}...)"
-                    if integrity_res["valid"] else f"校验不匹配: {integrity_res.get('error')}"
+                    if integrity_res["valid"]
+                    else f"校验不匹配: {integrity_res.get('error')}"
                 ),
-                "suggestion": "无" if integrity_res["valid"] else "检查文件是否被中间网关篡改或下载截断",
+                "suggestion": "无"
+                if integrity_res["valid"]
+                else "检查文件是否被中间网关篡改或下载截断",
                 "sha256": integrity_res["sha256"],
                 "md5": integrity_res["md5"],
                 "actual_size": integrity_res["actual_size"],
@@ -666,7 +706,13 @@ class WeDriveProbeRunner:
             return
 
         # Token PASS 的情况下
-        if sp == "PASS" and rf == "PASS" and rec == "PASS" and dl == "PASS" and integ == "PASS":
+        if (
+            sp == "PASS"
+            and rf == "PASS"
+            and rec == "PASS"
+            and dl == "PASS"
+            and integ == "PASS"
+        ):
             self.result_data["conclusion"] = {
                 "level": "A",
                 "title": "完全可用",
@@ -688,12 +734,13 @@ class WeDriveProbeRunner:
         category = sp_obj.get("category")
 
         if errcode == 60020 or category == ErrorCategory.TRUSTED_IP_ERROR.value:
+            env_chk = self.result_data.get("environment_check", {})
             caller_ip = (
-            tests.get("space_info", {}).get("caller_ip")
-            or tests.get("root_file_list", {}).get("caller_ip")
-            or env_chk.get("egress_ip", {}).get("ip")
-            or "当前公网出口IP"
-        )
+                tests.get("space_info", {}).get("caller_ip")
+                or tests.get("root_file_list", {}).get("caller_ip")
+                or env_chk.get("egress_ip", {}).get("ip")
+                or "当前公网出口IP"
+            )
             self.result_data["conclusion"] = {
                 "level": "C",
                 "title": "仅授权成功（拦截于企业可信IP限制）",
@@ -713,15 +760,18 @@ class WeDriveProbeRunner:
             }
             return
 
-        if errcode in (2000003, 93001, 640008) or category == ErrorCategory.SPACE_NO_PERMISSION.value:
+        if (
+            errcode in (2000003, 93001, 640008)
+            or category == ErrorCategory.SPACE_NO_PERMISSION.value
+        ):
             self.result_data["conclusion"] = {
                 "level": "C",
                 "title": "仅授权成功（微盘空间无访问权限）",
                 "details": (
                     f"Token 获取成功且 IP 白名单已通过放行，但调用微盘空间接口返回权限不足 (errcode={errcode}: {sp_obj.get('errmsg')})。\n"
                     f"核心排查点：\n"
-                    f"1. 【微盘 API 全局调用授权】：请在管理后台【协作】->【微盘】->【API】确认已开启接口同步，并将该自建应用（AgentId: 1000077）加入【可调用接口的应用】列表并赋予只读权限；\n"
-                    f"2. 【空间权限隔离】：当前空间‘法律事务部’由个人用户毛世梅创建（agent_id=0），受微盘权限隔离保护，需确认应用对该空间具有协同成员权限。"
+                    f"1. 【微盘 API 全局调用授权】：请在管理后台【协作】->【微盘】->【API】确认已开启接口同步，并将该自建应用（<YOUR_AGENT_ID>）加入【可调用接口的应用】列表并赋予只读权限；\n"
+                    f"2. 【空间权限隔离】：若目标空间由个人用户创建（agent_id=0），受微盘权限隔离保护，需确认应用对该空间具有协同成员权限。"
                 ),
             }
             return
@@ -764,16 +814,24 @@ class WeDriveProbeRunner:
             desc = t.get("description", "")
             return f"| {t.get('name')} | **{status}** | {code_str} | {desc} |"
 
-        dist_str = ", ".join([f"`{k}`: {v}" for k, v in stats.get("file_types_distribution", {}).items()]) or "无（未获取到文件列表）"
+        dist_str = (
+            ", ".join(
+                [
+                    f"`{k}`: {v}"
+                    for k, v in stats.get("file_types_distribution", {}).items()
+                ]
+            )
+            or "无（未获取到文件列表）"
+        )
 
         md_content = f"""# 企业微信微盘 API 真实连通性与文件读取测试报告
 
-- **测试时间**：{meta.get('generated_at', '-')}
-- **CorpID**：`{env_chk.get('corp_id', '-')}`
-- **测试空间 ID**：`{env_chk.get('space_id', '-')}`
-- **测试环境公网出口 IP**：`{env_chk.get('egress_ip', {}).get('ip', '未知')}`
-- **DNS 解析结果**：`{', '.join(env_chk.get('dns', {}).get('ips', []))}`
-- **代理配置状态**：`{env_chk.get('custom_proxy') or '直接直连（未启用正向代理）'}`
+- **测试时间**：{meta.get("generated_at", "-")}
+- **CorpID**：`{env_chk.get("corp_id", "-")}`
+- **测试空间 ID**：`{env_chk.get("space_id", "-")}`
+- **测试环境公网出口 IP**：`{env_chk.get("egress_ip", {}).get("ip", "未知")}`
+- **DNS 解析结果**：`{", ".join(env_chk.get("dns", {}).get("ips", []))}`
+- **代理配置状态**：`{env_chk.get("custom_proxy") or "直接直连（未启用正向代理）"}`
 
 ---
 
@@ -781,13 +839,13 @@ class WeDriveProbeRunner:
 
 | 测试项 | 状态 | 错误码 | 说明 |
 |---|---|---|---|
-{_fmt_row('token')}
-{_fmt_row('space_info')}
-{_fmt_row('root_file_list')}
-{_fmt_row('recursive_list')}
-{_fmt_row('file_info')}
-{_fmt_row('file_download')}
-{_fmt_row('file_integrity')}
+{_fmt_row("token")}
+{_fmt_row("space_info")}
+{_fmt_row("root_file_list")}
+{_fmt_row("recursive_list")}
+{_fmt_row("file_info")}
+{_fmt_row("file_download")}
+{_fmt_row("file_integrity")}
 
 ---
 
@@ -795,32 +853,55 @@ class WeDriveProbeRunner:
 
 | 统计指标 | 统计结果 | 业务说明 |
 |---|---|---|
-| 可访问微盘空间数量 | **{stats.get('accessible_spaces_count', 0)}** | 仅核对授权指定的法律事务部共享空间 |
-| 文件夹总数 | **{stats.get('folders_count', 0)}** | 递归树状目录结构统计 |
-| 普通文件总数 | **{stats.get('files_count', 0)}** | docx / pdf / xlsx / zip 等二进制普通文件 |
-| 在线微文档总数 | **{stats.get('other_docs_count', 0)}** | 腾讯微文档 / 微表格 / 收集表 |
+| 可访问微盘空间数量 | **{
+            stats.get("accessible_spaces_count", 0)
+        }** | 仅核对授权指定的法律事务部共享空间 |
+| 文件夹总数 | **{stats.get("folders_count", 0)}** | 递归树状目录结构统计 |
+| 普通文件总数 | **{
+            stats.get("files_count", 0)
+        }** | docx / pdf / xlsx / zip 等二进制普通文件 |
+| 在线微文档总数 | **{
+            stats.get("other_docs_count", 0)
+        }** | 腾讯微文档 / 微表格 / 收集表 |
 | 文件格式分布 | {dist_str} | 母本合同多为 `.docx` / 归档扫描件为 `.pdf` |
-| 最后修改时间范围 | `{stats.get('mtime_range', {}).get('min') or 'N/A'}` ~ `{stats.get('mtime_range', {}).get('max') or 'N/A'}` | 可用于按时间窗口进行增量感知 |
-| API 是否提供文件哈希 | **{'是' if stats.get('has_file_hash') else '否（空间未开放或未返回哈希字段）'}** | 企业微信官方接口在 `file_info` / `file_list` 中提供 `sha` 与 `md5` |
-| 适合增量同步评估 | **{'具备前提条件' if stats.get('incremental_sync_feasible') else '当前网络/权限受阻，待放行后评估'}** | 基于文件哈希或修改时间戳能够实现 0 成本跳过无变更合同 |
-| 当前权限与网络限制 | **{tests.get('space_info', {}).get('description') or '无限制'}** | 阻断环节的根本原因记录 |
+| 最后修改时间范围 | `{stats.get("mtime_range", {}).get("min") or "N/A"}` ~ `{
+            stats.get("mtime_range", {}).get("max") or "N/A"
+        }` | 可用于按时间窗口进行增量感知 |
+| API 是否提供文件哈希 | **{
+            "是" if stats.get("has_file_hash") else "否（空间未开放或未返回哈希字段）"
+        }** | 企业微信官方接口在 `file_info` / `file_list` 中提供 `sha` 与 `md5` |
+| 适合增量同步评估 | **{
+            "具备前提条件"
+            if stats.get("incremental_sync_feasible")
+            else "当前网络/权限受阻，待放行后评估"
+        }** | 基于文件哈希或修改时间戳能够实现 0 成本跳过无变更合同 |
+| 当前权限与网络限制 | **{
+            tests.get("space_info", {}).get("description") or "无限制"
+        }** | 阻断环节的根本原因记录 |
 
 ---
 
 ## 三、最终测试结论
 
-### **结论评定：【{conclusion.get('level')}】{conclusion.get('title')}**
+### **结论评定：【{conclusion.get("level")}】{conclusion.get("title")}**
 
 > **结论详情**：
-> {conclusion.get('details')}
+> {conclusion.get("details")}
 
 ---
 
 ## 四、排查诊断与修复建议
 
-{f"### 错误码【{tests.get('space_info', {}).get('errcode')}】深度排查与修复步骤：" if tests.get('space_info', {}).get('errcode') else "### 接口调用正常："}
+{
+            f"### 错误码【{tests.get('space_info', {}).get('errcode')}】深度排查与修复步骤："
+            if tests.get("space_info", {}).get("errcode")
+            else "### 接口调用正常："
+        }
 
-{tests.get('space_info', {}).get('suggestion') or '所有接口均已畅通，可直接推进下一阶段。'}
+{
+            tests.get("space_info", {}).get("suggestion")
+            or "所有接口均已畅通，可直接推进下一阶段。"
+        }
 
 ---
 
@@ -830,11 +911,19 @@ class WeDriveProbeRunner:
    - 企业微信官方微盘 API 完全满足增量同步需求：`wedrive/file_list` 支持分页、修改时间戳及 `sha`/`md5` 哈希字段，能够在毫秒级比对文件指纹，跳过未修改母本；
    - `wedrive/file_download` 凭证机制可在服务端安全换取下载流，下载完成后通过本地 SHA-256 校验确保与知识库一致。
 2. **当前阻断点与落地动作**：
-{f'''   - **当前状态**：IP 白名单已成功放行（原 60020 拦截已解除）；当前阻断位于**微盘空间访问权限限制**（错误码 `640008: permision deny`）；
+{
+            '''   - **当前状态**：IP 白名单已成功放行（原 60020 拦截已解除）；当前阻断位于**微盘空间访问权限限制**（错误码 `640008: permision deny`）；
    - **立即动作**：
-     1. 请管理员登录企业微信管理端 ->【协作】->【微盘】->【API】，确认自建应用（AgentId: 1000077）已加入【可调用接口的应用】并开启权限；
-     2. 确认当前自建应用或操作者对指定空间（法律事务部）具有查看/协同权限；''' if tests.get('space_info', {}).get('errcode') == 640008 else (f'''   - **当前状态**：阻断位于**企业微信【企业可信 IP】白名单拦截**（错误码 `60020`）；
-   - **立即动作**：请企业微信管理员进入企业微信管理后台【应用管理】-> 找到对应自建应用 ->【企业可信 IP】，将当前请求出口 IP `{caller_ip}` 添加至白名单；''' if tests.get('space_info', {}).get('errcode') == 60020 else '''   - **当前状态**：所有网络与微盘接口畅通无阻，已具备上线条件；''')}
+     1. 请管理员登录企业微信管理端 ->【协作】->【微盘】->【API】，确认自建应用（<YOUR_AGENT_ID>）已加入【可调用接口的应用】并开启权限；
+     2. 确认当前自建应用或操作者对目标微盘共享空间具有查看/协同权限；'''
+            if tests.get("space_info", {}).get("errcode") == 640008
+            else (
+                f'''   - **当前状态**：阻断位于**企业微信【企业可信 IP】白名单拦截**（错误码 `60020`）；
+   - **立即动作**：请企业微信管理员进入企业微信管理后台【应用管理】-> 找到对应自建应用 ->【企业可信 IP】，将当前请求出口 IP `{caller_ip}` 添加至白名单；'''
+                if tests.get("space_info", {}).get("errcode") == 60020
+                else '''   - **当前状态**：所有网络与微盘接口畅通无阻，已具备上线条件；'''
+            )
+        }
    - 权限配置放行后，本测试工具可一键重复执行，即可直接达成【结论 A：完全可用】并自动生成全量合同清单。
 """
         with open(md_path, "w", encoding="utf-8") as f:
@@ -851,7 +940,9 @@ class WeDriveProbeRunner:
 
         conclusion = self.result_data.get("conclusion", {})
         logger.info("==================================================")
-        logger.info(f"探测完成！最终结论：【{conclusion.get('level')}】{conclusion.get('title')}")
+        logger.info(
+            f"探测完成！最终结论：【{conclusion.get('level')}】{conclusion.get('title')}"
+        )
         logger.info(f"详细信息: {conclusion.get('details')}")
         logger.info("==================================================")
         return 0
@@ -859,7 +950,9 @@ class WeDriveProbeRunner:
 
 def main():
     parser = argparse.ArgumentParser(description="企业微信微盘 API 连通性与权限探测器")
-    parser.add_argument("--env-file", type=str, default=None, help="指定的 .env 配置文件路径")
+    parser.add_argument(
+        "--env-file", type=str, default=None, help="指定的 .env 配置文件路径"
+    )
     args = parser.parse_args()
 
     runner = WeDriveProbeRunner(env_path=args.env_file)

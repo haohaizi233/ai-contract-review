@@ -6,10 +6,10 @@ def get_text(p):
         tree = ET.fromstring(z.read('word/document.xml'))
         return ''.join(elem.text for elem in tree.iter() if elem.tag.endswith('}t'))
 
-for fn in ['国内专利服务合同（申请）-恒程创新代理有限公司.docx', 
-           '国内商标服务合同（注册）-恒程创新代理有限公司.docx',
-           '国内专利服务合同（专利稳定性分析报告）-恒程创新代理有限公司 .docx']:
-    full_p = os.path.join('参考', fn)
+ref_dir = os.environ.get("CONTRACT_KB_TEMPLATE_DIR", "参考")
+sample_files = sorted(f for f in os.listdir(ref_dir) if f.endswith(".docx"))[:3] if os.path.isdir(ref_dir) else []
+for fn in sample_files:
+    full_p = os.path.join(ref_dir, fn)
     if os.path.exists(full_p):
         txt = get_text(full_p)
         print(f"=== {fn} (len={len(txt)}) ===")

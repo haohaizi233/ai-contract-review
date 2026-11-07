@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""tender_attach_export.py — 从新系统（192.168.2.125:3308）导出文件清单并批量下载。
+"""tender_attach_export.py — 从新系统（<TENDER_MYSQL_HOST>:<PORT>）导出文件清单并批量下载。
 
 零第三方依赖：SQL 走 mysql CLI，下载走 urllib。凭据从 data/.db_env 读 MYSQL_* 。
 
@@ -37,10 +37,13 @@ def load_env():
 def sql_query(sql, env):
     cmd = [
         "mysql", "-h" + env["MYSQL_HOST"], "-P" + env["MYSQL_PORT"],
-        "-u" + env["MYSQL_USER"], "-p" + env["MYSQL_PWD"],
+        "-u" + env["MYSQL_USER"],
         "-N", "-B", "--default-character-set=utf8mb4", "-e", sql,
     ]
-    out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    proc_env = {**os.environ, "MYSQL_PWD": env.get("MYSQL_PWD", "")}
+    out = subprocess.run(
+        cmd, env=proc_env, capture_output=True, text=True, encoding="utf-8", errors="replace"
+    )
     if out.returncode != 0:
         sys.exit("mysql 查询失败: " + out.stderr.strip()[:300])
     rows = []

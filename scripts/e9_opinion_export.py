@@ -618,7 +618,7 @@ def main(argv=None) -> int:
         if not ck_path.exists():
             print("嵌图需要登录 Cookie：请把浏览器 Cookie 保存到 %s" % ck_path, file=sys.stderr)
             return 2
-        fetcher = ImageFetcher(out_dir, args.oa_base or "http://hc.hcipi.com:8088",
+        fetcher = ImageFetcher(out_dir, args.oa_base or os.environ.get("OA_BASE_URL", ""),
                                ck_path.read_text(encoding="utf-8").strip())
         print("嵌图模式：图片下载到 %s（fileid 去重，限速 %s/s + 失败退避）"
               % (fetcher.img_dir, round(1 / fetcher.min_interval, 1)), flush=True)

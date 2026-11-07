@@ -68,10 +68,13 @@ def load_env():
 def sql_query(sql, env):
     cmd = [
         "mysql", "-h" + env["MYSQL_HOST"], "-P" + env["MYSQL_PORT"],
-        "-u" + env["MYSQL_USER"], "-p" + env["MYSQL_PWD"],
+        "-u" + env["MYSQL_USER"],
         "-N", "-B", "--default-character-set=utf8mb4", "-e", sql,
     ]
-    out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    proc_env = {**os.environ, "MYSQL_PWD": env.get("MYSQL_PWD", "")}
+    out = subprocess.run(
+        cmd, env=proc_env, capture_output=True, text=True, encoding="utf-8", errors="replace"
+    )
     if out.returncode != 0:
         raise RuntimeError("mysql 查询失败: " + out.stderr.strip()[:300])
     return [line.split("\t") for line in out.stdout.splitlines()]
@@ -279,14 +282,15 @@ def dump_table(env, schema, table, dest_gz):
     """mysqldump 单表 -> gzip 流式落盘，.part 原子替换。"""
     cmd = [
         "mysqldump", "-h" + env["MYSQL_HOST"], "-P" + env["MYSQL_PORT"],
-        "-u" + env["MYSQL_USER"], "-p" + env["MYSQL_PWD"],
+        "-u" + env["MYSQL_USER"],
         "--single-transaction", "--skip-lock-tables", "--no-tablespaces",
         "--set-gtid-purged=OFF", "--hex-blob", "--triggers",
         "--default-character-set=utf8mb4", schema, table,
     ]
+    proc_env = {**os.environ, "MYSQL_PWD": env.get("MYSQL_PWD", "")}
     tmp = dest_gz + ".part"
     try:
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p = subprocess.Popen(cmd, env=proc_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         with open(tmp, "wb") as f:
             g = gzip.GzipFile(fileobj=f, mode="wb", compresslevel=1)
             while True:

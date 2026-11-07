@@ -1,6 +1,6 @@
 # 新系统（tender_* 库）取数指南
 
-> 调研日期：2026-11-05 ｜ 数据源：`192.168.2.125:3308`（MySQL 8.0.12，readonly 只读账号）
+> 调研日期：2026-11-05 ｜ 数据源：`<TENDER_DB_HOST>:<PORT>`（MySQL 8.0.12，readonly 只读账号）
 > 本文回答一个问题：**怎么从新系统把合同数据和文件取出来**。所有链路均已实测验证。
 
 ## TL;DR — 三条取数路径
@@ -38,16 +38,16 @@ tender_infra.infra_file_content  DB 存储后端的二进制内容 —— 实测
 
 **文件实体全部在 MinIO 对象存储**：
 
-- endpoint：`http://183.36.37.85:48080`，bucket `prerelease`（另有测试桶 `test` @192.168.2.159:9090）
+- endpoint：`http://<MINIO_HOST>:<PORT>`，bucket `prerelease`（另有测试桶 `test` @<TEST_MINIO_HOST>:<PORT>）
 - `infra_file.url` 是完整直链，**实测免签名可直接 GET**（`HTTP 200, Content-Type: application/pdf, Content-Length` 与 `size` 一致，支持 Range 断点续传）
-- URL 形态：`http://183.36.37.85:48080/prerelease/2026/11/05/<原文件名去符号><32位随机>.<ext>`
+- URL 形态：`http://<MINIO_HOST>:<PORT>/prerelease/2026/11/05/<原文件名去符号><32位随机>.<ext>`
 - ID 为雪花号（如 `2118160871610552321`），但库里混有早期自增小 ID（1660 等），join 时不做格式假设
 - `deleted` 为 `bit(1)`，过滤条件写 `deleted = 0`（b'0'）
 
 样例（最新一条）：
 ```
-name: 深南电路合并.pdf   size: 260795   type: pdf
-url : http://183.36.37.85:48080/prerelease/2026/11/05/深南电路合并pdfa5f9....pdf
+name: 示例合同归档文件.pdf   size: 260795   type: pdf
+url : http://<MINIO_HOST>:<PORT>/prerelease/2026/11/05/示例合同归档文件pdfa5f9....pdf
 ```
 
 ## 三、合同 ↔ 文件的两种关联

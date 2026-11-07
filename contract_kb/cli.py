@@ -46,9 +46,9 @@ def _do_import() -> dict:
     )
 
     # Phase 1.2：CLI 导入自身完成数据库持久化 + 检索索引构建（不依赖测试夹具）
-    from .storage import Storage
+    from .storage import create_storage
 
-    st = Storage(config.DB_PATH)
+    st = create_storage()
     inserted = skipped = 0
     for d in raw:
         _, is_new = st.upsert_document(d.to_dict())

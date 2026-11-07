@@ -71,7 +71,7 @@ FS_WAL = os.path.join(SYNC_DIR, "wal.jsonl")
 OLD_EXPORT = os.path.join(ROOT, "data", "e9-opinion-export")
 OLD_INDEX = os.path.join(OLD_EXPORT, "_index.csv")
 OLD_ATTACH = os.path.join(OLD_EXPORT, "attachments")
-OA_BASE = "http://hc.hcipi.com:8088"
+OA_BASE = os.environ.get("OA_BASE_URL", "")
 
 SC = "tender_contract"
 E9_SMALL_ID = 10 ** 12          # 迁移记录中小于此值的文件 ID 视为旧 E9 imagefileid 候选

@@ -4,8 +4,8 @@
 相同的对照取合集只留一份，不同的两库互补，彻底补成一份。
 
 真实数据源直连：
-  1. e9 SQL Server: 183.36.37.85:19258 / ecologyE9（合同相关工作流 2024+ 单据 22,632 条，19,180 个唯一合同号）
-  2. tender MySQL:  192.168.2.125:3308 / tender_contract, tender_bpm（2024+ 申请 17,967 条，17,292 个唯一合同号）
+  1. e9 SQL Server: <E9_DB_HOST>:<PORT> / ecologyE9（合同相关工作流 2024+ 单据 22,632 条，19,180 个唯一合同号）
+  2. tender MySQL:  <TENDER_DB_HOST>:<PORT> / tender_contract, tender_bpm（2024+ 申请 17,967 条，17,292 个唯一合同号）
   3. 本地实体资产：
      - e9 物理附件库（17,797 份存量文件）+ e9 已编译标准 PNG 相册（17,243 张，100% 编译转码）
      - tender MinIO 物理附件库（40,526 份文件）+ tender BPM 流程截图（7,873 张）
@@ -817,8 +817,8 @@ def write_merged_deliverables(res: Dict[str, Any]):
 > **生成时间**：{now_str}  
 > **数据范围**：**限定 2024 年及以后（2024、2025、2026 年）**  
 > **对比数据源（真实在线生产库）**：
-> 1. **泛微 e9 OA 生产库**：SQL Server `183.36.37.85:19258` / `ecologyE9`（2024+ 合同单据 22,632 条，19,180 个唯一合同编号）
-> 2. **新系统业务数据库**：MySQL `192.168.2.125:3308` / `tender_contract`, `tender_bpm`（2024+ 主数据申请 17,967 条，17,292 个唯一合同编号）
+> 1. **泛微 e9 OA 生产库**：SQL Server `<E9_DB_HOST>:<PORT>` / `ecologyE9`（2024+ 合同单据 22,632 条，19,180 个唯一合同编号）
+> 2. **新系统业务数据库**：MySQL `<TENDER_DB_HOST>:<PORT>` / `tender_contract`, `tender_bpm`（2024+ 主数据申请 17,967 条，17,292 个唯一合同编号）
 > 3. **本地实体资产**：
 >    - e9 物理附件库（17,797 份）+ 强制编译 PNG 相册（17,243 张，100% PNG，0 base64）
 >    - tender MinIO 物理附件库（40,526 份）+ BPM 审批截图（7,873 张）
@@ -882,13 +882,13 @@ flowchart LR
 
 产物完整收敛在 `data/contract_merged/` 目录下：
 
-1. **唯一合成案卷库**：[`data/contract_merged/cases/`](file:///D:/Users/Administrator/Desktop/AI合同/data/contract_merged/cases/)（{tot:,} 份 `.md` 案卷，每案一份，彻底合流）
-2. **去重互补附件库**：[`data/contract_merged/attachments/`](file:///D:/Users/Administrator/Desktop/AI合同/data/contract_merged/attachments/)（按案号去重归档，相同只留一份，不同互补）
-3. **去重互补相册库**：[`data/contract_merged/albums/`](file:///D:/Users/Administrator/Desktop/AI合同/data/contract_merged/albums/)（按案号归集，100% 标准 PNG 格式，即点即看）
-4. **最终合成主数据表**：[`data/contract_merged/contracts_merged.csv`](file:///D:/Users/Administrator/Desktop/AI合同/data/contract_merged/contracts_merged.csv)（涵盖 {tot:,} 案，支持 Excel/BI 导入）
-5. **深度结构化数据账本**：[`data/contract_merged/contracts_merged.jsonl`](file:///D:/Users/Administrator/Desktop/AI合同/data/contract_merged/contracts_merged.jsonl)
-6. **附件去重合并总账**：[`data/contract_merged/attachments_merged.csv`](file:///D:/Users/Administrator/Desktop/AI合同/data/contract_merged/attachments_merged.csv)
-7. **相册去重合并总账**：[`data/contract_merged/albums_merged.csv`](file:///D:/Users/Administrator/Desktop/AI合同/data/contract_merged/albums_merged.csv)
+1. **唯一合成案卷库**：`data/contract_merged/cases/`（{tot:,} 份 `.md` 案卷，每案一份，彻底合流）
+2. **去重互补附件库**：`data/contract_merged/attachments/`（按案号去重归档，相同只留一份，不同互补）
+3. **去重互补相册库**：`data/contract_merged/albums/`（按案号归集，100% 标准 PNG 格式，即点即看）
+4. **最终合成主数据表**：`data/contract_merged/contracts_merged.csv`（涵盖 {tot:,} 案，支持 Excel/BI 导入）
+5. **深度结构化数据账本**：`data/contract_merged/contracts_merged.jsonl`
+6. **附件去重合并总账**：`data/contract_merged/attachments_merged.csv`
+7. **相册去重合并总账**：`data/contract_merged/albums_merged.csv`
 """
 
     report_p = OUT_DIR / "两库直连全量交叉对照与最终合成报告.md"

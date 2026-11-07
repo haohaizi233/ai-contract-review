@@ -1,6 +1,6 @@
-# e9（hc.hcipi.com:8088）附件下载 / 鉴权 JS 逻辑落盘
+# e9（<OA_INTERNAL_HOST>:8088）附件下载 / 鉴权 JS 逻辑落盘
 
-> 抓取方式：CDP `Runtime.evaluate` 于 `http://hc.hcipi.com:8088/wui/index.html` 页面上下文，
+> 抓取方式：CDP `Runtime.evaluate` 于 `http://<OA_INTERNAL_HOST>:8088/wui/index.html` 页面上下文，
 > 直接 fetch 同源静态 JS 资源后正则定位。落盘时间：2026-11-01。
 
 ## 1. 结论（对下载器的指导）

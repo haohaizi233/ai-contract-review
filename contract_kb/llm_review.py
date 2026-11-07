@@ -292,6 +292,14 @@ class LLMConfigError(LLMNotConfigured):
     """LLM 授权配置不完整/非法（fail-closed：直接抛错，不降级为 None）。"""
 
 
+def _is_loopback_endpoint(base_url: str) -> bool:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
 def get_llm_provider(
     spec: str | None = None, env: dict | None = None
 ) -> LLMProvider | None:
@@ -332,6 +340,12 @@ def get_llm_provider(
             raise LLMConfigError(
                 f"已配置授权 LLM=openai_compat 但缺少 {missing}；"
                 "fail-closed 直接报错，不允许静默回退为 None（避免语义审核被无声跳过）"
+            )
+        allow_ext = e.get("CONTRACT_KB_ALLOW_EXTERNAL_LLM", "0").strip() == "1"
+        if not _is_loopback_endpoint(base_url) and not allow_ext:
+            raise LLMConfigError(
+                "外部 LLM 数据出境门禁拒绝：非本机回环端点必须显式设置 "
+                "CONTRACT_KB_ALLOW_EXTERNAL_LLM=1 方可启用"
             )
         return OpenAICompatProvider(base_url=base_url, api_key=api_key, model=model)
     raise LLMConfigError(f"未知 LLM 配置：{spec!r}（可选 none | mock | openai_compat）")

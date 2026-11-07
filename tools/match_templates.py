@@ -5,7 +5,7 @@ from collections import defaultdict
 ref_files = [f for f in os.listdir('参考') if f.endswith('.docx')]
 template_keywords = {}
 for f in ref_files:
-    # e.g. 国内专利服务合同（专利侵权分析）-恒程创新代理有限公司.docx -> 专利侵权分析
+    # e.g. 国内专利服务合同（专利侵权分析）-示例代理有限公司.docx -> 专利侵权分析
     m = re.search(r'（(.*?)）', f)
     kw = m.group(1) if m else f.replace('.docx', '')
     template_keywords[f] = kw

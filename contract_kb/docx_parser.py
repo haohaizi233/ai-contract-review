@@ -21,6 +21,12 @@ from lxml import etree
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W}
+SAFE_XML_PARSER = etree.XMLParser(
+    resolve_entities=False,
+    no_network=True,
+    huge_tree=False,
+    collect_ids=False,
+)
 
 # 供条款编号识别
 CLAUSE_NUM_RE = re.compile(r"^(\d+\.\d+)")
@@ -181,7 +187,7 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
     with zipfile.ZipFile(path) as z:
         names = z.namelist()
         xml = z.read("word/document.xml")
-        root = etree.fromstring(xml)
+        root = etree.fromstring(xml, parser=SAFE_XML_PARSER)
         body = root.find("w:body", NS)
 
         order = 0
@@ -325,13 +331,13 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
         # 页眉页脚
         for n in names:
             if re.match(r"word/header\d*\.xml", n):
-                r2 = etree.fromstring(z.read(n))
+                r2 = etree.fromstring(z.read(n), parser=SAFE_XML_PARSER)
                 txts = [_para_text(p) for p in r2.iter(f"{{{W}}}p")]
                 txts = [t for t in txts if t.strip()]
                 if txts:
                     doc.headers.append({"part": n, "text": "\n".join(txts)})
             if re.match(r"word/footer\d*\.xml", n):
-                r2 = etree.fromstring(z.read(n))
+                r2 = etree.fromstring(z.read(n), parser=SAFE_XML_PARSER)
                 txts = [_para_text(p) for p in r2.iter(f"{{{W}}}p")]
                 txts = [t for t in txts if t.strip()]
                 if txts:

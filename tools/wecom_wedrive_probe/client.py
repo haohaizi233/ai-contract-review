@@ -16,7 +16,6 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from validators import mask_cookie_or_url, mask_secret, mask_token
 
 logger = logging.getLogger("WeDriveClient")
 
@@ -24,7 +23,9 @@ logger = logging.getLogger("WeDriveClient")
 class WeComAPIError(Exception):
     """企业微信 API 业务或网络异常。"""
 
-    def __init__(self, errcode: int, errmsg: str, http_status: int = 200, raw: dict | None = None):
+    def __init__(
+        self, errcode: int, errmsg: str, http_status: int = 200, raw: dict | None = None
+    ):
         super().__init__(f"[{errcode}] {errmsg} (HTTP {http_status})")
         self.errcode = errcode
         self.errmsg = errmsg
@@ -76,10 +77,12 @@ class WeComWeDriveClient:
         adapter = HTTPAdapter(max_retries=retries)
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
-        self.session.headers.update({
-            "User-Agent": "WeComWeDriveProbe/1.0 (Python3.11+)",
-            "Accept": "application/json",
-        })
+        self.session.headers.update(
+            {
+                "User-Agent": "WeComWeDriveProbe/1.0 (Python3.11+)",
+                "Accept": "application/json",
+            }
+        )
 
     def _get_api_url(self, path: str) -> str:
         return f"{self.BASE_URL}{path}"
@@ -119,7 +122,9 @@ class WeComWeDriveClient:
             expires_in = data.get("expires_in", 7200)
             # 提前 5 分钟刷新
             self._token_expires_at = now + max(expires_in - 300, 60)
-            logger.info(f"成功获取 access_token (有效秒数: {expires_in}, 耗时: {duration_ms}ms)")
+            logger.info(
+                f"成功获取 access_token (有效秒数: {expires_in}, 耗时: {duration_ms}ms)"
+            )
         else:
             logger.warning(f"获取 access_token 失败: [{errcode}] {errmsg}")
 
@@ -148,7 +153,13 @@ class WeComWeDriveClient:
         payload = {"spaceid": spaceid}
 
         t0 = time.perf_counter()
-        resp = self.session.post(url, params={"access_token": token}, json=payload, timeout=self.timeout, verify=True)
+        resp = self.session.post(
+            url,
+            params={"access_token": token},
+            json=payload,
+            timeout=self.timeout,
+            verify=True,
+        )
         duration_ms = round((time.perf_counter() - t0) * 1000, 2)
         return resp.json(), duration_ms
 
@@ -177,7 +188,13 @@ class WeComWeDriveClient:
         }
 
         t0 = time.perf_counter()
-        resp = self.session.post(url, params={"access_token": token}, json=payload, timeout=self.timeout, verify=True)
+        resp = self.session.post(
+            url,
+            params={"access_token": token},
+            json=payload,
+            timeout=self.timeout,
+            verify=True,
+        )
         duration_ms = round((time.perf_counter() - t0) * 1000, 2)
         return resp.json(), duration_ms
 
@@ -192,7 +209,13 @@ class WeComWeDriveClient:
         payload = {"fileid": fileid}
 
         t0 = time.perf_counter()
-        resp = self.session.post(url, params={"access_token": token}, json=payload, timeout=self.timeout, verify=True)
+        resp = self.session.post(
+            url,
+            params={"access_token": token},
+            json=payload,
+            timeout=self.timeout,
+            verify=True,
+        )
         duration_ms = round((time.perf_counter() - t0) * 1000, 2)
         return resp.json(), duration_ms
 
@@ -208,7 +231,13 @@ class WeComWeDriveClient:
         payload = {"fileid": fileid}
 
         t0 = time.perf_counter()
-        resp = self.session.post(url, params={"access_token": token}, json=payload, timeout=self.timeout, verify=True)
+        resp = self.session.post(
+            url,
+            params={"access_token": token},
+            json=payload,
+            timeout=self.timeout,
+            verify=True,
+        )
         duration_ms = round((time.perf_counter() - t0) * 1000, 2)
         return resp.json(), duration_ms
 
@@ -229,7 +258,13 @@ class WeComWeDriveClient:
 
         t0 = time.perf_counter()
         # 强制开启 TLS 校验，使用 stream 模式防内存暴涨
-        resp = self.session.get(download_url, headers=headers, stream=True, timeout=self.timeout, verify=True)
+        resp = self.session.get(
+            download_url,
+            headers=headers,
+            stream=True,
+            timeout=self.timeout,
+            verify=True,
+        )
         if resp.status_code != 200:
             duration_ms = round((time.perf_counter() - t0) * 1000, 2)
             return {
@@ -248,7 +283,9 @@ class WeComWeDriveClient:
                         continue
                     downloaded_bytes += len(chunk)
                     if downloaded_bytes > max_bytes:
-                        raise ValueError(f"下载文件大小超过最大允许限制 ({max_bytes} 字节)")
+                        raise ValueError(
+                            f"下载文件大小超过最大允许限制 ({max_bytes} 字节)"
+                        )
                     f.write(chunk)
 
             # 下载完成原子重命名
