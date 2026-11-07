@@ -248,7 +248,7 @@ class PersistentTaskRunner:
             max_attempts = getattr(job, "max_attempts", 3)
             payload = job.payload
             temp_path = job.temp_file_path
-            lease_token = job.lease_token
+            lease_token: str | None = job.lease_token
             created_by = job.created_by
         else:
             job_id = job["job_id"]
@@ -258,7 +258,9 @@ class PersistentTaskRunner:
             max_attempts = int(job.get("max_attempts", 3))
             payload = job.get("payload") or {}
             temp_path = job.get("temp_file_path")
-            lease_token = job.get("lease_token")
+            lease_token = (
+                str(job.get("lease_token")) if job.get("lease_token") else None
+            )
             created_by = str(job.get("created_by") or "system")
 
         finish_fn = getattr(self.storage, "finish_job", None)
