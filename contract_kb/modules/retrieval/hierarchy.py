@@ -138,6 +138,15 @@ class HierarchicalKnowledgeTree:
                 tree.nodes[tree.root_id].child_ids.append(art_id)
 
             parent_art = article_nodes[art_key]
+            if not cnum:
+                parent_art.text = text
+                for c_item in conds:
+                    if c_item not in parent_art.conditions:
+                        parent_art.conditions.append(c_item)
+                for e_item in excs:
+                    if e_item not in parent_art.exceptions:
+                        parent_art.exceptions.append(e_item)
+                parent_art.relations.extend(relations)
 
             # 创建 Subclause 节点
             sub_node = ClauseNode(

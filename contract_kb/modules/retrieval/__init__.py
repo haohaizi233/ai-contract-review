@@ -31,7 +31,7 @@ from .reranker import (
     RerankerPort,
     reciprocal_rank_fusion,
 )
-from .service import GovernedRetrievalBundle, GovernedRetrievalService
+from .service import EvidenceBundle, GovernedRetrievalBundle, GovernedRetrievalService
 
 __all__ = [
     "ChunkGranularity",
@@ -39,6 +39,7 @@ __all__ = [
     "CitationVerifier",
     "ClauseNode",
     "ContractAwareQueryPlanner",
+    "EvidenceBundle",
     "GovernedRetrievalBundle",
     "GovernedRetrievalService",
     "HierarchicalKnowledgeTree",
