@@ -12,9 +12,9 @@
 
 | 任务编号 | 任务名称 | 关联缺陷 | 状态 | 关联提交 | 目标命令与结果 | 阻塞/外部依赖 | 下一步动作 |
 |---|---|---|---|---|---|---|---|
-| **T00** | 冻结基线与建立隔离执行环境 | F13 | **COMPLETED** | 待提交 | `git status`, `manifest.json` | 无 | 进入 T01 |
-| **T01** | 修复同步/异步幂等的 owner 与请求内容绑定 | F01 | **NOT_STARTED** | - | `pytest tests/security/test_idempotency_authorization.py` | 无 | 先写失败断言测试 |
-| **T02** | 人工覆写的事务、并发和审计原子化 | F02 | **NOT_STARTED** | - | `pytest tests/integration/test_human_override_atomicity.py` | 无 | 先写失败断言测试 |
+| **T00** | 冻结基线与建立隔离执行环境 | F13 | **COMPLETED** | `6a1ad50` | `git status`, `manifest.json` | 无 | 进入 T01 |
+| **T01** | 修复同步/异步幂等的 owner 与请求内容绑定 | F01 | **COMPLETED** | 待提交 (`fix: bind idempotency to owner and request fingerprint`) | `pytest tests/security/test_idempotency_authorization.py tests/integration/test_idempotency_concurrency.py` (4 passed) | 无 | 进入 T02 |
+| **T02** | 人工覆写的事务、并发和审计原子化 | F02 | **IN_PROGRESS** | - | `pytest tests/integration/test_human_override_atomicity.py` | 无 | 先写失败断言测试 |
 | **T03** | 统一递归脱敏与审计入口保护 | F07 | **NOT_STARTED** | - | `pytest tests/security/test_redaction_boundaries.py` | T02 | - |
 | **T04** | 认证签名 V2 与真实防重放 | F08 | **NOT_STARTED** | - | `pytest tests/security/test_auth_replay_v2.py` | T03、网关协同 | - |
 | **T05** | 授权条件下推数据库后再分页 | F10 | **NOT_STARTED** | - | `pytest tests/integration/test_authorized_pagination.py` | T01 | - |

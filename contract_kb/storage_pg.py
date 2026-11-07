@@ -27,6 +27,7 @@ from typing import Any
 
 import numpy as np
 
+from .application.security.idempotency import IdempotencyOutcome, RequestIdentity
 from .embeddings import EmbeddingProvider, get_embedding_provider
 from .storage_errors import EmbeddingConfigMismatch
 
@@ -1283,7 +1284,10 @@ class PgVectorStorage:
             return d
 
     def find_task_by_idempotency_key(
-        self, idempotency_key: str, tenant_id: str | None = None
+        self,
+        idempotency_key: str,
+        tenant_id: str | None = None,
+        created_by: str | None = None,
     ) -> dict | None:
         if not idempotency_key:
             return None
@@ -1293,6 +1297,9 @@ class PgVectorStorage:
             if tenant_id is not None:
                 sql += " AND tenant_id=%s"
                 params.append(tenant_id)
+            if created_by is not None:
+                sql += " AND created_by=%s"
+                params.append(created_by)
             sql += " ORDER BY created_at DESC LIMIT 1"
             with self.conn.cursor() as cur:
                 cur.execute(sql, params)
@@ -1790,6 +1797,7 @@ class PgVectorStorage:
     def enqueue_async_job(self, job: dict) -> tuple[str, bool]:
         tenant = job.get("tenant_id") or "default"
         idem = job.get("idempotency_key")
+        created_by = job.get("created_by", "system")
         next_ts = datetime.fromtimestamp(
             float(job.get("next_run_at", time.time())), tz=timezone.utc
         )
@@ -1798,8 +1806,8 @@ class PgVectorStorage:
                 with self.conn.cursor() as cur:
                     if idem:
                         cur.execute(
-                            "SELECT job_id FROM async_jobs WHERE tenant_id=%s AND idempotency_key=%s",
-                            (tenant, idem),
+                            "SELECT job_id FROM async_jobs WHERE tenant_id=%s AND created_by=%s AND idempotency_key=%s",
+                            (tenant, created_by, idem),
                         )
                         ex = cur.fetchone()
                         if ex:
@@ -2178,3 +2186,128 @@ class PgVectorStorage:
             if isinstance(d.get("params"), str):
                 d["params"] = json.loads(d["params"])
             return d
+
+    # ---------- 请求级幂等预约控制（Request Idempotency - PostgreSQL） ----------
+    def reserve_idempotency_key(
+        self,
+        identity: RequestIdentity,
+        resource_id: str,
+    ) -> IdempotencyOutcome:
+        """为特定租户、操作人和操作原子化预约幂等键（PostgreSQL）。"""
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT request_fingerprint, status, resource_id "
+                        "FROM request_idempotency "
+                        "WHERE tenant_id=%s AND actor_id=%s AND operation=%s AND idempotency_key=%s "
+                        "FOR UPDATE",
+                        (identity.tenant_id, identity.actor_id, identity.operation, identity.key),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        fingerprint, status, res_id = row[0], row[1], row[2]
+                        if fingerprint != identity.fingerprint:
+                            self._commit()
+                            return IdempotencyOutcome(
+                                status="CONFLICT",
+                                resource_id=res_id,
+                                message=f"Idempotency key conflict: request fingerprint mismatch for key {identity.key}",
+                            )
+                        if status == "COMPLETED":
+                            self._commit()
+                            return IdempotencyOutcome(
+                                status="REPLAY",
+                                resource_id=res_id,
+                            )
+                        self._commit()
+                        return IdempotencyOutcome(
+                            status="IN_PROGRESS",
+                            resource_id=res_id,
+                        )
+
+                    cur.execute(
+                        "INSERT INTO request_idempotency "
+                        "(tenant_id, actor_id, operation, idempotency_key, request_fingerprint, status, resource_id, created_at, updated_at) "
+                        "VALUES (%s, %s, %s, %s, %s, 'IN_PROGRESS', %s, now(), now()) "
+                        "ON CONFLICT (tenant_id, actor_id, operation, idempotency_key) DO NOTHING",
+                        (
+                            identity.tenant_id,
+                            identity.actor_id,
+                            identity.operation,
+                            identity.key,
+                            identity.fingerprint,
+                            resource_id,
+                        ),
+                    )
+                    if cur.rowcount > 0:
+                        self._commit()
+                        return IdempotencyOutcome(
+                            status="CREATED",
+                            resource_id=resource_id,
+                        )
+                    else:
+                        cur.execute(
+                            "SELECT request_fingerprint, status, resource_id "
+                            "FROM request_idempotency "
+                            "WHERE tenant_id=%s AND actor_id=%s AND operation=%s AND idempotency_key=%s",
+                            (identity.tenant_id, identity.actor_id, identity.operation, identity.key),
+                        )
+                        existing = cur.fetchone()
+                        self._commit()
+                        if existing:
+                            if existing[0] != identity.fingerprint:
+                                return IdempotencyOutcome(
+                                    status="CONFLICT",
+                                    resource_id=existing[2],
+                                    message=f"Idempotency key conflict: request fingerprint mismatch for key {identity.key}",
+                                )
+                            if existing[1] == "COMPLETED":
+                                return IdempotencyOutcome(
+                                    status="REPLAY",
+                                    resource_id=existing[2],
+                                )
+                            return IdempotencyOutcome(
+                                status="IN_PROGRESS",
+                                resource_id=existing[2],
+                            )
+                        return IdempotencyOutcome(status="CREATED", resource_id=resource_id)
+            except Exception:
+                self._rollback()
+                raise
+
+    def finalize_idempotency_key(
+        self,
+        identity: RequestIdentity | None = None,
+        resource_id: str | None = None,
+        status: str = "COMPLETED",
+        *,
+        tenant_id: str | None = None,
+        actor_id: str | None = None,
+        operation: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> None:
+        """完成或更新幂等记录的状态（PostgreSQL）。"""
+        t_id = identity.tenant_id if identity else (tenant_id or "default")
+        a_id = identity.actor_id if identity else (actor_id or "")
+        op = identity.operation if identity else (operation or "")
+        key = identity.key if identity else idempotency_key
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    if key and a_id and op:
+                        cur.execute(
+                            "UPDATE request_idempotency SET status=%s, updated_at=now() "
+                            "WHERE tenant_id=%s AND actor_id=%s AND operation=%s AND idempotency_key=%s",
+                            (status, t_id, a_id, op, key),
+                        )
+                    elif resource_id:
+                        cur.execute(
+                            "UPDATE request_idempotency SET status=%s, updated_at=now() "
+                            "WHERE tenant_id=%s AND resource_id=%s",
+                            (status, t_id, resource_id),
+                        )
+                self._commit()
+            except Exception:
+                self._rollback()
+                raise

@@ -120,3 +120,19 @@ class KnowledgeStoragePort(Protocol):
     def log_audit(
         self, actor: str, action: str, target: str, detail: str = ""
     ) -> None: ...
+
+    def reserve_idempotency_key(
+        self, identity: Any, resource_id: str
+    ) -> Any: ...
+
+    def finalize_idempotency_key(
+        self,
+        identity: Any = None,
+        resource_id: str | None = None,
+        status: str = "COMPLETED",
+        *,
+        tenant_id: str | None = None,
+        actor_id: str | None = None,
+        operation: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> None: ...

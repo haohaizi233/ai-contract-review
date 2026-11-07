@@ -19,6 +19,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from ...application.security.idempotency import (
+    IdempotencyConflictError,
+    IdempotencyOutcome,
+    RequestIdentity,
+    compute_request_fingerprint,
+)
 from ..observability import GLOBAL_METRICS, get_redacted_logger, redact_sensitive_text
 
 logger = get_redacted_logger("contract_kb.task_queue")
@@ -105,6 +111,66 @@ class PersistentTaskRunner:
         if job_type not in self._handlers:
             raise ValueError(f"未注册的异步任务类型：{job_type!r}")
         job_id = f"job_{uuid.uuid4().hex[:12]}"
+
+        if idempotency_key:
+            raw_bytes: bytes | None = None
+            if temp_file_path and Path(temp_file_path).exists():
+                try:
+                    raw_bytes = Path(temp_file_path).read_bytes()
+                except OSError:
+                    pass
+            elif "docx_path" in payload and Path(payload["docx_path"]).exists():
+                try:
+                    raw_bytes = Path(payload["docx_path"]).read_bytes()
+                except OSError:
+                    pass
+
+            extra = {
+                k: v
+                for k, v in payload.items()
+                if k
+                not in (
+                    "docx_path",
+                    "temp_file_path",
+                    "idempotency_key",
+                    "mode",
+                    "custom_requirements",
+                )
+            }
+            fp = compute_request_fingerprint(
+                content_bytes=raw_bytes,
+                mode=str(payload.get("mode", "")),
+                custom_requirements=payload.get("custom_requirements"),
+                operation=job_type,
+                extra_params=extra if extra else None,
+            )
+            ident = RequestIdentity(
+                tenant_id=tenant_id,
+                actor_id=created_by,
+                operation=job_type,
+                key=idempotency_key,
+                fingerprint=fp,
+            )
+
+            reserve_fn = getattr(self.storage, "reserve_idempotency_key", None)
+            if reserve_fn is not None:
+                outcome: IdempotencyOutcome = reserve_fn(ident, job_id)
+                if outcome.status == "CONFLICT":
+                    if temp_file_path:
+                        self._cleanup_temp_file(str(temp_file_path))
+                    raise IdempotencyConflictError(
+                        outcome.message
+                        or f"Idempotency key conflict: request fingerprint mismatch for key {idempotency_key}"
+                    )
+                elif outcome.status in ("IN_PROGRESS", "REPLAY"):
+                    if temp_file_path:
+                        self._cleanup_temp_file(str(temp_file_path))
+                    job = self.storage.get_async_job(outcome.resource_id, tenant_id=tenant_id)
+                    if job:
+                        return job, False
+                elif outcome.status == "CREATED":
+                    job_id = outcome.resource_id or job_id
+
         persisted_id, created = self.storage.enqueue_async_job(
             {
                 "job_id": job_id,
@@ -204,6 +270,9 @@ class PersistentTaskRunner:
                     result=result,
                     error_message=None,
                 )
+                finalize_fn = getattr(self.storage, "finalize_idempotency_key", None)
+                if finalize_fn is not None:
+                    finalize_fn(resource_id=job_id, status="COMPLETED", tenant_id=job.get("tenant_id"))
                 GLOBAL_METRICS.record_async_job_event("async_jobs_succeeded")
                 self._cleanup_temp_file(temp_path)
         except Exception as exc:

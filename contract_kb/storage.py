@@ -25,6 +25,7 @@ from typing import Any
 import numpy as np
 
 from . import config
+from .application.security.idempotency import IdempotencyOutcome, RequestIdentity
 from .embeddings import EmbeddingProvider, get_embedding_provider
 from .storage_errors import EmbeddingConfigMismatch, StorageConfigError
 
@@ -183,6 +184,20 @@ CREATE TABLE IF NOT EXISTS async_jobs (
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS request_idempotency (
+    tenant_id TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_fingerprint TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'IN_PROGRESS',
+    resource_id TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (tenant_id, actor_id, operation, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_req_idem_lookup
+    ON request_idempotency (tenant_id, resource_id);
 """
 
 _CLEAN_RE = re.compile(r"[\s\u3000，。；：、“”‘’（）()《》\-—_/%‰]")
@@ -378,6 +393,25 @@ class Storage:
         )
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_async_jobs_tenant_idem ON async_jobs(tenant_id, idempotency_key)"
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS request_idempotency (
+                tenant_id TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                request_fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'IN_PROGRESS',
+                resource_id TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (tenant_id, actor_id, operation, idempotency_key)
+            )
+            """
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_req_idem_lookup ON request_idempotency (tenant_id, resource_id)"
         )
         self.conn.commit()
 
@@ -1299,7 +1333,10 @@ class Storage:
             return d
 
     def find_task_by_idempotency_key(
-        self, idempotency_key: str, tenant_id: str | None = None
+        self,
+        idempotency_key: str,
+        tenant_id: str | None = None,
+        created_by: str | None = None,
     ) -> dict | None:
         if not idempotency_key:
             return None
@@ -1309,6 +1346,9 @@ class Storage:
             if tenant_id is not None:
                 sql += " AND tenant_id=?"
                 params.append(tenant_id)
+            if created_by is not None:
+                sql += " AND created_by=?"
+                params.append(created_by)
             sql += " ORDER BY created_at DESC LIMIT 1"
             r = self.conn.execute(sql, params).fetchone()
             if not r:
@@ -1656,11 +1696,12 @@ class Storage:
         now = time.time()
         tenant = job.get("tenant_id") or "default"
         idem = job.get("idempotency_key")
+        created_by = job.get("created_by", "system")
         with self._lock:
             if idem:
                 ex = self.conn.execute(
-                    "SELECT job_id FROM async_jobs WHERE tenant_id=? AND idempotency_key=?",
-                    (tenant, idem),
+                    "SELECT job_id FROM async_jobs WHERE tenant_id=? AND created_by=? AND idempotency_key=?",
+                    (tenant, created_by, idem),
                 ).fetchone()
                 if ex:
                     return ex["job_id"], False
@@ -1959,3 +2000,113 @@ class Storage:
             d = dict(r)
             d["params"] = json.loads(d["params"])
             return d
+
+    # ---------- 请求级幂等预约控制（Request Idempotency） ----------
+    def reserve_idempotency_key(
+        self,
+        identity: RequestIdentity,
+        resource_id: str,
+    ) -> IdempotencyOutcome:
+        """为特定租户、操作人和操作原子化预约幂等键（SQLite）。"""
+        now = time.time()
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT request_fingerprint, status, resource_id FROM request_idempotency "
+                "WHERE tenant_id=? AND actor_id=? AND operation=? AND idempotency_key=?",
+                (identity.tenant_id, identity.actor_id, identity.operation, identity.key),
+            )
+            row = cur.fetchone()
+            if row:
+                if row["request_fingerprint"] != identity.fingerprint:
+                    return IdempotencyOutcome(
+                        status="CONFLICT",
+                        resource_id=row["resource_id"],
+                        message=f"Idempotency key conflict: request fingerprint mismatch for key {identity.key}",
+                    )
+                if row["status"] == "COMPLETED":
+                    return IdempotencyOutcome(
+                        status="REPLAY",
+                        resource_id=row["resource_id"],
+                    )
+                return IdempotencyOutcome(
+                    status="IN_PROGRESS",
+                    resource_id=row["resource_id"],
+                )
+
+            try:
+                self.conn.execute(
+                    "INSERT INTO request_idempotency "
+                    "(tenant_id, actor_id, operation, idempotency_key, request_fingerprint, status, resource_id, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, 'IN_PROGRESS', ?, ?, ?)",
+                    (
+                        identity.tenant_id,
+                        identity.actor_id,
+                        identity.operation,
+                        identity.key,
+                        identity.fingerprint,
+                        resource_id,
+                        now,
+                        now,
+                    ),
+                )
+                self._commit()
+                return IdempotencyOutcome(
+                    status="CREATED",
+                    resource_id=resource_id,
+                )
+            except sqlite3.IntegrityError:
+                cur = self.conn.execute(
+                    "SELECT request_fingerprint, status, resource_id FROM request_idempotency "
+                    "WHERE tenant_id=? AND actor_id=? AND operation=? AND idempotency_key=?",
+                    (identity.tenant_id, identity.actor_id, identity.operation, identity.key),
+                )
+                existing = cur.fetchone()
+                if existing:
+                    if existing["request_fingerprint"] != identity.fingerprint:
+                        return IdempotencyOutcome(
+                            status="CONFLICT",
+                            resource_id=existing["resource_id"],
+                            message=f"Idempotency key conflict: request fingerprint mismatch for key {identity.key}",
+                        )
+                    if existing["status"] == "COMPLETED":
+                        return IdempotencyOutcome(
+                            status="REPLAY",
+                            resource_id=existing["resource_id"],
+                        )
+                    return IdempotencyOutcome(
+                        status="IN_PROGRESS",
+                        resource_id=existing["resource_id"],
+                    )
+                raise
+
+    def finalize_idempotency_key(
+        self,
+        identity: RequestIdentity | None = None,
+        resource_id: str | None = None,
+        status: str = "COMPLETED",
+        *,
+        tenant_id: str | None = None,
+        actor_id: str | None = None,
+        operation: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> None:
+        """完成或更新幂等记录的状态（SQLite）。"""
+        now = time.time()
+        t_id = identity.tenant_id if identity else (tenant_id or "default")
+        a_id = identity.actor_id if identity else (actor_id or "")
+        op = identity.operation if identity else (operation or "")
+        key = identity.key if identity else idempotency_key
+        with self._lock:
+            if key and a_id and op:
+                self.conn.execute(
+                    "UPDATE request_idempotency SET status=?, updated_at=? "
+                    "WHERE tenant_id=? AND actor_id=? AND operation=? AND idempotency_key=?",
+                    (status, now, t_id, a_id, op, key),
+                )
+            elif resource_id:
+                self.conn.execute(
+                    "UPDATE request_idempotency SET status=?, updated_at=? "
+                    "WHERE tenant_id=? AND resource_id=?",
+                    (status, now, t_id, resource_id),
+                )
+            self._commit()

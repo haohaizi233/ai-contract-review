@@ -32,9 +32,10 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from . import config
+from .application.security.idempotency import IdempotencyConflictError
 from .auth import (
     ROLE_ADMIN,
     ROLE_REVIEWER,
@@ -123,6 +124,14 @@ app = FastAPI(
     },
 )
 install_observability_and_error_handlers(app)
+
+
+@app.exception_handler(IdempotencyConflictError)
+def idempotency_conflict_handler(request: Request, exc: IdempotencyConflictError):
+    return JSONResponse(
+        status_code=409,
+        content={"error": str(exc), "detail": str(exc)},
+    )
 
 
 def _read_upload_bounded(upload: UploadFile, max_bytes: int) -> bytes:

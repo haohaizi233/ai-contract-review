@@ -156,12 +156,12 @@ flowchart TD
 
 **决策：**幂等作用域=`tenant + actor + operation + key`；重复返回前仍做资源授权。跨owner同键不会读取他人资源；管理员查看他人任务走显式授权查询，不借用幂等短路。相同作用域但指纹不同409；同指纹执行中返回202与同一资源ID；完成后返回既有资源。不同用户可以各自用同一个键创建自己的任务。
 
-- [ ] 写失败测试：Alice/Bob同租户同键互不可见；同用户换正文、mode或审核要求返回409；同步与异步接口均覆盖。
-- [ ] 写并发测试：两个独立连接同时reserve，只有一个获得执行资格；请求崩溃后的reservation具备可恢复/终止状态；不同租户互不干扰。
-- [ ] 执行 `python -m pytest tests/security/test_idempotency_authorization.py tests/integration/test_idempotency_concurrency.py -q`，确认在旧实现失败。
-- [ ] 使用专用幂等记录表和数据库唯一约束；新入口不再直接通过旧 `(tenant,key)` 查完整任务。将reserve、创建job/task及资源绑定放在明确事务内；不得持有DB事务跨LLM调用。
-- [ ] 针对旧键记录生成只读统计和迁移报告：可识别owner的按原owner保留；owner缺失或冲突进入人工处理，不自动授予新请求。旧代码与新幂等模型不允许无治理混写。
-- [ ] 运行上述测试及 `tests/test_tenant_isolation.py`、API集成/E2E回归，通过后提交 `fix: bind idempotency to owner and request fingerprint`。
+- [x] 写失败测试：Alice/Bob同租户同键互不可见；同用户换正文、mode或审核要求返回409；同步与异步接口均覆盖。
+- [x] 写并发测试：两个独立连接同时reserve，只有一个获得执行资格；请求崩溃后的reservation具备可恢复/终止状态；不同租户互不干扰。
+- [x] 执行 `python -m pytest tests/security/test_idempotency_authorization.py tests/integration/test_idempotency_concurrency.py -q`，确认在旧实现失败。
+- [x] 使用专用幂等记录表和数据库唯一约束；新入口不再直接通过旧 `(tenant,key)` 查完整任务。将reserve、创建job/task及资源绑定放在明确事务内；不得持有DB事务跨LLM调用。
+- [x] 针对旧键记录生成只读统计和迁移报告：可识别owner的按原owner保留；owner缺失或冲突进入人工处理，不自动授予新请求。旧代码与新幂等模型不允许无治理混写。
+- [x] 运行上述测试及 `tests/test_tenant_isolation.py`、API集成/E2E回归，通过后提交 `fix: bind idempotency to owner and request fingerprint`。
 
 **验收断言：**任何重复提交路径都不能返回未授权资源；并发执行一次；内容冲突409；202与重放返回的资源ID稳定；数据库并发约束在SQLite与PG都成立。
 

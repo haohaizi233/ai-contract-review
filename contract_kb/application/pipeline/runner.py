@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,12 @@ from ...domain.models.review import (
     ReviewResult,
     StageExecutionRecord,
     StageStatus,
+)
+from ..security.idempotency import (
+    IdempotencyConflictError,
+    IdempotencyOutcome,
+    RequestIdentity,
+    compute_request_fingerprint,
 )
 from ...modules.rules import RuleRegistry
 from .stages import (
@@ -74,11 +81,17 @@ class ReviewPipeline:
         idempotency_key: str | None,
         effective_tenant: str,
         task_id: str | None,
+        created_by: str = "system",
     ) -> tuple[ReviewResult | None, str, dict[str, int]]:
         if idempotency_key:
             find_idem = getattr(self.storage, "find_task_by_idempotency_key", None)
             if find_idem is not None:
-                existing = find_idem(idempotency_key, tenant_id=effective_tenant)
+                try:
+                    existing = find_idem(
+                        idempotency_key, tenant_id=effective_tenant, created_by=created_by
+                    )
+                except TypeError:
+                    existing = find_idem(idempotency_key, tenant_id=effective_tenant)
                 if existing and existing.get("status") == "COMPLETED":
                     return self._rebuild_result_from_persisted(existing), "", {}
                 if existing and not task_id:
@@ -185,9 +198,50 @@ class ReviewPipeline:
         cancel_requested: bool = False,
     ) -> ReviewResult:
         effective_tenant = tenant_id if tenant_id is not None else config.TENANT_ID
+        path_obj = Path(docx_path)
+        ident: RequestIdentity | None = None
+        if idempotency_key:
+            raw_bytes: bytes | None = None
+            if path_obj.exists():
+                try:
+                    raw_bytes = path_obj.read_bytes()
+                except OSError:
+                    pass
+            fp = compute_request_fingerprint(
+                content_bytes=raw_bytes,
+                mode=mode,
+                custom_requirements=custom_requirements,
+                operation="CONTRACT_REVIEW_TASK",
+            )
+            ident = RequestIdentity(
+                tenant_id=effective_tenant,
+                actor_id=created_by,
+                operation="CONTRACT_REVIEW_TASK",
+                key=idempotency_key,
+                fingerprint=fp,
+            )
+            reserve_fn = getattr(self.storage, "reserve_idempotency_key", None)
+            if reserve_fn is not None:
+                candidate_id = task_id or f"task_{uuid.uuid4().hex[:12]}"
+                outcome: IdempotencyOutcome = reserve_fn(ident, candidate_id)
+                if outcome.status == "CONFLICT":
+                    raise IdempotencyConflictError(
+                        outcome.message
+                        or f"Idempotency key conflict: request fingerprint mismatch for key {idempotency_key}"
+                    )
+                elif outcome.status in ("REPLAY", "IN_PROGRESS"):
+                    get_task_fn = getattr(self.storage, "get_task", None)
+                    existing = get_task_fn(outcome.resource_id) if get_task_fn else None
+                    if existing and existing.get("status") == "COMPLETED":
+                        return self._rebuild_result_from_persisted(existing)
+                    if not task_id:
+                        task_id = outcome.resource_id
+                elif outcome.status == "CREATED":
+                    task_id = outcome.resource_id
+
         cached, resolved_task_id, prior_attempts = (
             self._resolve_idempotency_and_attempts(
-                idempotency_key, effective_tenant, task_id
+                idempotency_key, effective_tenant, task_id, created_by=created_by
             )
         )
         if cached is not None:
@@ -215,6 +269,10 @@ class ReviewPipeline:
 
         repro_hash = str(ctx.extracted_fields.pop("_reproducibility_hash", ""))
         breakdown = dict(ctx.extracted_fields.pop("_finding_breakdown", {}))
+        if ident is not None:
+            finalize_fn = getattr(self.storage, "finalize_idempotency_key", None)
+            if finalize_fn is not None:
+                finalize_fn(ident, ctx.task_id, "COMPLETED")
         return ReviewResult(
             task_id=ctx.task_id,
             status="COMPLETED",
