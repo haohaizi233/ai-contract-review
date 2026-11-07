@@ -131,6 +131,7 @@ class ControlledToolExecutor:
         self,
         budget: WorkflowBudget,
         granted_permissions: set[ToolPermission] | None = None,
+        executor_pool: concurrent.futures.ThreadPoolExecutor | None = None,
     ):
         self.budget = budget
         self.granted_permissions: set[ToolPermission] = (
@@ -141,6 +142,14 @@ class ControlledToolExecutor:
         self.ledger = BudgetLedger()
         self.audit_records: list[ToolExecutionAuditRecord] = []
         self._specs: dict[str, ToolSpec] = {}
+        self._pool = executor_pool or concurrent.futures.ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="tool-exec"
+        )
+        self._owns_pool = executor_pool is None
+
+    def close(self) -> None:
+        if self._owns_pool and self._pool is not None:
+            self._pool.shutdown(wait=False)
 
     def register(self, spec: ToolSpec) -> None:
         self._specs[spec.name] = spec
@@ -276,9 +285,8 @@ class ControlledToolExecutor:
         self.ledger.per_tool_calls[tool_name] = used_for_tool + 1
 
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                fut = pool.submit(spec.handler, validated_in)
-                raw_out = fut.result(timeout=spec.timeout_seconds)
+            fut = self._pool.submit(spec.handler, validated_in)
+            raw_out = fut.result(timeout=spec.timeout_seconds)
         except concurrent.futures.TimeoutError as exc:
             msg = f"工具 {tool_name} 执行超时（>{spec.timeout_seconds}s）"
             self._append_audit(

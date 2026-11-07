@@ -216,6 +216,27 @@ class PipelineContext:
     review_gate: str = "PASS"
     stage_records: list[StageExecutionRecord] = field(default_factory=list)
     resume_completed_stages: set[str] = field(default_factory=set)
+    deadline: Any = None
+    cancel_token: Any = None
+
+    def get_deadline(self) -> Any:
+        if self.deadline is None:
+            from ...application.pipeline.deadline import ExecutionDeadline
+
+            self.deadline = ExecutionDeadline(
+                timeout_seconds=self.timeout_seconds,
+                started_monotonic=(
+                    self.started_monotonic if self.started_monotonic > 0 else None
+                ),
+            )
+        return self.deadline
+
+    def get_cancel_token(self) -> Any:
+        if self.cancel_token is None:
+            from ...application.pipeline.deadline import CancelToken
+
+            self.cancel_token = CancelToken(check_fn=lambda: self.cancel_requested)
+        return self.cancel_token
 
 
 @dataclass

@@ -24,6 +24,7 @@ from ..security.idempotency import (
     compute_request_fingerprint,
 )
 from ...modules.rules import RuleRegistry
+from .deadline import CancelToken, ExecutionDeadline
 from .stages import (
     ClassifyStage,
     DeterministicValidationStage,
@@ -107,7 +108,10 @@ class ReviewPipeline:
     def _execute_single_stage(
         self, stage: ReviewStage, ctx: PipelineContext, attempt: int
     ) -> ReviewResult | None:
-        if self._check_cancelled(ctx):
+        deadline = ctx.get_deadline()
+        cancel_token = ctx.get_cancel_token()
+
+        if cancel_token.is_cancelled() or self._check_cancelled(ctx):
             self._record_terminal_task(ctx, "CANCELLED", "cancelled_by_caller")
             return ReviewResult(
                 task_id=ctx.task_id,
@@ -116,8 +120,8 @@ class ReviewPipeline:
                 stages=[r.to_dict() for r in ctx.stage_records],
             )
 
-        elapsed = time.monotonic() - ctx.started_monotonic
-        if elapsed > ctx.timeout_seconds:
+        if deadline.is_expired():
+            elapsed = time.monotonic() - ctx.started_monotonic
             rec_timeout = StageExecutionRecord(
                 task_id=ctx.task_id or "pending",
                 stage_name=stage.stage_name,
@@ -161,6 +165,25 @@ class ReviewPipeline:
             stage_rec.detail = detail or {}
             ctx.stage_records.append(stage_rec)
             self._persist_stage(ctx, stage_rec)
+
+            if cancel_token.is_cancelled() or self._check_cancelled(ctx):
+                self._record_terminal_task(ctx, "CANCELLED", "cancelled_during_stage_execution")
+                return ReviewResult(
+                    task_id=ctx.task_id,
+                    status="CANCELLED",
+                    reason="cancelled_during_stage_execution",
+                    stages=[r.to_dict() for r in ctx.stage_records],
+                )
+
+            if deadline.is_expired():
+                err_msg = f"timeout_exceeded_in_stage_{stage.stage_name}"
+                self._record_terminal_task(ctx, "TIMED_OUT", err_msg)
+                return ReviewResult(
+                    task_id=ctx.task_id,
+                    status="TIMED_OUT",
+                    reason=err_msg,
+                    stages=[r.to_dict() for r in ctx.stage_records],
+                )
         except Exception as exc:
             stage_rec.task_id = ctx.task_id or "failed"
             stage_rec.finished_at = time.time()
@@ -247,6 +270,10 @@ class ReviewPipeline:
         if cached is not None:
             return cached
 
+        start_mono = time.monotonic()
+        deadline = ExecutionDeadline(timeout_seconds=float(timeout_seconds), started_monotonic=start_mono)
+        cancel_token = CancelToken(check_fn=lambda: bool(cancel_requested))
+
         ctx = PipelineContext(
             docx_path=Path(docx_path),
             mode=mode,
@@ -257,8 +284,10 @@ class ReviewPipeline:
             task_id=resolved_task_id,
             idempotency_key=idempotency_key,
             timeout_seconds=float(timeout_seconds),
-            started_monotonic=time.monotonic(),
+            started_monotonic=start_mono,
             cancel_requested=bool(cancel_requested),
+            deadline=deadline,
+            cancel_token=cancel_token,
         )
 
         for stage in self.stages:
@@ -266,6 +295,26 @@ class ReviewPipeline:
             early = self._execute_single_stage(stage, ctx, attempt)
             if early is not None:
                 return early
+
+        # 核心提交点保护：在最终完成提交前核查 deadline 与 cancellation
+        if ctx.get_cancel_token().is_cancelled() or self._check_cancelled(ctx):
+            self._record_terminal_task(ctx, "CANCELLED", "cancelled_before_final_commit")
+            return ReviewResult(
+                task_id=ctx.task_id,
+                status="CANCELLED",
+                reason="cancelled_before_final_commit",
+                stages=[r.to_dict() for r in ctx.stage_records],
+            )
+
+        if ctx.get_deadline().is_expired():
+            timeout_msg = f"execution_deadline_exceeded_before_final_commit ({ctx.timeout_seconds:.3f}s reached)"
+            self._record_terminal_task(ctx, "TIMED_OUT", timeout_msg)
+            return ReviewResult(
+                task_id=ctx.task_id,
+                status="TIMED_OUT",
+                reason=timeout_msg,
+                stages=[r.to_dict() for r in ctx.stage_records],
+            )
 
         repro_hash = str(ctx.extracted_fields.pop("_reproducibility_hash", ""))
         breakdown = dict(ctx.extracted_fields.pop("_finding_breakdown", {}))
@@ -383,6 +432,12 @@ class ReviewPipeline:
                 tenant_id=ctx.effective_tenant,
                 created_by=ctx.created_by,
             )
+        finalize_fn = getattr(self.storage, "finalize_idempotency_key", None)
+        if finalize_fn is not None and ctx.idempotency_key:
+            try:
+                finalize_fn(resource_id=ctx.task_id, status=status, tenant_id=ctx.effective_tenant)
+            except Exception:
+                pass
 
     def _rebuild_result_from_persisted(self, task_row: dict[str, Any]) -> ReviewResult:
         task_id = task_row["task_id"]
@@ -425,3 +480,6 @@ class ReviewPipeline:
             extracted_fields=meta.get("extracted_fields", {}),
             stages=stages,
         )
+
+
+PipelineRunner = ReviewPipeline
