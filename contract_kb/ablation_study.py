@@ -24,10 +24,7 @@ import numpy as np
 from . import config
 from .embeddings import LocalHashEmbedding
 from .modules.retrieval.citation import CitationVerifier
-from .modules.retrieval.comparison import ClauseComparisonEngine
-from .modules.retrieval.hierarchy import HierarchicalKnowledgeTree
 from .modules.retrieval.query_planner import ContractAwareQueryPlanner
-from .modules.retrieval.reranker import LexicalCoverageReranker
 from .modules.retrieval.service import GovernedRetrievalService
 from .retrieval_golden import GOLDEN_QUERIES, HARD_NEGATIVES, judge_hits
 from .storage import Storage
@@ -97,7 +94,7 @@ def evaluate_configuration(
         t0 = time.perf_counter()
 
         # 根据配置决定检索方式
-        if use_dynamic_queries:
+        if use_dynamic_queries and planner is not None:
             # 动态 Query Planning 产生具体针对性语义检索词
             simulated_clause = {
                 "clause_id": f"sim_{q.qid}",

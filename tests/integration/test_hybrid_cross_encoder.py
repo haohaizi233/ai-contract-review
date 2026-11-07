@@ -3,11 +3,9 @@
 
 from __future__ import annotations
 
-import pytest
 
 from contract_kb.modules.retrieval import (
     ClauseComparisonEngine,
-    HttpCrossEncoderReranker,
     LexicalCoverageReranker,
 )
 

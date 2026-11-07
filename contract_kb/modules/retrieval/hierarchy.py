@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
-from .relations import LegalRelation, LegalRelationExtractor
+from .relations import LegalRelationExtractor
 
 
 class ChunkGranularity(str, Enum):

@@ -336,8 +336,8 @@ class GovernedRetrievalService:
         for intent in intents:
             hits = self.retrieve_for_intent(intent, top_k=top_k, tenant_id=tenant_id)
             for h in hits:
-                c_id = h.get("clause_id") or h.get("chunk_id")
-                if c_id not in seen_cids:
+                c_id = str(h.get("clause_id") or h.get("chunk_id") or "")
+                if c_id and c_id not in seen_cids:
                     seen_cids.add(c_id)
                     if intent.intent_type == "CROSS_CLAUSE_REFERENCE_CHECK":
                         cross_ref_hits.append(h)

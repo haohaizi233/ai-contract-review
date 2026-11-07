@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import time
 from typing import Any
 from pydantic import BaseModel, Field
 
@@ -270,6 +269,10 @@ class ContractAwareQueryPlanner:
             lexical_queries.append(article_title)
         if sub:
             lexical_queries.append(sub.replace("_", " "))
+        if cat and cat != "OTHER":
+            lexical_queries.append(cat.replace("_", " "))
+        if cnum and article_title:
+            lexical_queries.append(f"{cnum} {article_title}")
         if action:
             lexical_queries.append(action)
         if conditions:
