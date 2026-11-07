@@ -729,7 +729,7 @@ class DeterministicValidationStage(ReviewStage):
 
 
 class RetrieveEvidenceStage(ReviewStage):
-    """Stage 9: 混合 RAG 证据检索（严格遵守租户与 ACTIVE 状态预过滤）。"""
+    """Stage 9: 结构感知多粒度索引 + 条款驱动 Query Planning 混合证据检索（严格遵守租户与 ACTIVE 状态）。"""
 
     stage_name = "RetrieveEvidence"
     stage_order = 9
@@ -741,33 +741,65 @@ class RetrieveEvidenceStage(ReviewStage):
 
     def execute(self, ctx: PipelineContext) -> dict[str, Any]:
         from ...modules.retrieval import GovernedRetrievalService
+        from ...modules.retrieval.hierarchy import HierarchicalKnowledgeTree
+        from ...modules.retrieval.query_planner import ContractAwareQueryPlanner
 
-        rag_context: list[dict[str, Any]] = []
-        seen_clauses: set[str] = set()
-        svc = GovernedRetrievalService(self.storage)
-        verified_ratios: list[float] = []
-
-        for kw in ("费用及支付方式", "违约责任", "争议解决", "保密"):
-            bundle = svc.retrieve_for_review(
-                kw,
-                top_k=3,
+        # 1. 构建结构感知条款层级树
+        doc_id = ctx.parsed_record.template_id if ctx.parsed_record else "target_contract"
+        if ctx.clauses:
+            tree = HierarchicalKnowledgeTree.build_from_clauses(
+                document_id=doc_id,
+                clauses=ctx.clauses,
                 business_category=ctx.category,
                 contract_subtype=ctx.subtype,
-                tenant_id=ctx.scope_tenant,
-                include_historical_cases=False,
             )
-            if bundle.citation_summary is not None:
-                verified_ratios.append(bundle.citation_summary.citation_correctness)
-            for h in bundle.authoritative_hits[:2]:
-                cid = h["clause_id"]
-                if cid in seen_clauses:
+        else:
+            tree = HierarchicalKnowledgeTree(
+                document_id=doc_id,
+                business_category=ctx.category,
+                contract_subtype=ctx.subtype,
+            )
+        ctx.knowledge_tree = tree
+
+        # 2. 条款驱动动态 Query Planning 与 EvidenceBundle 检索
+        svc = GovernedRetrievalService(self.storage)
+        planner = ContractAwareQueryPlanner()
+        bundles = svc.retrieve_contract_evidence_bundles(
+            ctx.clauses or [],
+            top_k_per_clause=2,
+            tenant_id=ctx.scope_tenant,
+            contract_category=ctx.category,
+            contract_subtype=ctx.subtype,
+            planner=planner,
+            knowledge_tree=tree,
+        )
+        ctx.evidence_bundles = {
+            k: (b.to_dict() if hasattr(b, "to_dict") else b) for k, b in bundles.items()
+        }
+
+        # 3. 聚合装配 rag_context 并保持全兼容
+        rag_context: list[dict[str, Any]] = []
+        seen_clauses: set[str] = set()
+        verified_ratios: list[float] = []
+
+        for b in bundles.values():
+            if b.citation_summary is not None and b.citation_summary.total_checked > 0:
+                verified_ratios.append(b.citation_summary.citation_correctness)
+            for h in b.authoritative_clauses:
+                cid = h.get("clause_id") or h.get("chunk_id") or ""
+                if not cid or cid in seen_clauses:
                     continue
                 seen_clauses.add(cid)
+                query_text = (
+                    b.intents[0].semantic_queries[0]
+                    if (b.intents and b.intents[0].semantic_queries)
+                    else (h.get("clause_category") or "合同条款")
+                )
                 rag_context.append(
                     {
-                        "query": kw,
+                        "query": query_text,
                         "clause_id": cid,
-                        "document_id": h["document_id"],
+                        "document_id": h.get("document_id", ""),
                         "clause_category": h.get("clause_category"),
                         "knowledge_type": h.get("knowledge_type") or "TEMPLATE",
                         "approved_status": h.get("approved_status") or "APPROVED",
@@ -776,11 +808,49 @@ class RetrieveEvidenceStage(ReviewStage):
                             h.get("can_drive_mandatory_finding", False)
                         ),
                         "prompt_badge": h.get("prompt_badge", ""),
-                        "text": h["text"][:160],
+                        "text": (h.get("text") or h.get("original_text") or "")[:160],
                         "tenant_id": h.get("tenant_id") or ctx.scope_tenant,
                         "source_hash": h.get("source_hash", ""),
                     }
                 )
+
+        # 兜底回退：若针对性条款未召回任何上下文，执行基础关键字兜底
+        if not rag_context:
+            for kw in ("费用及支付方式", "违约责任", "争议解决", "保密"):
+                legacy_bundle = svc.retrieve_for_review(
+                    kw,
+                    top_k=3,
+                    business_category=ctx.category,
+                    contract_subtype=ctx.subtype,
+                    tenant_id=ctx.scope_tenant,
+                    include_historical_cases=False,
+                )
+                if legacy_bundle.citation_summary is not None and legacy_bundle.citation_summary.total_checked > 0:
+                    verified_ratios.append(legacy_bundle.citation_summary.citation_correctness)
+                for h in legacy_bundle.authoritative_hits[:2]:
+                    cid = h["clause_id"]
+                    if cid in seen_clauses:
+                        continue
+                    seen_clauses.add(cid)
+                    rag_context.append(
+                        {
+                            "query": kw,
+                            "clause_id": cid,
+                            "document_id": h["document_id"],
+                            "clause_category": h.get("clause_category"),
+                            "knowledge_type": h.get("knowledge_type") or "TEMPLATE",
+                            "approved_status": h.get("approved_status") or "APPROVED",
+                            "authority_rank": h.get("authority_rank", 2),
+                            "can_drive_mandatory_finding": bool(
+                                h.get("can_drive_mandatory_finding", False)
+                            ),
+                            "prompt_badge": h.get("prompt_badge", ""),
+                            "text": h["text"][:160],
+                            "tenant_id": h.get("tenant_id") or ctx.scope_tenant,
+                            "source_hash": h.get("source_hash", ""),
+                        }
+                    )
+
         ctx.rag_context = rag_context
         avg_cit = (
             round(sum(verified_ratios) / len(verified_ratios), 4)
@@ -789,6 +859,7 @@ class RetrieveEvidenceStage(ReviewStage):
         )
         return {
             "rag_context": list(ctx.rag_context),
+            "evidence_bundles": dict(ctx.evidence_bundles),
             "retrieved_chunks": len(rag_context),
             "citation_correctness": avg_cit,
         }
@@ -796,6 +867,8 @@ class RetrieveEvidenceStage(ReviewStage):
     def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
         if "rag_context" in snapshot:
             ctx.rag_context = list(snapshot["rag_context"])
+        if "evidence_bundles" in snapshot:
+            ctx.evidence_bundles = dict(snapshot["evidence_bundles"])
 
 
 class LLMSemanticReviewStage(ReviewStage):
@@ -924,6 +997,72 @@ class LLMSemanticReviewStage(ReviewStage):
                     "findings": [f.to_dict() for f in ctx.findings],
                 }
 
+        # 结构化条款差异比对（Structured Clause Comparison）
+        from ...modules.retrieval.comparison import ClauseComparisonEngine
+
+        engine = ClauseComparisonEngine()
+        comparisons: list[dict[str, Any]] = []
+        comparison_findings: list[Finding] = []
+
+        bundles = ctx.evidence_bundles or {}
+        for c in ctx.clauses:
+            cid = str(c.get("clause_id") or "")
+            b = bundles.get(cid)
+            if not b:
+                continue
+            auth_clauses = (
+                b.get("authoritative_clauses", [])
+                if isinstance(b, dict)
+                else getattr(b, "authoritative_clauses", [])
+            )
+            if not auth_clauses:
+                continue
+            top_ref = auth_clauses[0]
+            comp = engine.compare_clauses(c, top_ref)
+            comparisons.append(comp.model_dump())
+
+            if comp.conclusion not in ("MATCH", "STRUCTURAL_DIFFERENCE"):
+                kref = {
+                    "document_id": top_ref.get("document_id"),
+                    "clause_id": top_ref.get("clause_id"),
+                    "clause_number": top_ref.get("clause_number"),
+                    "text": (top_ref.get("original_text") or top_ref.get("text") or "")[:120],
+                    "source_type": top_ref.get("knowledge_type") or "TEMPLATE",
+                    "tenant_id": top_ref.get("tenant_id") or ctx.scope_tenant,
+                    "approved_status": top_ref.get("approved_status") or "APPROVED",
+                }
+                node_ids = list(c.get("source_node_ids") or [])
+                ref_evidence = (
+                    EvidenceReference(
+                        document_id=ctx.parsed_record.template_id if ctx.parsed_record else "",
+                        node_ids=node_ids,
+                        clause_number=c.get("clause_number"),
+                        original_text=str(c.get("original_text") or "")[:120],
+                        exact_quote=str(c.get("original_text") or "")[:120],
+                    )
+                    if node_ids
+                    else None
+                )
+                desc = "；".join(comp.summary_findings) if comp.summary_findings else f"条款与企业标准存在结构性差异：{comp.conclusion}"
+                comparison_findings.append(
+                    Finding(
+                        issue_id="",
+                        rule_id=f"COMPARISON:{comp.conclusion}",
+                        severity="LOW",
+                        category="MANUAL_REVIEW",
+                        title=f"标准条款差异比对：{comp.conclusion}",
+                        description=desc,
+                        source_reference=ref_evidence,
+                        knowledge_references=[kref],
+                        execution_mode="MANUAL_REVIEW",
+                        finding_source=FindingSource.DETERMINISTIC.value,
+                        requires_human_review=True,
+                        check_status=CheckStatus.NEEDS_MANUAL_REVIEW.value,
+                    )
+                )
+
+        ctx.clause_comparisons = comparisons
+
         try:
             llm_result = llm.review(
                 contract_text,
@@ -1009,7 +1148,14 @@ class LLMSemanticReviewStage(ReviewStage):
                         check_status=CheckStatus.NOT_CHECKED.value,
                     )
                 )
-            return {"llm_status": "NOT_CHECKED", "semantic_findings": 0}
+            # LLM 未配置时，结构化差异分析器直接产出确定性待复核发现
+            ctx.findings.extend(comparison_findings)
+            return {
+                "llm_status": "NOT_CHECKED",
+                "semantic_findings": 0,
+                "comparison_findings": len(comparison_findings),
+                "findings": [f.to_dict() for f in ctx.findings],
+            }
 
         for f in llm_result.findings:
             ctx.findings.append(
@@ -1087,6 +1233,8 @@ class LLMSemanticReviewStage(ReviewStage):
     def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
         if "findings" in snapshot:
             ctx.findings = [Finding.from_dict(f) for f in snapshot["findings"]]
+        if "clause_comparisons" in snapshot:
+            ctx.clause_comparisons = list(snapshot["clause_comparisons"])
 
 
 class VerifyEvidenceStage(ReviewStage):
@@ -1141,6 +1289,23 @@ class VerifyEvidenceStage(ReviewStage):
             elif not ref.node_ids:
                 f.source_reference = None
                 f.citation_status = "CITATION_UNVERIFIED"
+
+            # 严格核验知识库引用（knowledge_references）：隔离跨租户并校验权威审批状态
+            if f.knowledge_references:
+                for kref in f.knowledge_references:
+                    ref_tenant = kref.get("tenant_id")
+                    if ref_tenant and ctx.scope_tenant and ref_tenant != ctx.scope_tenant:
+                        f.check_status = CheckStatus.INSUFFICIENT_EVIDENCE.value
+                        f.requires_human_review = True
+                        f.citation_status = "CITATION_UNVERIFIED"
+                        f.description += "（证据校验：知识库引用跨租户越权，已降级）"
+                        downgraded += 1
+                        break
+                    st = kref.get("approved_status")
+                    if st and st != "APPROVED":
+                        f.requires_human_review = True
+                        if f.severity == "HIGH":
+                            f.severity = "MEDIUM"
         return {
             "downgraded_count": downgraded,
             "bound_from_quote": bound_from_quote,
@@ -1150,6 +1315,8 @@ class VerifyEvidenceStage(ReviewStage):
     def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
         if "findings" in snapshot:
             ctx.findings = [Finding.from_dict(f) for f in snapshot["findings"]]
+        if "clause_comparisons" in snapshot:
+            ctx.clause_comparisons = list(snapshot["clause_comparisons"])
 
 
 class ResolveFindingsStage(ReviewStage):
@@ -1177,6 +1344,8 @@ class ResolveFindingsStage(ReviewStage):
     def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
         if "findings" in snapshot:
             ctx.findings = [Finding.from_dict(f) for f in snapshot["findings"]]
+        if "clause_comparisons" in snapshot:
+            ctx.clause_comparisons = list(snapshot["clause_comparisons"])
 
 
 class HumanReviewStage(ReviewStage):
@@ -1295,6 +1464,8 @@ class FinalizeReportStage(ReviewStage):
             ),
             "llm": ctx.llm_status_info,
             "rag_context": ctx.rag_context,
+            "evidence_bundles": ctx.evidence_bundles,
+            "clause_comparisons": ctx.clause_comparisons,
             "review_gate": ctx.review_gate,
             "finding_breakdown": breakdown,
             "extracted_fields": public_fields,

@@ -65,12 +65,30 @@ class ClauseNode:
 class HierarchicalKnowledgeTree:
     """多粒度合同知识树。"""
 
-    def __init__(self, document_id: str):
+    def __init__(
+        self,
+        document_id: str,
+        business_category: str | None = None,
+        contract_subtype: str | None = None,
+    ):
         self.document_id = document_id
+        self.business_category = business_category
+        self.contract_subtype = contract_subtype
         self.nodes: dict[str, ClauseNode] = {}
         self.article_index: dict[str, str] = {}  # "第五条" -> node_id
         self.subclause_index: dict[str, str] = {}  # "5.1" -> node_id
         self.root_id: str = f"doc_{document_id}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "document_id": self.document_id,
+            "business_category": self.business_category,
+            "contract_subtype": self.contract_subtype,
+            "root_id": self.root_id,
+            "nodes": {k: v.to_dict() for k, v in self.nodes.items()},
+            "article_index": dict(self.article_index),
+            "subclause_index": dict(self.subclause_index),
+        }
 
     @classmethod
     def build_from_clauses(
@@ -79,9 +97,15 @@ class HierarchicalKnowledgeTree:
         clauses: list[dict[str, Any] | Any],
         table_schemas: list[dict[str, Any]] | None = None,
         relation_extractor: LegalRelationExtractor | None = None,
+        business_category: str | None = None,
+        contract_subtype: str | None = None,
     ) -> HierarchicalKnowledgeTree:
         """从扁平条款列表与表格抽取物构建分层知识树。"""
-        tree = cls(document_id)
+        tree = cls(
+            document_id,
+            business_category=business_category,
+            contract_subtype=contract_subtype,
+        )
         extractor = relation_extractor or LegalRelationExtractor()
 
         # 1. 建立 Document 根节点

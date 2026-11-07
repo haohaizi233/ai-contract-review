@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from .citation import CitationVerificationSummary, CitationVerifier
@@ -61,6 +61,23 @@ class EvidenceBundle:
             badge = hc.get("prompt_badge") or "[历史合同先例-仅供参考]"
             parts.append(f"{badge}：{hc.get('text', '')[:100]}")
         return "\n".join(parts)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "target_clause_id": self.target_clause_id,
+            "intents": [
+                (i.model_dump() if hasattr(i, "model_dump") else i) for i in self.intents
+            ],
+            "authoritative_clauses": list(self.authoritative_clauses),
+            "parent_clause": dict(self.parent_clause) if self.parent_clause else None,
+            "related_conditions": list(self.related_conditions),
+            "related_exceptions": list(self.related_exceptions),
+            "cross_referenced_clauses": list(self.cross_referenced_clauses),
+            "historical_cases": list(self.historical_cases),
+            "citation_summary": (
+                asdict(self.citation_summary) if self.citation_summary else None
+            ),
+        }
 
 
 class GovernedRetrievalService:

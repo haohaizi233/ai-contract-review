@@ -312,6 +312,9 @@ class PipelineContext:
     extracted_fields: dict[str, Any] = field(default_factory=dict)
     format_standard: dict[str, Any] | None = None
     rag_context: list[dict[str, Any]] = field(default_factory=list)
+    evidence_bundles: dict[str, Any] = field(default_factory=dict)
+    clause_comparisons: list[Any] = field(default_factory=list)
+    knowledge_tree: Any = None
     llm_status_info: dict[str, Any] = field(default_factory=dict)
     llm_result: Any = None
     findings: list[Finding] = field(default_factory=list)
@@ -360,6 +363,9 @@ class ReviewResult:
     created_by: str = "system"
     llm: dict[str, Any] = field(default_factory=dict)
     rag_context: list[dict[str, Any]] = field(default_factory=list)
+    evidence_bundles: dict[str, Any] = field(default_factory=dict)
+    clause_comparisons: list[Any] = field(default_factory=list)
+    knowledge_tree: Any = None
     issues: list[dict[str, Any]] = field(default_factory=list)
     reason: str | None = None
     rule_set_version: str = "builtin-v1"
