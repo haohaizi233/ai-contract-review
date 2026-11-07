@@ -126,6 +126,16 @@ app = FastAPI(
 install_observability_and_error_handlers(app)
 
 
+@app.middleware("http")
+async def capture_request_body_middleware(request: Request, call_next):
+    MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB 有界读取
+    body = await request.body()
+    if len(body) > MAX_BODY_SIZE:
+        return JSONResponse(status_code=413, content={"error": "file_too_large", "detail": "Request Entity Too Large"})
+    response = await call_next(request)
+    return response
+
+
 @app.exception_handler(IdempotencyConflictError)
 def idempotency_conflict_handler(request: Request, exc: IdempotencyConflictError):
     return JSONResponse(
@@ -165,6 +175,11 @@ def _validate_and_stage_docx(
 
 
 def _principal(request: Request) -> Principal:
+    if _auth.storage is None:
+        try:
+            _auth.storage = get_storage()
+        except Exception:
+            pass
     p = _auth.authenticate(request)
     authorize(p, f"{request.method} {request.url.path}")
     return p

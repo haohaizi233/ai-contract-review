@@ -198,29 +198,23 @@ class TrustedHeaderAuth:
                 if not nonce or len(nonce) < 16:
                     raise HTTPException(401, "缺少有效防重放 Nonce（需至少 16 字符）")
 
-                now = time.time()
-                # 内存快速去重与 TTL 清理
-                self._seen_nonces = {
-                    k: exp for k, exp in self._seen_nonces.items() if exp > now
-                }
-                if nonce in self._seen_nonces:
-                    raise HTTPException(401, "认证请求重放（Nonce 已被使用）")
+                # (1) 读取真实请求正文并校验正文摘要 SHA-256
+                raw_body = getattr(request, "_body", None)
+                if raw_body is None:
+                    raw_body = request.scope.get("_body", b"")
+                real_body_sha = hashlib.sha256(raw_body).hexdigest()
+                header_body_sha = request.headers.get("X-Content-SHA256", "").strip()
+                if not header_body_sha:
+                    header_body_sha = EMPTY_BODY_SHA256
 
-                # 持久化存储去重校验
-                if self.storage is not None:
-                    record_fn = getattr(self.storage, "record_and_check_nonce", None)
-                    if record_fn is not None:
-                        ok = record_fn(nonce, tenant, user, float(ts_val) + max_skew)
-                        if not ok:
-                            raise HTTPException(401, "认证请求重放（Nonce 已被使用）")
-                self._seen_nonces[nonce] = float(ts_val) + max_skew
+                if header_body_sha.lower() != real_body_sha.lower():
+                    raise HTTPException(
+                        401,
+                        f"正文摘要校验失败（X-Content-SHA256 与真实请求正文不匹配）：header={header_body_sha}, actual={real_body_sha}",
+                    )
 
-                # 提取 query 与 body 摘要
+                # (2) 校验签名（先验证签名，未通过前严禁消费 Nonce，避免 Nonce 投毒拒绝服务）
                 raw_query = request.scope.get("query_string", b"").decode("utf-8")
-                body_sha = request.headers.get("X-Content-SHA256", "").strip()
-                if not body_sha:
-                    body_sha = EMPTY_BODY_SHA256
-
                 expected = compute_auth_signature_v2(
                     key=key,
                     method=request.method,
@@ -231,10 +225,39 @@ class TrustedHeaderAuth:
                     tenant=tenant,
                     timestamp=ts_raw,
                     nonce=nonce,
-                    body_sha256=body_sha,
+                    body_sha256=header_body_sha,
                 )
                 if not sig or not hmac.compare_digest(sig, expected):
                     raise HTTPException(401, "认证签名无效")
+
+                # (3) 签名合法后，原子消费 Nonce（防重放与跨实例共享存储）
+                now = time.time()
+                self._seen_nonces = {
+                    k: exp for k, exp in self._seen_nonces.items() if exp > now
+                }
+                if nonce in self._seen_nonces:
+                    raise HTTPException(401, "认证请求重放（Nonce 已被使用）")
+
+                st = self.storage
+                if st is None:
+                    try:
+                        import contract_kb.api as api_mod
+                        st = getattr(api_mod, "get_storage", lambda: None)()
+                    except Exception:
+                        st = None
+
+                if st is not None:
+                    record_fn = getattr(st, "record_and_check_nonce", None)
+                    if record_fn is None:
+                        raise HTTPException(503, "持久化 Nonce 防重放服务未就绪")
+                    ok = record_fn(nonce, tenant, user, float(ts_val) + max_skew)
+                    if not ok:
+                        raise HTTPException(401, "认证请求重放（Nonce 已被使用）")
+                else:
+                    if os.environ.get("CONTRACT_KB_ENV") == "production":
+                        raise HTTPException(503, "持久化 Nonce 存储不可用")
+
+                self._seen_nonces[nonce] = float(ts_val) + max_skew
             else:
                 # V1 模式校验
                 if (
