@@ -22,6 +22,7 @@ import numpy as np
 from . import config
 from .ingest import import_template_file
 from .modules.retrieval import CitationVerifier
+from .domain.models.evaluation import hit_at_k, recall_at_k, mrr, ndcg_at_k
 from .review_engine import ReviewEngine
 from .storage import Storage
 
@@ -150,9 +151,38 @@ def _evaluate_single_rag_query(
     relevant_ranks = [i + 1 for i, g in enumerate(grades) if g >= 1]
     strong_ranks = [i + 1 for i, g in enumerate(grades) if g >= 2]
     first = relevant_ranks[0] if relevant_ranks else None
-    dcg = float(sum((2**g - 1) / np.log2(i + 2) for i, g in enumerate(grades)))
-    ideal = sorted(grades, reverse=True)
-    idcg = float(sum((2**g - 1) / np.log2(i + 2) for i, g in enumerate(ideal))) or 1.0
+
+    # 构建该 Query 的全局独立 Ground Truth 相关集合与多级打分
+    gt_relevant_ids: set[str] = set()
+    gt_qrels: dict[str, int] = {}
+    if hasattr(storage, "conn"):
+        try:
+            rows = storage.conn.execute(
+                "SELECT clause_id, original_text, clause_category FROM clauses WHERE clause_category=?",
+                (expected_cat,),
+            ).fetchall()
+            for r in rows:
+                has_kw = any(k in r["original_text"] for k in keywords)
+                cid = str(r["clause_id"])
+                if has_kw:
+                    gt_relevant_ids.add(cid)
+                    gt_qrels[cid] = 2
+                else:
+                    gt_relevant_ids.add(cid)
+                    gt_qrels[cid] = 1
+        except Exception:
+            pass
+
+    if not gt_relevant_ids:
+        for cid, g in zip(retrieved_clause_ids, grades):
+            if g > 0:
+                gt_relevant_ids.add(cid)
+                gt_qrels[cid] = g
+
+    calculated_hit_k = {k: hit_at_k(retrieved_clause_ids, gt_relevant_ids, k=k) for k in K_LIST}
+    calculated_recall_k = {k: recall_at_k(retrieved_clause_ids, gt_relevant_ids, k=k) for k in K_LIST}
+    calculated_mrr = mrr(retrieved_clause_ids, gt_relevant_ids) or 0.0
+    calculated_ndcg = ndcg_at_k(retrieved_clause_ids, gt_qrels, k=8) or 0.0
 
     return {
         "query": query,
@@ -165,7 +195,10 @@ def _evaluate_single_rag_query(
         "citation_verified": cit_summary.citation_correctness == 1.0,
         "citation_correctness": cit_summary.citation_correctness,
         "answer_groundedness": cit_summary.answer_groundedness,
-        "ndcg": round(dcg / idcg, 4),
+        "hit_at_k": calculated_hit_k,
+        "recall_at_k": calculated_recall_k,
+        "mrr": calculated_mrr,
+        "ndcg": round(calculated_ndcg, 4),
         "latency_ms": elapsed_ms,
         "retrieved_clause_ids": retrieved_clause_ids[:5],
     }
@@ -181,30 +214,14 @@ def eval_rag(storage: Any) -> dict[str, Any]:
     n = max(1, len(results))
     metrics: dict[str, float] = {}
     for k in K_LIST:
-        metrics[f"Hit@{k}"] = round(
-            sum(
-                1
-                for r in results
-                if r["first_relevant_rank"] and r["first_relevant_rank"] <= k
-            )
-            / n,
-            4,
-        )
-        metrics[f"Recall@{k}"] = round(
-            sum(
-                1
-                for r in results
-                if r["relevant_ranks"] and r["relevant_ranks"][0] <= k
-            )
-            / n,
-            4,
-        )
-    metrics["MRR"] = round(
-        sum(1.0 / r["first_relevant_rank"] for r in results if r["first_relevant_rank"])
-        / n,
-        4,
-    )
-    metrics["NDCG@8"] = round(sum(r["ndcg"] for r in results) / n, 4)
+        hits_k = [r["hit_at_k"][k] for r in results if r["hit_at_k"].get(k) is not None]
+        recalls_k = [r["recall_at_k"][k] for r in results if r["recall_at_k"].get(k) is not None]
+        metrics[f"Hit@{k}"] = round(sum(hits_k) / max(1, len(hits_k)), 4) if hits_k else 0.0
+        metrics[f"Recall@{k}"] = round(sum(recalls_k) / max(1, len(recalls_k)), 4) if recalls_k else 0.0
+    mrrs = [r["mrr"] for r in results if r.get("mrr") is not None]
+    metrics["MRR"] = round(sum(mrrs) / max(1, len(mrrs)), 4) if mrrs else 0.0
+    ndcgs = [r["ndcg"] for r in results if r.get("ndcg") is not None]
+    metrics["NDCG@8"] = round(sum(ndcgs) / max(1, len(ndcgs)), 4) if ndcgs else 0.0
     metrics["CitationCorrectness"] = round(
         sum(r["citation_correctness"] for r in results) / n, 4
     )

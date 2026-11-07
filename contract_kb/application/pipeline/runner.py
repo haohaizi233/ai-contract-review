@@ -368,10 +368,30 @@ class ReviewPipeline:
             except OSError:
                 f_hash = "unreadable"
 
+        try:
+            raw_rules = self.storage.list_rules(tenant_id=tenant_id, status="APPROVED")
+        except Exception:
+            raw_rules = []
+        rule_ver = self.registry.compute_rule_set_version(raw_rules)
+        llm_stage = next(
+            (s for s in self.stages if isinstance(s, LLMSemanticReviewStage)), None
+        )
+        prov = getattr(llm_stage, "_llm_provider", None)
+        prov_name = str(getattr(prov, "name", "none") if prov else "none")
+        model_name = str(getattr(prov, "model", "none") if prov else "none")
+        from ...llm_review import PROMPT_SYSTEM
+        prompt_ver = hashlib.sha256(PROMPT_SYSTEM.encode("utf-8")).hexdigest()[:12]
+        stage_schemas = ":".join(f"{s.stage_name}@{getattr(s, 'schema_version', 'v1')}" for s in self.stages)
+        schema_ver = hashlib.sha256(stage_schemas.encode("utf-8")).hexdigest()[:12]
+
         manifest = ExecutionManifest(
             file_hash=f_hash,
             tenant_id=effective_tenant,
-            rule_set_version=str(getattr(self.registry, "version", "builtin-v1")),
+            rule_set_version=rule_ver,
+            provider=prov_name,
+            model=model_name,
+            prompt_version=prompt_ver,
+            schema_version=schema_ver,
         )
         manifest_h = manifest.compute_manifest_fingerprint()
 
@@ -403,6 +423,8 @@ class ReviewPipeline:
             cancel_requested=bool(cancel_requested),
             deadline=deadline,
             cancel_token=cancel_token,
+            rule_set_version=rule_ver,
+            model_version=f"{prov_name}:{model_name}",
             budget_service=self.budget_service,
             resume_completed_stages=completed_stages,
             stage_checkpoints=stage_checkpoints,

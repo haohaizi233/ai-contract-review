@@ -85,10 +85,10 @@ class KnowledgeGovernancePolicy:
     )
 
     @classmethod
-    def normalize_source_type(cls, raw: str | None) -> KnowledgeSourceType:
-        if not raw:
-            return KnowledgeSourceType.TEMPLATE
-        up = raw.strip().upper()
+    def normalize_source_type(cls, raw: str | None) -> KnowledgeSourceType | None:
+        if not raw or not str(raw).strip():
+            return None
+        up = str(raw).strip().upper()
         alias_map = {
             "TEMPLATE": KnowledgeSourceType.TEMPLATE,
             "LAYER_D_RAG": KnowledgeSourceType.TEMPLATE,
@@ -101,12 +101,14 @@ class KnowledgeGovernancePolicy:
             "LEGAL": KnowledgeSourceType.LEGAL_REFERENCE,
             "LEGAL_REFERENCE": KnowledgeSourceType.LEGAL_REFERENCE,
         }
-        return alias_map.get(up, KnowledgeSourceType.TEMPLATE)
+        return alias_map.get(up)
 
     @classmethod
-    def descriptor_for(cls, raw_type: str | None) -> KnowledgeTrustDescriptor:
+    def descriptor_for(cls, raw_type: str | None) -> KnowledgeTrustDescriptor | None:
         stype = cls.normalize_source_type(raw_type)
-        return TRUST_MATRIX[stype]
+        if stype is None:
+            return None
+        return TRUST_MATRIX.get(stype)
 
     @classmethod
     def is_chunk_admissible(
@@ -121,6 +123,10 @@ class KnowledgeGovernancePolicy:
         if not raw_ktype or not str(raw_ktype).strip():
             return False
 
+        desc = cls.descriptor_for(raw_ktype)
+        if desc is None:
+            return False
+
         doc_status = str(hit.get("doc_status") or hit.get("status") or "ACTIVE").upper()
         if doc_status in cls.BLOCKED_DOC_STATUSES:
             return False
@@ -129,19 +135,20 @@ class KnowledgeGovernancePolicy:
             if hit.get("tenant_id") != expected_tenant_id:
                 return False
 
-        desc = cls.descriptor_for(raw_ktype)
         if (
             desc.source_type == KnowledgeSourceType.HISTORICAL_CASE
             and not allow_historical_cases
         ):
             return False
 
-        approved_status = str(hit.get("approved_status") or "APPROVED").upper()
-        if desc.source_type == KnowledgeSourceType.APPROVED_RULE:
-            if approved_status != "APPROVED":
+        # Fail-Closed 审批状态核验：若要求审批（TEMPLATE / APPROVED_RULE / LEGAL_REFERENCE）
+        # approved_status 必须明确存在且属于 APPROVED 或 ACTIVE，严禁缺省或 UNKNOWN 默认放行
+        raw_approved = hit.get("approved_status")
+        if desc.require_approved_status:
+            if not raw_approved or not str(raw_approved).strip():
                 return False
-        elif desc.require_approved_status:
-            if approved_status in {"DRAFT", "REJECTED", "REVOKED"}:
+            approved_status = str(raw_approved).strip().upper()
+            if approved_status not in {"APPROVED", "ACTIVE"}:
                 return False
 
         return True
@@ -151,6 +158,11 @@ class KnowledgeGovernancePolicy:
         """为通过治理校验的检索结果注入权威等级与提示词标识。"""
         desc = cls.descriptor_for(hit.get("knowledge_type"))
         enriched = dict(hit)
+        if desc is None:
+            enriched["can_drive_mandatory_finding"] = False
+            enriched["authority_rank"] = 99
+            enriched["prompt_badge"] = "[未经验证资产-严禁作为基准]"
+            return enriched
         enriched["knowledge_type"] = desc.source_type.value
         enriched["authority_rank"] = desc.authority_rank
         enriched["can_drive_mandatory_finding"] = desc.can_drive_mandatory_finding

@@ -576,6 +576,19 @@ class Storage:
                         if prefix_clause
                         else c["clause_id"]
                     )
+                    is_std_template = bool(
+                        c.get("is_company_standard")
+                        or doc.get("document_type") == "contract_template"
+                        or doc.get("status") == "ACTIVE"
+                    )
+                    default_appr = "APPROVED" if is_std_template else "PENDING_REVIEW"
+                    if is_std_template and (not c.get("approval_status") or c.get("approval_status") == "PENDING_REVIEW"):
+                        clause_appr = "APPROVED"
+                    else:
+                        clause_appr = c.get("approval_status", default_appr)
+                    clause_ktype = c.get("knowledge_type") or (
+                        "TEMPLATE" if is_std_template else "LAYER_A_RAW_CLAUSE"
+                    )
                     self.conn.execute(
                         "INSERT OR REPLACE INTO clauses (clause_id, document_id, clause_number, "
                         "clause_category, clause_subcategory, original_text, normalized_summary, "
@@ -589,12 +602,12 @@ class Storage:
                             c.get("clause_subcategory"),
                             c["original_text"],
                             c.get("normalized_summary", ""),
-                            1 if c.get("is_company_standard") else 0,
-                            c.get("approval_status", "PENDING_REVIEW"),
+                            1 if c.get("is_company_standard") or is_std_template else 0,
+                            clause_appr,
                             json.dumps(
                                 c.get("source_node_ids", []), ensure_ascii=False
                             ),
-                            c.get("knowledge_type") or "LAYER_A_RAW_CLAUSE",
+                            clause_ktype,
                             c.get("effective_time"),
                         ),
                     )
@@ -642,8 +655,9 @@ class Storage:
                     r["knowledge_type"]
                     if r["knowledge_type"]
                     and r["knowledge_type"] != "LAYER_A_RAW_CLAUSE"
-                    else "LAYER_D_RAG"
+                    else "TEMPLATE"
                 )
+                appr_status = "APPROVED" if (r["approval_status"] in (None, "", "PENDING_REVIEW")) else r["approval_status"]
                 self.conn.execute(
                     "INSERT OR REPLACE INTO embeddings VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (
@@ -653,7 +667,7 @@ class Storage:
                         m["business_category"] if m else "",
                         m["contract_subtype"] if m else "",
                         ktype,
-                        r["approval_status"] or "PENDING_REVIEW",
+                        appr_status,
                         None,
                         m["source_hash"] if m else document_id,
                         r["original_text"],

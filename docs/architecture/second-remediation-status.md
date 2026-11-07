@@ -18,7 +18,7 @@
 | **Batch 3** | **R03 / R06** | P1 | 同步忽略乐观锁冲突导致假成功与跳水；重点集成工具未走应用适配器 | **COMPLETED** | `test_sync_service_optimistic_conflict.py`, `test_multi_source_incremental_sync.py` (全部通过，回滚冲突且三批合流保留来源) | 待提交 |
 | **Batch 4** | **R04** | P1 | V2 认证未校验真实 body，API 未绑共享存储，提前消费 nonce 导致投毒 | **COMPLETED** | `tests/security/test_auth_v2_body_digest_and_shared_nonce.py` (3 passed, 真实body核验阻断篡改且先验签后消费) | 待提交 |
 | **Batch 5** | **R05** | P1 | 阶段 deadline 未传至底层 HTTP provider；预算未接主审核链路与硬限额 | **COMPLETED** | `tests/integration/test_provider_deadline_and_budget_enforcement.py` (6 passed, 截止时间透传快速超时，预算耗尽拦截且精准核销与UNCERTAIN挂账) | 待提交 |
-| **Batch 6** | **R07 / R08** | P2 | Manifest 与 Stage Schema 静态无约束；RAG 准入未 fail-closed；评估指标口径失真 | **PENDING** | `tests/security/test_governance_fail_closed_strict.py`, `tests/unit/test_evaluate_script_metrics.py` | 待提交 |
+| **Batch 6** | **R07 / R08** | P2 | Manifest 与 Stage Schema 静态无约束；RAG 准入未 fail-closed；评估指标口径失真 | **COMPLETED** | `tests/security/test_governance_fail_closed_strict.py`, `tests/unit/test_evaluate_script_metrics.py`, `tests/unit/test_execution_manifest_dynamic.py` (全部通过，动态多维指纹，严格准入阻断缺失/未知状态，Hit@K与Recall@K及真实IDCG口径分离) | 待提交 |
 | **Batch 7** | **R09** | P2 | 全仓 117 项 Ruff 告警与 39 个文件格式问题；PG E2E 缺任务插入与 DSN 脱敏；Lockfile 消费 | **PENDING** | `ruff check`, `ruff format`, `pytest tests/integration/test_pgvector_pipeline_e2e.py` | 待提交 |
 
 ---

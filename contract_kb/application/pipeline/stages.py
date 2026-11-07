@@ -1278,6 +1278,9 @@ class FinalizeReportStage(ReviewStage):
 
         task_meta = {
             "source_file": ctx.parsed_record.source_file,
+            "rule_set_version": ctx.rule_set_version,
+            "model_version": ctx.model_version,
+            "file_hash": ctx.parsed_record.sha256 if ctx.parsed_record else getattr(ctx, "file_hash", ""),
             "category": ctx.category,
             "subtype": ctx.subtype,
             "classification_confidence": ctx.classification_confidence,
