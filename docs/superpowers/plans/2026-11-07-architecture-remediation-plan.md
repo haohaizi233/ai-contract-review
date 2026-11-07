@@ -203,12 +203,12 @@ flowchart TD
 
 **建议协议：**V2对版本、key_id、issuer、user/roles/tenant、method、原始path/query摘要、body SHA-256、整数timestamp、随机nonce做确定性序列化后HMAC-SHA256。正文摘要必须由服务有界读取验证，不能只信任客户端提供的摘要头。nonce至少128bit随机；时钟允许偏差默认300秒，nonce保留覆盖有效窗口（默认至少600秒）；拒绝NaN/Infinity和异常长度。生产V2强制时间戳。
 
-- [ ] 写失败测试：相同签名重放、换method/path/query/body、nonce并发消费、过期/未来时间、非法float、角色篡改均失败。
-- [ ] 增加multipart摘要一致性、超限请求413、body摘要验证后仍可正常解析文件的测试；大文件不能先无界读入内存。
-- [ ] 执行 `python -m pytest tests/security/test_auth_replay_v2.py -q`，确认当前实现无法满足。
-- [ ] 网关与服务共用协议测试向量；正文只在验证完成后进入业务写入；重放库故障fail-closed。
-- [ ] 兼容策略：测试环境先双版本验证并记录比例；生产切换日期由运维确认。V1仅在显式兼容开关及受信网关边界保留，不能作为V2失败时自动回退。
-- [ ] 多实例测试同nonce只成功一次，通过后提交 `fix: add request-bound authentication and replay protection`。
+- [x] 写失败测试：相同签名重放、换method/path/query/body、nonce并发消费、过期/未来时间、非法float、角色篡改均失败。
+- [x] 增加multipart摘要一致性、超限请求413、body摘要验证后仍可正常解析文件的测试；大文件不能先无界读入内存。
+- [x] 执行 `python -m pytest tests/security/test_auth_replay_v2.py -q`，确认当前实现无法满足。
+- [x] 网关与服务共用协议测试向量；正文只在验证完成后进入业务写入；重放库故障fail-closed。
+- [x] 兼容策略：测试环境先双版本验证并记录比例；生产切换日期由运维确认。V1仅在显式兼容开关及受信网关边界保留，不能作为V2失败时自动回退。
+- [x] 多实例测试同nonce只成功一次，通过后提交 `fix: add request-bound authentication and replay protection`。
 
 **通过条件：**合法请求正常，签名被截获后不能换请求使用，nonce窗口内重复操作被拒绝；明确密钥轮换只是协议兼容设计，实际轮换另行授权。
 

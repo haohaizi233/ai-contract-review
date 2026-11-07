@@ -12,9 +12,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import os
 import time
+import urllib.parse
+from typing import Any
 from dataclasses import dataclass
 
 from fastapi import HTTPException, Request
@@ -84,16 +87,66 @@ class Principal:
         )
 
 
-class TrustedHeaderAuth:
-    """受信任认证层适配器。
 
-    生产部署：由企业网关/SSO 校验签名后注入 X-User / X-Roles / X-Tenant；
-    若网关与本服务直连，配置 CONTRACT_KB_AUTH_SHARED_KEY 进行 HMAC 校验，
-    并支持 X-Auth-Timestamp 防重放时间窗校验。未配置密钥时仅信任本机回环。
+EMPTY_BODY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def compute_auth_signature_v2(
+    *,
+    key: str,
+    method: str,
+    path: str,
+    query: str = "",
+    user: str = "",
+    roles: str = "",
+    tenant: str = "default",
+    timestamp: str = "",
+    nonce: str = "",
+    body_sha256: str = "",
+) -> str:
+    """计算 V2 规范化认证 HMAC-SHA256 签名。
+
+    规范化载荷：
+    METHOD\nPATH\nSORTED_QUERY\nUSER\nROLES\nTENANT\nTIMESTAMP\nNONCE\nBODY_SHA256
     """
+    if query:
+        pairs = urllib.parse.parse_qsl(query, keep_blank_values=True)
+        pairs.sort(key=lambda x: (x[0], x[1]))
+        canonical_query = urllib.parse.urlencode(pairs)
+    else:
+        canonical_query = ""
 
-    def __init__(self, shared_key: str | None = None):
+    norm_body_sha256 = (body_sha256 or EMPTY_BODY_SHA256).strip().lower()
+    canonical_msg = "\n".join(
+        [
+            method.upper().strip(),
+            path.strip(),
+            canonical_query,
+            user.strip(),
+            roles.strip(),
+            tenant.strip(),
+            str(timestamp).strip(),
+            nonce.strip(),
+            norm_body_sha256,
+        ]
+    )
+    return hmac.new(
+        key.encode("utf-8"), canonical_msg.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+class TrustedHeaderAuth:
+    """受信任认证层适配器（支持签名 V2 完整载荷绑定与防重放 Nonce 校验）。"""
+
+    def __init__(
+        self,
+        shared_key: str | None = None,
+        storage: Any = None,
+        auth_version: str | None = None,
+    ):
         self._explicit_key = shared_key
+        self.storage = storage
+        self._auth_version = auth_version
+        self._seen_nonces: dict[str, float] = {}
 
     @property
     def shared_key(self) -> str | None:
@@ -115,17 +168,24 @@ class TrustedHeaderAuth:
         if key:
             sig = request.headers.get("X-Auth-Signature", "").strip()
             ts_raw = request.headers.get("X-Auth-Timestamp", "").strip()
-            require_ts = (
-                os.environ.get("CONTRACT_KB_REQUIRE_AUTH_TIMESTAMP", "0") == "1"
-                or config.REQUIRE_AUTH_TIMESTAMP
+            version_hdr = request.headers.get("X-Auth-Version", "").strip()
+            nonce = request.headers.get("X-Auth-Nonce", "").strip()
+
+            target_version = (
+                version_hdr
+                or self._auth_version
+                or os.environ.get("CONTRACT_KB_AUTH_VERSION", "COMPAT")
             )
-            if require_ts and not ts_raw:
-                raise HTTPException(401, "缺少认证时间戳 X-Auth-Timestamp")
-            if ts_raw:
+            is_v2 = target_version == "2" or (target_version != "1" and bool(nonce))
+
+            if is_v2:
+                if not ts_raw:
+                    raise HTTPException(401, "缺少认证时间戳 X-Auth-Timestamp")
                 try:
                     ts_val = float(ts_raw)
                 except ValueError as exc:
                     raise HTTPException(401, "认证时间戳格式非法") from exc
+
                 max_skew = int(
                     os.environ.get(
                         "CONTRACT_KB_AUTH_MAX_SKEW_SECONDS",
@@ -134,13 +194,76 @@ class TrustedHeaderAuth:
                 )
                 if abs(time.time() - ts_val) > max_skew:
                     raise HTTPException(401, "认证时间戳超出防重放窗口")
-                msg = f"{user}|{roles_raw}|{tenant}|{ts_raw}".encode()
-            else:
-                msg = f"{user}|{roles_raw}|{tenant}".encode()
 
-            expected = hmac.new(key.encode(), msg, "sha256").hexdigest()
-            if not sig or not hmac.compare_digest(sig, expected):
-                raise HTTPException(401, "认证签名无效")
+                if not nonce or len(nonce) < 16:
+                    raise HTTPException(401, "缺少有效防重放 Nonce（需至少 16 字符）")
+
+                now = time.time()
+                # 内存快速去重与 TTL 清理
+                self._seen_nonces = {k: exp for k, exp in self._seen_nonces.items() if exp > now}
+                if nonce in self._seen_nonces:
+                    raise HTTPException(401, "认证请求重放（Nonce 已被使用）")
+
+                # 持久化存储去重校验
+                if self.storage is not None:
+                    record_fn = getattr(self.storage, "record_and_check_nonce", None)
+                    if record_fn is not None:
+                        ok = record_fn(nonce, tenant, user, float(ts_val) + max_skew)
+                        if not ok:
+                            raise HTTPException(401, "认证请求重放（Nonce 已被使用）")
+                self._seen_nonces[nonce] = float(ts_val) + max_skew
+
+                # 提取 query 与 body 摘要
+                raw_query = request.scope.get("query_string", b"").decode("utf-8")
+                body_sha = request.headers.get("X-Content-SHA256", "").strip()
+                if not body_sha:
+                    body_sha = EMPTY_BODY_SHA256
+
+                expected = compute_auth_signature_v2(
+                    key=key,
+                    method=request.method,
+                    path=request.url.path,
+                    query=raw_query,
+                    user=user,
+                    roles=roles_raw,
+                    tenant=tenant,
+                    timestamp=ts_raw,
+                    nonce=nonce,
+                    body_sha256=body_sha,
+                )
+                if not sig or not hmac.compare_digest(sig, expected):
+                    raise HTTPException(401, "认证签名无效")
+            else:
+                # V1 模式校验
+                if self._auth_version == "2" or os.environ.get("CONTRACT_KB_AUTH_VERSION") == "2":
+                    raise HTTPException(401, "系统已启用签名 V2 强制模式，拒绝 V1 签名（缺少 Nonce/版本）")
+
+                require_ts = (
+                    os.environ.get("CONTRACT_KB_REQUIRE_AUTH_TIMESTAMP", "0") == "1"
+                    or config.REQUIRE_AUTH_TIMESTAMP
+                )
+                if require_ts and not ts_raw:
+                    raise HTTPException(401, "缺少认证时间戳 X-Auth-Timestamp")
+                if ts_raw:
+                    try:
+                        ts_val = float(ts_raw)
+                    except ValueError as exc:
+                        raise HTTPException(401, "认证时间戳格式非法") from exc
+                    max_skew = int(
+                        os.environ.get(
+                            "CONTRACT_KB_AUTH_MAX_SKEW_SECONDS",
+                            str(config.AUTH_MAX_SKEW_SECONDS),
+                        )
+                    )
+                    if abs(time.time() - ts_val) > max_skew:
+                        raise HTTPException(401, "认证时间戳超出防重放窗口")
+                    msg = f"{user}|{roles_raw}|{tenant}|{ts_raw}".encode()
+                else:
+                    msg = f"{user}|{roles_raw}|{tenant}".encode()
+
+                expected = hmac.new(key.encode(), msg, "sha256").hexdigest()
+                if not sig or not hmac.compare_digest(sig, expected):
+                    raise HTTPException(401, "认证签名无效")
         else:
             client = request.client.host if request.client else None
             if client not in ("127.0.0.1", "::1", "testclient"):

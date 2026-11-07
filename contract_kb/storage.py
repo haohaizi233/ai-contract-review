@@ -199,6 +199,15 @@ CREATE TABLE IF NOT EXISTS request_idempotency (
 );
 CREATE INDEX IF NOT EXISTS idx_req_idem_lookup
     ON request_idempotency (tenant_id, resource_id);
+CREATE TABLE IF NOT EXISTS auth_replay_nonces (
+    nonce TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    user_id TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_auth_nonces_expiry
+    ON auth_replay_nonces(expires_at);
 """
 
 _CLEAN_RE = re.compile(r"[\s\u3000，。；：、“”‘’（）()《》\-—_/%‰]")
@@ -413,6 +422,20 @@ class Storage:
         )
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_req_idem_lookup ON request_idempotency (tenant_id, resource_id)"
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_replay_nonces (
+                nonce TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL DEFAULT 'default',
+                user_id TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL
+            )
+            """
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_auth_nonces_expiry ON auth_replay_nonces(expires_at)"
         )
         self.conn.commit()
 
@@ -2118,3 +2141,24 @@ class Storage:
                     (status, now, t_id, resource_id),
                 )
             self._commit()
+
+    def record_and_check_nonce(
+        self, nonce: str, tenant_id: str, user_id: str, expires_at: float
+    ) -> bool:
+        """记录并校验防重放 Nonce（返回 True 表示首次使用，False 表示重放冲突）。"""
+        now = time.time()
+        with self._lock:
+            try:
+                self.conn.execute("DELETE FROM auth_replay_nonces WHERE expires_at < ?", (now,))
+            except Exception:
+                pass
+            try:
+                self.conn.execute(
+                    "INSERT INTO auth_replay_nonces (nonce, tenant_id, user_id, created_at, expires_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (nonce, tenant_id, user_id, now, expires_at),
+                )
+                self._commit()
+                return True
+            except sqlite3.IntegrityError:
+                return False

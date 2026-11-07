@@ -2316,3 +2316,25 @@ class PgVectorStorage:
             except Exception:
                 self._rollback()
                 raise
+
+    def record_and_check_nonce(
+        self, nonce: str, tenant_id: str, user_id: str, expires_at: float
+    ) -> bool:
+        """记录并校验防重放 Nonce（PostgreSQL）。"""
+        now_ts = datetime.fromtimestamp(time.time(), tz=timezone.utc)
+        exp_ts = datetime.fromtimestamp(expires_at, tz=timezone.utc)
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute("DELETE FROM auth_replay_nonces WHERE expires_at < %s", (now_ts,))
+                    cur.execute(
+                        "INSERT INTO auth_replay_nonces (nonce, tenant_id, user_id, created_at, expires_at) "
+                        "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (nonce) DO NOTHING",
+                        (nonce, tenant_id, user_id, now_ts, exp_ts),
+                    )
+                    rc = cur.rowcount
+                self._commit()
+                return rc > 0
+            except Exception:
+                self._rollback()
+                raise
