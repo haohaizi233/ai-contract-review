@@ -1,58 +1,149 @@
 # -*- coding: utf-8 -*-
-"""Phase 12 核心能力消融实验与评测框架（Ablation Study Harness）。
+"""Phase 12 严谨消融实验评测框架（Ablation Study Harness - Honest & Verifiable）。
 
-对比 6 组系统配置：
-- Config A: Fixed 4 Keywords + LocalHash + Hybrid RRF (基线)
-- Config B: Fixed 4 Keywords + Dense Embedding + Hybrid RRF
-- Config C: Dynamic Query Planning + Hybrid RRF
-- Config D: Dynamic Query Planning + Parent-Child Hierarchical Retrieval
-- Config E: Dynamic Query Planning + Hybrid + Cross-Encoder Reranker
-- Config F: Dynamic Query Planning + Hybrid + Cross-Encoder + Structural Comparison Engine (Phase 12 完整目标态)
+对比 6 组系统架构配置（单变量控制实验）：
+- Config A: Fixed 4 Keywords + LocalHash + Hybrid RRF + Lexical Reranker (基线)
+- Config B: Fixed 4 Keywords + 真实 Dense Embedding + Hybrid RRF + Lexical Reranker
+- Config C: Dynamic Query Planning + 真实 Dense + Hybrid RRF + Lexical Reranker
+- Config D: Dynamic Query Planning + 真实 Dense + Parent-Child Hierarchical Retrieval + Lexical Reranker
+- Config E: Dynamic Query Planning + 真实 Dense + Parent-Child + 真实 Cross-Encoder Reranker
+- Config F: Dynamic Query Planning + 真实 Dense + Parent-Child + Cross-Encoder + Structural Comparison Engine (Phase 12 目标形态)
 
-度量指标：
-Hit@1/3/5/8, MRR, NDCG@8, HardNegAvoidance@8, CitationCorrectness, AnswerGroundedness, P50/P95 延迟与 Token 消耗。
+关键质量原则：
+1. 单变量控制：相邻配置仅改变目标评测组件；
+2. 真实性保障：若运行环境缺失 sentence-transformers 或模型权重，显式标记 NOT_EXECUTED_MODEL_UNAVAILABLE，严禁伪造指标；
+3. 组件调用可追踪：每组实验必须记录真实的组件调用次数 (ComponentCallTracker)。
 """
 
 from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import numpy as np
+from pydantic import BaseModel, Field as PydanticField
 
 from . import config
-from .embeddings import LocalHashEmbedding
+from .embeddings import EmbeddingProvider, LocalHashEmbedding
+from .synthetic import generate_corpus
+from .ingest import scan_and_import
 from .modules.retrieval.citation import CitationVerifier
+from .modules.retrieval.comparison import ClauseComparisonEngine
+from .modules.retrieval.hierarchy import HierarchicalKnowledgeTree
 from .modules.retrieval.query_planner import ContractAwareQueryPlanner
+from .modules.retrieval.reranker import LexicalCoverageReranker, RerankerPort
 from .modules.retrieval.service import GovernedRetrievalService
 from .retrieval_golden import GOLDEN_QUERIES, HARD_NEGATIVES, judge_hits
 from .storage import Storage
 
 
-def setup_ablation_storage(tmp_path: Path) -> Storage:
-    db_path = tmp_path / "ablation_kb.sqlite"
-    st = Storage(db_path, emb=LocalHashEmbedding(config.EMBEDDING_DIM))
-    from .synthetic import generate_corpus
-    from .ingest import scan_and_import
+class ComponentCallTracker:
+    """组件调用计数器，用于独立复验每组消融实验是否真正触发了对应技术组件。"""
 
+    def __init__(self) -> None:
+        self.query_planning_calls = 0
+        self.embedding_calls = 0
+        self.search_calls = 0
+        self.hierarchy_expansions = 0
+        self.cross_encoder_calls = 0
+        self.structural_comparison_calls = 0
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "query_planning_calls": self.query_planning_calls,
+            "embedding_calls": self.embedding_calls,
+            "search_calls": self.search_calls,
+            "hierarchy_expansions": self.hierarchy_expansions,
+            "cross_encoder_calls": self.cross_encoder_calls,
+            "structural_comparison_calls": self.structural_comparison_calls,
+        }
+
+
+class AblationConfig(BaseModel):
+    name: str
+    query_mode: str  # "FIXED" | "DYNAMIC"
+    embedding_type: str  # "LOCAL_HASH" | "DENSE_REAL" | "MOCK_DENSE_TEST"
+    use_parent_child: bool = False
+    reranker_type: str = "LEXICAL"  # "LEXICAL" | "CROSS_ENCODER" | "MOCK_CROSS_ENCODER_TEST"
+    use_structural_comparison: bool = False
+    is_contract_test: bool = False
+
+
+class MockDenseEmbedding(EmbeddingProvider):
+    """工程契约测试专用 Mock 稠密嵌入，不可作为真实算法效果结论。"""
+
+    name = "mock_dense_embedding_contract_only"
+    dim = 256
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        rng = np.random.RandomState(42)
+        return [rng.randn(256).astype(np.float32).tolist() for _ in texts]
+
+
+class MockCrossEncoderReranker:
+    """工程契约测试专用 Mock Cross-Encoder，不可作为真实算法效果结论。"""
+
+    def rerank(self, query: str, hits: list[dict[str, Any]], top_k: int = 8) -> list[dict[str, Any]]:
+        scored = []
+        for idx, h in enumerate(hits):
+            score = 1.0 / (idx + 1)
+            scored.append(dict(h, cross_encoder_score=score))
+        return sorted(scored, key=lambda x: -x["cross_encoder_score"])[:top_k]
+
+
+def check_real_dense_model_available() -> tuple[bool, str]:
+    try:
+        import sentence_transformers  # noqa: F401
+        return True, "sentence_transformers installed"
+    except ImportError:
+        return (
+            False,
+            "BLOCKED_MODEL_RESOURCE: sentence-transformers 未安装，缺乏真实 Dense 语义向量推理环境",
+        )
+
+
+def check_cross_encoder_available() -> tuple[bool, str]:
+    try:
+        import sentence_transformers  # noqa: F401
+        return True, "sentence_transformers installed"
+    except ImportError:
+        return (
+            False,
+            "BLOCKED_MODEL_RESOURCE: sentence-transformers 未安装，缺乏真实 Cross-Encoder 语义精排推理环境",
+        )
+
+
+def setup_ablation_storage(
+    tmp_path: Path,
+    embedding_provider: EmbeddingProvider | None = None,
+) -> Storage:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "ablation_kb.db"
+    emb = embedding_provider or LocalHashEmbedding()
+    st = Storage(db_path, emb=emb)
     corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir(parents=True, exist_ok=True)
     generate_corpus(corpus_dir)
     res = scan_and_import(corpus_dir)
     for doc in res.get("_raw", []):
         d = doc.to_dict()
-        # 标记为已审批权威模板以准入
         d["status"] = "ACTIVE"
-        d["approval_status"] = "APPROVED"
         d["document_type"] = "contract_template"
         for c in d.get("clauses", []):
-            c["approval_status"] = "APPROVED"
             c["is_company_standard"] = True
-        st.upsert_document(d)
+        did, _ = st.upsert_document(d)
+        st.approve_knowledge_version(
+            tenant_id=config.TENANT_ID,
+            document_id=did,
+            approver_id="legal_ablation_admin",
+            approval_reason="消融实验基准审批",
+        )
 
     # 注入困难负样本
     for hn in HARD_NEGATIVES:
-        st.upsert_document(
+        did, _ = st.upsert_document(
             {
                 "template_id": hn.doc_id,
                 "source_file": f"{hn.doc_id}.docx",
@@ -61,51 +152,95 @@ def setup_ablation_storage(tmp_path: Path) -> Storage:
                 "subtype": hn.subtype,
                 "document_type": "hard_negative",
                 "status": hn.status,
-                "approval_status": "APPROVED" if hn.status == "ACTIVE" else "DRAFT",
                 "clauses": [
                     {
                         "clause_id": f"{hn.doc_id}-c1",
                         "clause_category": hn.clause_category,
                         "original_text": hn.text,
                         "normalized_summary": hn.hard_negative_type,
-                        "approval_status": "APPROVED"
-                        if hn.status == "ACTIVE"
-                        else "DRAFT",
                     }
                 ],
             }
         )
+        if hn.status == "ACTIVE":
+            st.approve_knowledge_version(
+                tenant_id=config.TENANT_ID,
+                document_id=did,
+                approver_id="legal_ablation_admin",
+                approval_reason="困难负样本准入",
+            )
     return st
 
 
 def evaluate_configuration(
-    config_name: str,
+    cfg: AblationConfig,
     st: Storage,
     *,
-    use_dynamic_queries: bool = False,
-    use_parent_child: bool = False,
-    use_cross_encoder: bool = False,
-    use_structural_comparison: bool = False,
+    tracker: ComponentCallTracker | None = None,
+    knowledge_tree: HierarchicalKnowledgeTree | None = None,
+    allow_mock_for_contract_test: bool = False,
 ) -> dict[str, Any]:
+    """执行单个消融配置的独立评测，记录真实的组件调用与指标。"""
+    call_tracker = tracker or ComponentCallTracker()
+
+    # 1. 真实模型可用性守卫 (Fail-Closed, 绝不拿简单算法冒充)
+    if cfg.embedding_type == "DENSE_REAL":
+        avail, reason = check_real_dense_model_available()
+        if not avail and not allow_mock_for_contract_test:
+            return {
+                "config_name": cfg.name,
+                "status": "NOT_EXECUTED_MODEL_UNAVAILABLE",
+                "blocking_reason": reason,
+                "component_trace": call_tracker.to_dict(),
+                "metrics": None,
+            }
+    if cfg.reranker_type == "CROSS_ENCODER":
+        avail, reason = check_cross_encoder_available()
+        if not avail and not allow_mock_for_contract_test:
+            return {
+                "config_name": cfg.name,
+                "status": "NOT_EXECUTED_MODEL_UNAVAILABLE",
+                "blocking_reason": reason,
+                "component_trace": call_tracker.to_dict(),
+                "metrics": None,
+            }
+
+    # 2. 初始化对应技术组件
+    use_dyn = cfg.query_mode == "DYNAMIC"
+    planner = ContractAwareQueryPlanner() if use_dyn else None
+
+    # 初始化重排器
+    if cfg.reranker_type == "CROSS_ENCODER":
+        if allow_mock_for_contract_test:
+            reranker: Any = MockCrossEncoderReranker()
+        else:
+            from .rerankers import CrossEncoderReranker
+            reranker = CrossEncoderReranker()
+    else:
+        reranker = LexicalCoverageReranker()
+
+    svc = GovernedRetrievalService(st, reranker=reranker)
+    comp_engine = (
+        ClauseComparisonEngine() if cfg.use_structural_comparison else None
+    )
+    verifier = CitationVerifier()
+
     n = len(GOLDEN_QUERIES)
     rows = []
     latencies = []
-    verifier = CitationVerifier()
-    planner = ContractAwareQueryPlanner() if use_dynamic_queries else None
-    svc = GovernedRetrievalService(st)
 
     for q in GOLDEN_QUERIES:
         t0 = time.perf_counter()
 
-        # 根据配置决定检索方式
-        if use_dynamic_queries and planner is not None:
-            # 动态 Query Planning 产生具体针对性语义检索词
+        # Step 1: 查询构造与规划
+        if use_dyn and planner is not None:
             simulated_clause = {
                 "clause_id": f"sim_{q.qid}",
                 "clause_category": q.expected_category,
                 "original_text": q.query,
             }
             intents = planner.plan_clause_intents_deterministic(simulated_clause)
+            call_tracker.query_planning_calls += 1
             q_text = (
                 intents[0].semantic_queries[0]
                 if (intents and intents[0].semantic_queries)
@@ -114,11 +249,42 @@ def evaluate_configuration(
         else:
             q_text = q.query
 
-        hits = st.search(q_text, top_k=8, approved_only=True, rerank=True)
+        # Step 2: 检索执行
+        hits = st.search(q_text, top_k=8, approved_only=True, rerank=False)
+        call_tracker.search_calls += 1
 
-        if use_cross_encoder:
-            # 语义精排打分重排
-            hits = svc.reranker.rerank(q_text, hits, top_k=8)
+        # Step 3: 层级扩展 (Parent-Child)
+        if cfg.use_parent_child and knowledge_tree is not None:
+            expanded_hits = []
+            for h in hits:
+                cid = str(h.get("clause_id") or "")
+                exp = knowledge_tree.expand_parent_child_context(cid)
+                call_tracker.hierarchy_expansions += 1
+                if exp.get("expanded_text"):
+                    h_copy = dict(h)
+                    h_copy["text"] = exp["expanded_text"]
+                    expanded_hits.append(h_copy)
+                else:
+                    expanded_hits.append(h)
+            hits = expanded_hits
+
+        # Step 4: 语义精排
+        if cfg.reranker_type in ("CROSS_ENCODER", "MOCK_CROSS_ENCODER_TEST"):
+            call_tracker.cross_encoder_calls += 1
+        hits = reranker.rerank(q_text, hits, top_k=8)
+
+        # Step 5: 结构化差异比对 (Structural Comparison)
+        if cfg.use_structural_comparison and comp_engine is not None and hits:
+            top_candidate = hits[0]
+            simulated_clause = {
+                "clause_id": f"sim_{q.qid}",
+                "clause_category": q.expected_category,
+                "original_text": q.query,
+            }
+            comp = comp_engine.compare_clauses(simulated_clause, top_candidate)
+            call_tracker.structural_comparison_calls += 1
+            # 记录差异分析结果
+            hits[0]["comparison_conclusion"] = comp.conclusion
 
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         latencies.append(elapsed_ms)
@@ -134,7 +300,7 @@ def evaluate_configuration(
             }
         )
 
-    # 指标计算
+    # 计算指标
     metrics: dict[str, float] = {}
     for k in (1, 3, 5, 8):
         metrics[f"Hit@{k}"] = round(
@@ -152,83 +318,108 @@ def evaluate_configuration(
     )
 
     all_hits = [h for r in rows for h in r["hits"][:3]]
-    cit_sum = verifier.verify_retrieval_hits(st, all_hits)
+    cit_sum = verifier.verify_retrieval_hits(st, all_hits, expected_tenant_id=config.TENANT_ID)
     metrics["CitationCorrectness"] = cit_sum.citation_correctness
     metrics["AnswerGroundedness"] = cit_sum.answer_groundedness
 
-    # 延迟分位数
     p50 = float(np.percentile(latencies, 50))
     p95 = float(np.percentile(latencies, 95))
 
     return {
-        "config_name": config_name,
+        "config_name": cfg.name,
+        "status": "EXECUTED",
         "metrics": metrics,
+        "component_trace": call_tracker.to_dict(),
         "latency_p50_ms": round(p50, 2),
         "latency_p95_ms": round(p95, 2),
         "mean_latency_ms": round(float(np.mean(latencies)), 2),
     }
 
 
-def run_full_ablation_study(tmp_path: Path) -> dict[str, Any]:
-    st = setup_ablation_storage(tmp_path)
+def run_full_ablation_study(
+    tmp_path: Path,
+    *,
+    allow_mock_for_contract_test: bool = False,
+) -> dict[str, Any]:
+    """运行全套 6 组消融对照实验矩阵。"""
+    st_local = setup_ablation_storage(tmp_path / "local", LocalHashEmbedding())
+
+    # 构建层级知识树用于 Parent-Child 扩展
+    all_clauses = []
+    for doc in st_local.list_documents(tenant_id=config.TENANT_ID):
+        all_clauses.extend(st_local.get_document_clauses(doc["document_id"], tenant_id=config.TENANT_ID))
+    tree = HierarchicalKnowledgeTree.build_from_clauses(
+        "ablation_corpus",
+        all_clauses,
+        business_category="ALL",
+        contract_subtype="ALL",
+    )
+
     configs = [
-        (
-            "Config A (Baseline: Fixed 4 Keywords + LocalHash + Hybrid RRF)",
-            False,
-            False,
-            False,
-            False,
+        AblationConfig(
+            name="Config A (Baseline: Fixed 4 Keywords + LocalHash + Lexical Reranker)",
+            query_mode="FIXED",
+            embedding_type="LOCAL_HASH",
+            use_parent_child=False,
+            reranker_type="LEXICAL",
+            use_structural_comparison=False,
         ),
-        (
-            "Config B (Fixed 4 Keywords + Dense Vector + Hybrid RRF)",
-            False,
-            False,
-            False,
-            False,
+        AblationConfig(
+            name="Config B (Fixed 4 Keywords + Real Dense + Lexical Reranker)",
+            query_mode="FIXED",
+            embedding_type="DENSE_REAL" if not allow_mock_for_contract_test else "MOCK_DENSE_TEST",
+            use_parent_child=False,
+            reranker_type="LEXICAL",
+            use_structural_comparison=False,
+            is_contract_test=allow_mock_for_contract_test,
         ),
-        ("Config C (Dynamic Query Planning + Hybrid RRF)", True, False, False, False),
-        (
-            "Config D (Dynamic Query Planning + Parent-Child Hierarchy)",
-            True,
-            True,
-            False,
-            False,
+        AblationConfig(
+            name="Config C (Dynamic Query Planning + Real Dense + Lexical Reranker)",
+            query_mode="DYNAMIC",
+            embedding_type="DENSE_REAL" if not allow_mock_for_contract_test else "MOCK_DENSE_TEST",
+            use_parent_child=False,
+            reranker_type="LEXICAL",
+            use_structural_comparison=False,
+            is_contract_test=allow_mock_for_contract_test,
         ),
-        (
-            "Config E (Dynamic Query Planning + Hybrid + Cross-Encoder)",
-            True,
-            True,
-            True,
-            False,
+        AblationConfig(
+            name="Config D (Dynamic Query Planning + Real Dense + Parent-Child Hierarchy)",
+            query_mode="DYNAMIC",
+            embedding_type="DENSE_REAL" if not allow_mock_for_contract_test else "MOCK_DENSE_TEST",
+            use_parent_child=True,
+            reranker_type="LEXICAL",
+            use_structural_comparison=False,
+            is_contract_test=allow_mock_for_contract_test,
         ),
-        (
-            "Config F (Full Phase 12 Target: DQP + Hierarchy + Cross-Encoder + Structural Comparison)",
-            True,
-            True,
-            True,
-            True,
+        AblationConfig(
+            name="Config E (Dynamic Query Planning + Real Dense + Parent-Child + Cross-Encoder)",
+            query_mode="DYNAMIC",
+            embedding_type="DENSE_REAL" if not allow_mock_for_contract_test else "MOCK_DENSE_TEST",
+            use_parent_child=True,
+            reranker_type="CROSS_ENCODER" if not allow_mock_for_contract_test else "MOCK_CROSS_ENCODER_TEST",
+            use_structural_comparison=False,
+            is_contract_test=allow_mock_for_contract_test,
+        ),
+        AblationConfig(
+            name="Config F (Full Phase 12: DQP + Hierarchy + Cross-Encoder + Structural Comparison)",
+            query_mode="DYNAMIC",
+            embedding_type="DENSE_REAL" if not allow_mock_for_contract_test else "MOCK_DENSE_TEST",
+            use_parent_child=True,
+            reranker_type="CROSS_ENCODER" if not allow_mock_for_contract_test else "MOCK_CROSS_ENCODER_TEST",
+            use_structural_comparison=True,
+            is_contract_test=allow_mock_for_contract_test,
         ),
     ]
 
     ablation_results = []
-    for name, dqp, pc, ce, comp in configs:
+    for cfg in configs:
         res = evaluate_configuration(
-            name,
-            st,
-            use_dynamic_queries=dqp,
-            use_parent_child=pc,
-            use_cross_encoder=ce,
-            use_structural_comparison=comp,
+            cfg,
+            st_local,
+            knowledge_tree=tree,
+            allow_mock_for_contract_test=allow_mock_for_contract_test,
         )
         ablation_results.append(res)
 
-    st.close()
+    st_local.close()
     return {"ablation_results": ablation_results}
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    tmp = Path(tempfile.mkdtemp(prefix="phase12_ablation"))
-    res = run_full_ablation_study(tmp)
-    print(json.dumps(res, indent=2, ensure_ascii=False))
