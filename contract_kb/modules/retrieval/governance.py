@@ -11,7 +11,7 @@
 核心原则：
 - 严格 Fail-Closed：缺失元数据坚决阻断；
 - 审批状态绝不可由文档状态 (ACTIVE)、文件名或模板类型自动推断；
-- 历史案例严禁作为强制违规依据。
+- 历史案例与非强制参考法规严禁作为强制违规依据。
 """
 
 from __future__ import annotations
@@ -141,6 +141,8 @@ class KnowledgeGovernancePolicy:
         *,
         allow_historical_cases: bool = False,
         expected_tenant_id: str | None = None,
+        authoritative_only: bool = False,
+        target_knowledge_types: list[str] | set[str] | None = None,
     ) -> bool:
         """校验检索分块是否满足状态、审批与租户边界要求（Strict Fail-Closed）。"""
         raw_ktype = hit.get("knowledge_type")
@@ -150,6 +152,15 @@ class KnowledgeGovernancePolicy:
         desc = cls.descriptor_for(raw_ktype)
         if desc is None:
             return False
+
+        # 0. 权威性与目标知识类型过滤 (Fail-Closed)
+        if authoritative_only and not desc.can_drive_mandatory_finding:
+            return False
+
+        if target_knowledge_types is not None:
+            allowed_types = {str(t).strip().upper() for t in target_knowledge_types}
+            if desc.source_type.value not in allowed_types:
+                return False
 
         # 1. 文档生命周期校验：必须明确存在且必须为 ACTIVE，严禁缺省默认放行 (Fail-Closed)
         raw_doc_status = (

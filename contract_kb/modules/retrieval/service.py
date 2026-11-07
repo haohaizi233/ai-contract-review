@@ -13,6 +13,52 @@ from .governance import KnowledgeGovernancePolicy, KnowledgeSourceType
 from .query_planner import ContractAwareQueryPlanner, RetrievalIntent
 from .reranker import LexicalCoverageReranker, RerankerPort, reciprocal_rank_fusion
 
+import time
+from collections import defaultdict
+
+
+@dataclass
+class RetrievalExecutionBudget:
+    """检索端到端真实调用预算与计数追踪器。"""
+
+    max_total_intents: int = 24
+    max_search_calls: int = 60
+    max_embedding_calls: int = 30
+    max_rerank_calls: int = 30
+    deadline_seconds: float = 10.0
+    start_time: float = field(default_factory=time.time)
+
+    # 实际调用统计追踪
+    total_intents_executed: int = 0
+    actual_search_calls: int = 0
+    actual_embedding_calls: int = 0
+    actual_rerank_calls: int = 0
+    is_budget_exhausted: bool = False
+
+    def can_proceed_search(self) -> bool:
+        if self.actual_search_calls >= self.max_search_calls:
+            self.is_budget_exhausted = True
+            return False
+        if time.time() - self.start_time > self.deadline_seconds:
+            self.is_budget_exhausted = True
+            return False
+        return True
+
+    def record_search_call(self) -> None:
+        self.actual_search_calls += 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "max_total_intents": self.max_total_intents,
+            "max_search_calls": self.max_search_calls,
+            "actual_search_calls": self.actual_search_calls,
+            "total_intents_executed": self.total_intents_executed,
+            "is_budget_exhausted": self.is_budget_exhausted,
+            "elapsed_seconds": round(time.time() - self.start_time, 4),
+        }
+
+
+
 
 @dataclass
 class GovernedRetrievalBundle:
@@ -21,6 +67,7 @@ class GovernedRetrievalBundle:
     authoritative_hits: list[dict[str, Any]] = field(default_factory=list)
     historical_reference_hits: list[dict[str, Any]] = field(default_factory=list)
     citation_summary: CitationVerificationSummary | None = None
+    execution_budget: dict[str, Any] | None = None
 
     def all_prompt_context(self) -> list[dict[str, Any]]:
         """合并为带权威标识的 Prompt 参考列表（权威条款在前，历史参考在后）。"""
@@ -40,6 +87,7 @@ class EvidenceBundle:
     cross_referenced_clauses: list[dict[str, Any]] = field(default_factory=list)
     historical_cases: list[dict[str, Any]] = field(default_factory=list)
     citation_summary: CitationVerificationSummary | None = None
+    execution_budget: dict[str, Any] | None = None
 
     def prompt_context_text(self) -> str:
         """为下游大模型与差异对比引擎生成可验证的提示词证据片段。"""
@@ -86,6 +134,7 @@ class EvidenceBundle:
             "citation_summary": (
                 asdict(self.citation_summary) if self.citation_summary else None
             ),
+            "execution_budget": self.execution_budget,
         }
 
 
@@ -139,6 +188,8 @@ class GovernedRetrievalService:
                 h,
                 allow_historical_cases=False,
                 expected_tenant_id=tenant_id,
+                authoritative_only=True,
+                target_knowledge_types={"TEMPLATE", "APPROVED_RULE"},
             )
         ]
         return self.reranker.rerank(query, admissible, top_k=top_k)
@@ -236,53 +287,95 @@ class GovernedRetrievalService:
         *,
         top_k: int = 3,
         tenant_id: str | None = None,
+        budget: RetrievalExecutionBudget | None = None,
     ) -> list[dict[str, Any]]:
-        """依据强类型检索意图执行多路检索（词法 Channel A + 语义 Channel B + 跨引用 Channel D）。"""
+        """依据强类型检索意图执行独立通道多路检索与调用预算控制（Channel A / B / D）。"""
         candidate_lists: list[list[dict[str, Any]]] = []
 
-        # Channel A: Lexical queries
+        # Channel A: Lexical queries (FTS5 / PG FTS)
         for lq in intent.lexical_queries[:2]:
-            hits = self.storage.search(
-                lq,
-                top_k=top_k * 2,
-                business_category=intent.contract_category,
-                contract_subtype=intent.contract_subtype,
-                approved_only=True,
-                rerank=False,
-                tenant_id=tenant_id,
-            )
+            if budget and not budget.can_proceed_search():
+                break
+            if hasattr(self.storage, "search_lexical_candidates"):
+                hits = self.storage.search_lexical_candidates(
+                    lq,
+                    top_k=top_k * 2,
+                    business_category=intent.contract_category,
+                    contract_subtype=intent.contract_subtype,
+                    approved_only=True,
+                    tenant_id=tenant_id,
+                )
+            else:
+                hits = self.storage.search(
+                    lq,
+                    top_k=top_k * 2,
+                    business_category=intent.contract_category,
+                    contract_subtype=intent.contract_subtype,
+                    approved_only=True,
+                    rerank=False,
+                    tenant_id=tenant_id,
+                )
+            if budget:
+                budget.record_search_call()
             if hits:
                 candidate_lists.append(hits)
 
-        # Channel B: Semantic queries
+        # Channel B: Semantic queries (Dense Embedding)
         for sq in intent.semantic_queries[:2]:
-            hits = self.storage.search(
-                sq,
-                top_k=top_k * 2,
-                business_category=intent.contract_category,
-                contract_subtype=intent.contract_subtype,
-                approved_only=True,
-                rerank=False,
-                tenant_id=tenant_id,
-            )
+            if budget and not budget.can_proceed_search():
+                break
+            if hasattr(self.storage, "search_dense_candidates"):
+                hits = self.storage.search_dense_candidates(
+                    sq,
+                    top_k=top_k * 2,
+                    business_category=intent.contract_category,
+                    contract_subtype=intent.contract_subtype,
+                    approved_only=True,
+                    tenant_id=tenant_id,
+                )
+            else:
+                hits = self.storage.search(
+                    sq,
+                    top_k=top_k * 2,
+                    business_category=intent.contract_category,
+                    contract_subtype=intent.contract_subtype,
+                    approved_only=True,
+                    rerank=False,
+                    tenant_id=tenant_id,
+                )
+            if budget:
+                budget.record_search_call()
             if hits:
                 candidate_lists.append(hits)
 
         # Channel D: Referenced clauses (e.g. 第十二条)
         for ref in intent.referenced_clauses[:2]:
-            hits = self.storage.search(
-                ref,
-                top_k=top_k,
-                clause_number=ref,
-                approved_only=True,
-                rerank=False,
-                tenant_id=tenant_id,
-            )
+            if budget and not budget.can_proceed_search():
+                break
+            if hasattr(self.storage, "search_structured_candidates"):
+                hits = self.storage.search_structured_candidates(
+                    ref,
+                    top_k=top_k,
+                    business_category=intent.contract_category,
+                    contract_subtype=intent.contract_subtype,
+                    approved_only=True,
+                    tenant_id=tenant_id,
+                )
+            else:
+                hits = self.storage.search(
+                    ref,
+                    top_k=top_k,
+                    clause_number=ref,
+                    approved_only=True,
+                    rerank=False,
+                    tenant_id=tenant_id,
+                )
+            if budget:
+                budget.record_search_call()
             if hits:
                 candidate_lists.append(hits)
 
-        if not candidate_lists:
-            # 兜底查询
+        if not candidate_lists and (not budget or budget.can_proceed_search()):
             primary_q = (
                 intent.semantic_queries[0]
                 if intent.semantic_queries
@@ -299,12 +392,14 @@ class GovernedRetrievalService:
                 rerank=False,
                 tenant_id=tenant_id,
             )
+            if budget:
+                budget.record_search_call()
             candidate_lists.append(hits)
 
         # RRF 融合多路结果
         fused = reciprocal_rank_fusion(candidate_lists, rrf_k=60)
 
-        # 严格执行治理准入过滤
+        # 严格执行治理准入过滤与目标知识类型校验 (Fail-Closed)
         admissible = [
             KnowledgeGovernancePolicy.annotate_hit(h)
             for h in fused
@@ -312,6 +407,7 @@ class GovernedRetrievalService:
                 h,
                 allow_historical_cases=False,
                 expected_tenant_id=tenant_id,
+                target_knowledge_types=intent.target_knowledge_types,
             )
         ]
 
@@ -332,22 +428,31 @@ class GovernedRetrievalService:
         contract_subtype: str | None = None,
         planner: ContractAwareQueryPlanner | None = None,
         knowledge_tree: Any | None = None,
+        pre_planned_intents: list[RetrievalIntent] | None = None,
+        budget: RetrievalExecutionBudget | None = None,
     ) -> EvidenceBundle:
         """为单条待审条款执行完整的证据检索、上下文扩展与引文核验，输出结构化 EvidenceBundle。"""
         cid = str(clause.get("clause_id") or "unknown")
-        p = planner or ContractAwareQueryPlanner()
-        intents = p.plan_clause_intents_deterministic(
-            clause,
-            contract_category=contract_category,
-            contract_subtype=contract_subtype,
-        )
+        if pre_planned_intents is not None:
+            intents = pre_planned_intents
+        else:
+            p = planner or ContractAwareQueryPlanner()
+            intents = p.plan_clause_intents_deterministic(
+                clause,
+                contract_category=contract_category,
+                contract_subtype=contract_subtype,
+            )
 
         all_auth_hits: list[dict[str, Any]] = []
         cross_ref_hits: list[dict[str, Any]] = []
         seen_cids: set[str] = set()
 
         for intent in intents:
-            hits = self.retrieve_for_intent(intent, top_k=top_k, tenant_id=tenant_id)
+            if budget:
+                budget.total_intents_executed += 1
+            hits = self.retrieve_for_intent(
+                intent, top_k=top_k, tenant_id=tenant_id, budget=budget
+            )
             for h in hits:
                 c_id = str(h.get("clause_id") or h.get("chunk_id") or "")
                 if c_id and c_id not in seen_cids:
@@ -402,6 +507,7 @@ class GovernedRetrievalService:
             cross_referenced_clauses=verified_cross[:2],
             historical_cases=[],
             citation_summary=summary,
+            execution_budget=budget.to_dict() if budget else None,
         )
 
     def retrieve_contract_evidence_bundles(
@@ -414,21 +520,27 @@ class GovernedRetrievalService:
         contract_subtype: str | None = None,
         planner: ContractAwareQueryPlanner | None = None,
         knowledge_tree: Any | None = None,
+        budget: RetrievalExecutionBudget | None = None,
     ) -> dict[str, EvidenceBundle]:
-        """批量为整份待审合同的所有条款生成结构化证据包字典（clause_id -> EvidenceBundle）。"""
+        """批量为整份待审合同的所有条款生成结构化证据包字典（按条款复用意图且受预算控制）。"""
         bundles: dict[str, EvidenceBundle] = {}
+        exec_budget = budget or RetrievalExecutionBudget()
         p = planner or ContractAwareQueryPlanner()
-        # 仅针对高风险或关键业务条款规划检索，其余留存轻量空包
+
+        # 1. 批量规划条款检索意图
         prioritized_intents = p.plan_intents_for_contract(
             clauses,
             contract_category=contract_category,
             contract_subtype=contract_subtype,
         )
-        planned_clause_ids = {i.source_clause_id for i in prioritized_intents}
+        intents_by_cid = defaultdict(list)
+        for i in prioritized_intents:
+            intents_by_cid[i.source_clause_id].append(i)
 
+        # 2. 复用意图执行受控检索
         for c in clauses:
             cid = str(c.get("clause_id") or "unknown")
-            if cid in planned_clause_ids:
+            if cid in intents_by_cid and exec_budget.can_proceed_search():
                 bundle = self.retrieve_for_clause(
                     c,
                     top_k=top_k_per_clause,
@@ -437,9 +549,14 @@ class GovernedRetrievalService:
                     contract_subtype=contract_subtype,
                     planner=p,
                     knowledge_tree=knowledge_tree,
+                    pre_planned_intents=intents_by_cid[cid],
+                    budget=exec_budget,
                 )
             else:
-                bundle = EvidenceBundle(target_clause_id=cid)
+                bundle = EvidenceBundle(
+                    target_clause_id=cid,
+                    execution_budget=exec_budget.to_dict(),
+                )
             bundles[cid] = bundle
         return bundles
 

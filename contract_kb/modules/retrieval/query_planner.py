@@ -115,6 +115,7 @@ class RetrievalIntent(BaseModel):
     generation_method: str = "deterministic_v1"
     confidence: float = 1.0
     priority: int = 100
+    llm_expansion_status: str | None = None
 
 
 class QueryPlanningBudget(BaseModel):
@@ -386,9 +387,10 @@ class ContractAwareQueryPlanner:
             config, "CONTRACT_KB_ALLOW_EXTERNAL_LLM", False
         )
         if not allow_ext or llm_provider is None:
+            for bi in base_intents:
+                bi.llm_expansion_status = "DISABLED_NO_AUTHORIZED_LLM"
             return base_intents
 
-        # 仅当已明确配置 LLM 时尝试调用模型，且输出必须严格经过 Schema 验证
         try:
             prompt = (
                 f"请将待审条款拆解为检索意图。只根据原文，不得虚构不存在的金额和期限：\n"
@@ -396,13 +398,32 @@ class ContractAwareQueryPlanner:
                 f"分类：{clause.get('clause_category', '')}"
             )
             resp = llm_provider.generate(prompt)
-            # 若 LLM 响应有效，验证并增补；若不可靠则回退 base_intents
-            if resp and isinstance(resp, str):
-                # 简单校验未凭空捏造金额
+            if resp and isinstance(resp, str) and len(resp.strip()) > 5:
+                cid = str(clause.get("clause_id") or "unknown")
+                llm_intent = RetrievalIntent(
+                    intent_id=f"intent_llm_{hashlib.sha1((cid + resp).encode()).hexdigest()[:12]}",
+                    source_clause_id=cid,
+                    intent_type="LLM_ASSISTED_EXPANDED_CHECK",
+                    contract_category=clause.get("clause_category"),
+                    lexical_queries=[w for w in re.findall(r"[\u4e00-\u9fff]{2,}", resp)][:3],
+                    semantic_queries=[resp[:60]],
+                    target_knowledge_types=["TEMPLATE", "APPROVED_RULE"],
+                    generation_method="llm_assisted_v1",
+                    confidence=0.9,
+                    priority=base_intents[0].priority if base_intents else 2,
+                    llm_expansion_status="SUCCESS",
+                )
+                for bi in base_intents:
+                    bi.llm_expansion_status = "SUCCESS"
+                return base_intents + [llm_intent]
+            else:
+                for bi in base_intents:
+                    bi.llm_expansion_status = "FALLBACK_INVALID_LLM_OUTPUT"
                 return base_intents
         except Exception:
+            for bi in base_intents:
+                bi.llm_expansion_status = "FALLBACK_INVALID_LLM_OUTPUT"
             return base_intents
-        return base_intents
 
     def plan_intents_for_contract(
         self,

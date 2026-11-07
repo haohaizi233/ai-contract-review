@@ -1116,6 +1116,125 @@ class PgVectorStorage:
                 fused = self._rerank(query, fused)
             return fused[:top_k]
 
+    def search_lexical_candidates(
+        self,
+        query: str,
+        top_k: int = 8,
+        business_category: str | None = None,
+        contract_subtype: str | None = None,
+        clause_number: str | None = None,
+        knowledge_type: str | None = None,
+        approved_only: bool = False,
+        tenant_id: str | None = None,
+    ) -> list[dict]:
+        """独立词法召回通道（Channel A: PG FTS）。"""
+        with self._lock:
+            try:
+                has_emb = self._has_embeddings_table()
+                hits = self._fts_search(
+                    query,
+                    top_k,
+                    business_category,
+                    contract_subtype,
+                    clause_number,
+                    knowledge_type,
+                    approved_only,
+                    tenant_id,
+                    use_embeddings_table=has_emb,
+                )
+                self._commit()
+                return hits[:top_k]
+            except Exception:
+                self._rollback()
+                raise
+
+    def search_dense_candidates(
+        self,
+        query: str,
+        top_k: int = 8,
+        business_category: str | None = None,
+        contract_subtype: str | None = None,
+        knowledge_type: str | None = None,
+        approved_only: bool = False,
+        tenant_id: str | None = None,
+    ) -> list[dict]:
+        """独立稠密语义召回通道（Channel B: pgvector 向量索引）。"""
+        with self._lock:
+            try:
+                has_emb = self._has_embeddings_table()
+                if not has_emb:
+                    return []
+                hits = self._vector_search(
+                    query,
+                    top_k,
+                    business_category,
+                    contract_subtype,
+                    knowledge_type,
+                    approved_only,
+                    tenant_id,
+                )
+                self._commit()
+                return hits[:top_k]
+            except Exception:
+                self._rollback()
+                raise
+
+    def search_structured_candidates(
+        self,
+        clause_number: str,
+        top_k: int = 4,
+        business_category: str | None = None,
+        contract_subtype: str | None = None,
+        approved_only: bool = False,
+        tenant_id: str | None = None,
+    ) -> list[dict]:
+        """独立结构化编号/元数据精确召回通道（Channel D: 条款号精确匹配）。"""
+        with self._lock:
+            try:
+                fsql, fparams = self._where(
+                    business_category,
+                    contract_subtype,
+                    None,
+                    approved_only,
+                    tenant_id,
+                )
+                sql = (
+                    "SELECT c.clause_id, c.document_id, c.original_text, c.clause_number, "
+                    "c.clause_category, e.chunk_id, e.business_category, e.contract_subtype, "
+                    "e.knowledge_type, e.approved_status, d.status AS doc_status, d.tenant_id "
+                    "FROM clauses c "
+                    "JOIN embeddings e ON e.clause_id=c.clause_id "
+                    "JOIN documents d ON d.document_id=c.document_id "
+                    "WHERE c.clause_number=%s" + fsql + " LIMIT %s"
+                )
+                with self.conn.cursor() as cur:
+                    cur.execute(sql, [clause_number] + fparams + [top_k])
+                    rows = cur.fetchall()
+                self._commit()
+                out = []
+                for r in rows:
+                    out.append(
+                        {
+                            "chunk_id": r["chunk_id"],
+                            "clause_id": r["clause_id"],
+                            "document_id": r["document_id"],
+                            "text": r["original_text"],
+                            "clause_number": r["clause_number"],
+                            "clause_category": r["clause_category"],
+                            "channel": "structured",
+                            "business_category": r["business_category"],
+                            "contract_subtype": r["contract_subtype"],
+                            "knowledge_type": r["knowledge_type"],
+                            "approved_status": r["approved_status"],
+                            "doc_status": r["doc_status"],
+                            "tenant_id": r["tenant_id"],
+                        }
+                    )
+                return out
+            except Exception:
+                self._rollback()
+                raise
+
     def _where(
         self,
         business_category: str | None,

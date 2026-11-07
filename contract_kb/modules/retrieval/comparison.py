@@ -81,6 +81,26 @@ class ClauseComparisonEngine:
         """使用 Decimal 进行金额、比率与期限的高精度比对。"""
         diffs: list[NumericDifference] = []
 
+        # 0. 提取具体金额
+        rev_money = re.findall(r"(?:人民币|RMB|¥)?\s*([\d,]+(?:\.\d+)?)\s*(?:元|圆整)", reviewed_text)
+        ref_money = re.findall(r"(?:人民币|RMB|¥)?\s*([\d,]+(?:\.\d+)?)\s*(?:元|圆整)", reference_text)
+        if rev_money and ref_money:
+            m_rev = self._parse_decimal_value(rev_money[0])
+            m_ref = self._parse_decimal_value(ref_money[0])
+            if m_rev is not None and m_ref is not None and m_rev != m_ref:
+                diffs.append(
+                    NumericDifference(
+                        constraint_type="MONEY",
+                        reviewed_value=float(m_rev),
+                        reference_value=float(m_ref),
+                        reviewed_unit="YUAN",
+                        reference_unit="YUAN",
+                        difference_magnitude=float(abs(m_rev - m_ref)),
+                        is_mismatch=True,
+                        description=f"金额差异：待审 {m_rev} 元 vs 标准 {m_ref} 元",
+                    )
+                )
+
         # 1. 提取费率/违约金率（统一折算为无量纲小数比对）
         rev_rate_m = re.search(r"(\d+(?:\.\d+)?)\s*(‰|%)", reviewed_text)
         ref_rate_m = re.search(r"(\d+(?:\.\d+)?)\s*(‰|%)", reference_text)
@@ -157,8 +177,8 @@ class ClauseComparisonEngine:
         reference_text: str,
     ) -> bool:
         """检测否定倒错（不得/严禁/禁止 vs 可以/应当/有权）。"""
-        prohibit_words = ("不得", "严禁", "禁止", "不可", "切勿")
-        allow_words = ("可以", "有权", "应当", "必须", "应", "得以")
+        prohibit_words = ("不得", "严禁", "禁止", "不可", "切勿", "无权")
+        allow_words = ("可以", "有权", "应当", "必须", "应", "得以", "准予")
 
         rev_has_prohibit = any(w in reviewed_text for w in prohibit_words)
         ref_has_prohibit = any(w in reference_text for w in prohibit_words)
@@ -171,6 +191,24 @@ class ClauseComparisonEngine:
         if ref_has_prohibit and not rev_has_prohibit and rev_has_allow:
             return True
         return False
+
+    def check_asymmetric_party_reversal(
+        self,
+        reviewed_text: str,
+        reference_text: str,
+    ) -> tuple[bool, str]:
+        """检测非对称保密/权属等法律义务主体倒错（如甲方披露/乙方保密 vs 乙方披露/甲方保密）。"""
+        patterns = [
+            (r"甲方.*?(?:披露|提供).*?乙方.*?(?:保密|承担保密义务)", r"乙方.*?(?:披露|提供).*?甲方.*?(?:保密|承担保密义务)"),
+            (r"乙方.*?(?:披露|提供).*?甲方.*?(?:保密|承担保密义务)", r"甲方.*?(?:披露|提供).*?乙方.*?(?:保密|承担保密义务)"),
+            (r"知识产权.*?(?:归|归属于).*?甲方", r"知识产权.*?(?:归|归属于).*?乙方"),
+            (r"知识产权.*?(?:归|归属于).*?乙方", r"知识产权.*?(?:归|归属于).*?甲方"),
+        ]
+        for p_rev, p_ref in patterns:
+            if re.search(p_rev, reviewed_text) and re.search(p_ref, reference_text):
+                return True, "非对称法律义务主体倒错"
+        return False, ""
+
 
     def compare_clauses(
         self,
@@ -206,6 +244,19 @@ class ClauseComparisonEngine:
             findings.append(
                 "【法律极性反转】待审条款与企业标准条款存在正负向禁止/许可倒错！"
             )
+
+        # 1.1 非对称主体倒错检查
+        is_asym, asym_desc = self.check_asymmetric_party_reversal(rev_text, ref_text)
+        if is_asym:
+            conclusions.append("SUBJECT_DIFFERENCE")
+            findings.append(f"【主体倒错】{asym_desc}")
+
+        # 1.2 例外但书不对称检查（如“除非经甲方书面同意” vs “不得”）
+        rev_has_exception = bool(re.search(r"除非|除.*?外|但书|若经.*?同意", rev_text))
+        ref_has_exception = bool(re.search(r"除非|除.*?外|但书|若经.*?同意", ref_text))
+        if rev_has_exception != ref_has_exception:
+            conclusions.append("EXCEPTION_DIFFERENCE")
+            findings.append("【例外条件不对称】待审条款与企业标准条款关于免责例外条件的约定不一致！")
 
         # 2. 数值精度检查 (Numeric Differences)
         num_diffs = self.compare_numerics(rev_text, ref_text)
