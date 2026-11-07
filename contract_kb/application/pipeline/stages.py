@@ -879,23 +879,28 @@ class VerifyEvidenceStage(ReviewStage):
                 if matched_clause and matched_clause.get("source_node_ids"):
                     ref.node_ids = list(matched_clause["source_node_ids"])
                     ref.clause_number = matched_clause.get("clause_number")
+                    ref.exact_quote = quote
+                    f.citation_status = "VERIFIED"
                     bound_from_quote += 1
                 else:
                     f.source_reference = None
                     f.check_status = CheckStatus.INSUFFICIENT_EVIDENCE.value
                     f.requires_human_review = True
+                    f.citation_status = "CITATION_UNVERIFIED"
                     downgraded += 1
                     continue
 
             if ref.node_ids and not (set(ref.node_ids) & ctx.valid_node_ids):
                 f.check_status = CheckStatus.INSUFFICIENT_EVIDENCE.value
                 f.requires_human_review = True
+                f.citation_status = "CITATION_UNVERIFIED"
                 f.description += (
                     "（证据校验：引用节点未能在解析结果中核实，已降级为证据不足）"
                 )
                 downgraded += 1
             elif not ref.node_ids:
                 f.source_reference = None
+                f.citation_status = "CITATION_UNVERIFIED"
         return {"downgraded_count": downgraded, "bound_from_quote": bound_from_quote}
 
 

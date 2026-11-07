@@ -91,6 +91,8 @@ class KnowledgeGovernancePolicy:
         up = raw.strip().upper()
         alias_map = {
             "TEMPLATE": KnowledgeSourceType.TEMPLATE,
+            "LAYER_D_RAG": KnowledgeSourceType.TEMPLATE,
+            "LAYER_A_RAW_CLAUSE": KnowledgeSourceType.TEMPLATE,
             "RULE": KnowledgeSourceType.APPROVED_RULE,
             "APPROVED_RULE": KnowledgeSourceType.APPROVED_RULE,
             "CASE": KnowledgeSourceType.HISTORICAL_CASE,
@@ -114,7 +116,11 @@ class KnowledgeGovernancePolicy:
         allow_historical_cases: bool = False,
         expected_tenant_id: str | None = None,
     ) -> bool:
-        """校验检索分块是否满足状态、审批与租户边界要求。"""
+        """校验检索分块是否满足状态、审批与租户边界要求（Fail-Closed）。"""
+        raw_ktype = hit.get("knowledge_type")
+        if not raw_ktype or not str(raw_ktype).strip():
+            return False
+
         doc_status = str(hit.get("doc_status") or hit.get("status") or "ACTIVE").upper()
         if doc_status in cls.BLOCKED_DOC_STATUSES:
             return False
@@ -123,19 +129,18 @@ class KnowledgeGovernancePolicy:
             if hit.get("tenant_id") != expected_tenant_id:
                 return False
 
-        desc = cls.descriptor_for(hit.get("knowledge_type"))
+        desc = cls.descriptor_for(raw_ktype)
         if (
             desc.source_type == KnowledgeSourceType.HISTORICAL_CASE
             and not allow_historical_cases
         ):
             return False
 
+        approved_status = str(hit.get("approved_status") or "APPROVED").upper()
         if desc.source_type == KnowledgeSourceType.APPROVED_RULE:
-            approved_status = str(hit.get("approved_status") or "APPROVED").upper()
             if approved_status != "APPROVED":
                 return False
         elif desc.require_approved_status:
-            approved_status = str(hit.get("approved_status") or "APPROVED").upper()
             if approved_status in {"DRAFT", "REJECTED", "REVOKED"}:
                 return False
 

@@ -61,6 +61,10 @@ class EvidenceReference:
     node_ids: list[str] = field(default_factory=list)
     clause_number: str | None = None
     original_text: str = ""
+    section: str = ""
+    clause_id: str = ""
+    exact_quote: str = ""
+    char_offset_or_locator: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,6 +72,10 @@ class EvidenceReference:
             "node_ids": list(self.node_ids),
             "clause_number": self.clause_number,
             "original_text": self.original_text,
+            "section": self.section,
+            "clause_id": self.clause_id,
+            "exact_quote": self.exact_quote,
+            "char_offset_or_locator": self.char_offset_or_locator,
         }
 
 
@@ -79,8 +87,8 @@ class Finding:
     rule_id: str | None
     severity: str
     category: str
-    title: str
-    description: str
+    title: str = ""
+    description: str = ""
     expected_value: Any = None
     actual_value: Any = None
     source_reference: EvidenceReference | None = None
@@ -91,6 +99,7 @@ class Finding:
     requires_human_review: bool = False
     confidence: float | None = None
     check_status: str = CheckStatus.CHECKED.value
+    citation_status: str = "VERIFIED"
     human_state: str = "PENDING"
     human_note: str | None = None
 
@@ -150,6 +159,7 @@ class Finding:
             "requires_human_review": self.requires_human_review,
             "confidence": self.confidence,
             "check_status": self.check_status,
+            "citation_status": self.citation_status,
             "human_state": self.human_state,
             "human_note": self.human_note,
         }
