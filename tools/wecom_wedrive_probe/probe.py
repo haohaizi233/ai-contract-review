@@ -17,7 +17,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:
+
+    def load_dotenv(*_args: Any, **_kwargs: Any) -> None:
+        pass
+
 
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
