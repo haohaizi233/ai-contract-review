@@ -12,6 +12,22 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
+class CheckpointError(Exception):
+    """Base exception for pipeline checkpoint operations."""
+
+
+class CheckpointCorruptedError(CheckpointError):
+    """Raised when checkpoint data or snapshot is missing, corrupted, or cannot be rehydrated."""
+
+
+class ManifestMismatchError(CheckpointError):
+    """Raised when existing checkpoints have a different manifest hash than the current run."""
+
+
+class CheckpointIncompatibleError(CheckpointError):
+    """Raised when checkpoint snapshot schema is incompatible with current code/configuration."""
+
+
 @dataclass
 class ExecutionCheckpoint:
     """阶段执行检查点。"""

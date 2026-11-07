@@ -25,7 +25,13 @@ from ..security.idempotency import (
     compute_request_fingerprint,
 )
 from ...modules.rules import RuleRegistry
-from .checkpoints import CheckpointStore, ExecutionCheckpoint
+from .checkpoints import (
+    CheckpointCorruptedError,
+    CheckpointIncompatibleError,
+    CheckpointStore,
+    ExecutionCheckpoint,
+    ManifestMismatchError,
+)
 from .contracts import ExecutionManifest
 from .deadline import CancelToken, ExecutionDeadline
 from .stages import (
@@ -115,14 +121,25 @@ class ReviewPipeline:
         self, stage: ReviewStage, ctx: PipelineContext, attempt: int
     ) -> ReviewResult | None:
         if stage.stage_name in ctx.resume_completed_stages:
-            if stage.stage_name == "Parse" and ctx.parsed_record is None:
-                stage.execute(ctx)
-            elif stage.stage_name == "Classify" and not ctx.category:
-                stage.execute(ctx)
-            elif stage.stage_name == "SelectTemplate" and ctx.matched_template is None:
-                stage.execute(ctx)
-            elif stage.stage_name == "ExtractFields" and not ctx.extracted_fields:
-                stage.execute(ctx)
+            cp = ctx.stage_checkpoints.get(stage.stage_name)
+            if cp is None or cp.status != "COMPLETED":
+                raise CheckpointCorruptedError(
+                    f"Stage {stage.stage_name} marked completed but checkpoint is missing or invalid"
+                )
+            if cp.manifest_hash != getattr(ctx, "manifest_hash", ""):
+                raise ManifestMismatchError(
+                    f"Stage {stage.stage_name} checkpoint manifest hash mismatch: {cp.manifest_hash} != {getattr(ctx, 'manifest_hash', '')}"
+                )
+            stage.rehydrate(ctx, cp.output_snapshot)
+            stage_rec = StageExecutionRecord(
+                task_id=ctx.task_id or "",
+                stage_name=stage.stage_name,
+                stage_order=stage.stage_order,
+                status=StageStatus.COMPLETED.value,
+                attempt=attempt,
+                detail=cp.output_snapshot,
+            )
+            ctx.stage_records.append(stage_rec)
             return None
 
         deadline = ctx.get_deadline()
@@ -197,19 +214,36 @@ class ReviewPipeline:
             stage_rec.status = StageStatus.COMPLETED.value
             stage_rec.detail = detail or {}
             ctx.stage_records.append(stage_rec)
-            self._persist_stage(ctx, stage_rec)
-            if ctx.task_id:
-                self.checkpoint_store.save_checkpoint(
-                    ExecutionCheckpoint(
-                        task_id=ctx.task_id,
-                        stage_name=stage.stage_name,
-                        stage_order=stage.stage_order,
-                        input_hash=in_hash,
-                        manifest_hash=manifest_h,
-                        output_snapshot=detail or {},
-                        status="COMPLETED",
+            uow_fn = getattr(self.storage, "unit_of_work", None)
+            if uow_fn is not None:
+                with uow_fn():
+                    self._persist_stage(ctx, stage_rec)
+                    if ctx.task_id:
+                        self.checkpoint_store.save_checkpoint(
+                            ExecutionCheckpoint(
+                                task_id=ctx.task_id,
+                                stage_name=stage.stage_name,
+                                stage_order=stage.stage_order,
+                                input_hash=in_hash,
+                                manifest_hash=manifest_h,
+                                output_snapshot=detail or {},
+                                status="COMPLETED",
+                            )
+                        )
+            else:
+                self._persist_stage(ctx, stage_rec)
+                if ctx.task_id:
+                    self.checkpoint_store.save_checkpoint(
+                        ExecutionCheckpoint(
+                            task_id=ctx.task_id,
+                            stage_name=stage.stage_name,
+                            stage_order=stage.stage_order,
+                            input_hash=in_hash,
+                            manifest_hash=manifest_h,
+                            output_snapshot=detail or {},
+                            status="COMPLETED",
+                        )
                     )
-                )
 
             if cancel_token.is_cancelled() or self._check_cancelled(ctx):
                 self._record_terminal_task(
@@ -338,10 +372,18 @@ class ReviewPipeline:
         manifest_h = manifest.compute_manifest_fingerprint()
 
         completed_stages: set[str] = set()
+        stage_checkpoints: dict[str, ExecutionCheckpoint] = {}
         if resolved_task_id:
-            for cp in self.checkpoint_store.get_checkpoints(resolved_task_id):
-                if cp.status == "COMPLETED" and cp.manifest_hash == manifest_h:
+            existing_cps = self.checkpoint_store.get_checkpoints(resolved_task_id)
+            for cp in existing_cps:
+                if cp.manifest_hash != manifest_h:
+                    raise ManifestMismatchError(
+                        f"Task {resolved_task_id} has existing checkpoint with manifest {cp.manifest_hash} "
+                        f"which does not match current run manifest {manifest_h}. Refusing to mix incompatible snapshots."
+                    )
+                if cp.status == "COMPLETED":
                     completed_stages.add(cp.stage_name)
+                    stage_checkpoints[cp.stage_name] = cp
 
         ctx = PipelineContext(
             docx_path=Path(docx_path),
@@ -358,6 +400,7 @@ class ReviewPipeline:
             deadline=deadline,
             cancel_token=cancel_token,
             resume_completed_stages=completed_stages,
+            stage_checkpoints=stage_checkpoints,
         )
         setattr(ctx, "manifest_hash", manifest_h)
 

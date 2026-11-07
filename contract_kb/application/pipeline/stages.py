@@ -42,6 +42,7 @@ from ...modules.rules import (
 )
 from ...rule_engine import ReviewContext as DbRuleContext
 from ...rule_engine import RuleEngine, RuleSpec
+from .checkpoints import CheckpointCorruptedError, CheckpointIncompatibleError
 from .format_adapter import audit_format_from_record
 
 
@@ -57,6 +58,11 @@ class ReviewStage(ABC):
     @abstractmethod
     def execute(self, ctx: PipelineContext) -> dict[str, Any]:
         """执行当前阶段，更新 PipelineContext 并返回阶段脱敏摘要字典。"""
+
+    def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
+        """从持久化快照中恢复该阶段的上下文输出。默认无需操作或由具体子类实现。"""
+        pass
+
 
 
 class ReceiveStage(ReviewStage):
@@ -89,7 +95,16 @@ class ReceiveStage(ReviewStage):
             "mode": ctx.mode,
             "tenant_id": ctx.effective_tenant,
             "model_version": ctx.model_version,
+            "llm_status_info": ctx.llm_status_info,
         }
+
+    def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
+        if "task_id" in snapshot and not ctx.task_id:
+            ctx.task_id = snapshot["task_id"]
+        if "model_version" in snapshot:
+            ctx.model_version = snapshot["model_version"]
+        if "llm_status_info" in snapshot:
+            ctx.llm_status_info = snapshot["llm_status_info"]
 
 
 class ValidateStage(ReviewStage):
@@ -109,6 +124,11 @@ class ValidateStage(ReviewStage):
             ctx.short_circuit_reason = f"security_check_failed: {sec.rejected_reason}"
             return {"passed": False, "reason": ctx.short_circuit_reason}
         return {"passed": True, "size_bytes": getattr(sec, "size_bytes", 0)}
+
+    def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
+        if not snapshot.get("passed", True):
+            ctx.short_circuit_status = "REJECTED"
+            ctx.short_circuit_reason = snapshot.get("reason") or "security_check_failed"
 
 
 class ParseStage(ReviewStage):
@@ -131,8 +151,22 @@ class ParseStage(ReviewStage):
             "parsed": True,
             "document_id": rec.template_id,
             "sha256": rec.sha256[:16],
+            "full_sha256": rec.sha256,
             "clause_count": len(rec.clauses or []),
         }
+
+    def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
+        if ctx.parsed_record is None:
+            if ctx.docx_path and Path(ctx.docx_path).exists():
+                rec, err = import_template_file(ctx.docx_path)
+                if rec is None:
+                    raise CheckpointCorruptedError(f"Failed to re-parse document on rehydration: {err}")
+                ctx.parsed_record = rec
+            else:
+                raise CheckpointCorruptedError(
+                    "Cannot rehydrate ParseStage: parsed_record is missing and file does not exist"
+                )
+
 
 
 class NormalizeStage(ReviewStage):
@@ -174,7 +208,22 @@ class NormalizeStage(ReviewStage):
         return {
             "normalized_clauses": len(clauses),
             "valid_node_count": len(valid_ids),
+            "clauses": clauses,
+            "valid_node_ids": list(valid_ids),
+            "reproducibility_seed": ctx.reproducibility_seed,
         }
+
+    def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
+        if "clauses" in snapshot:
+            ctx.clauses = list(snapshot["clauses"])
+            ctx.valid_node_ids = set(snapshot.get("valid_node_ids", []))
+            ctx.reproducibility_seed = str(snapshot.get("reproducibility_seed", ""))
+        elif ctx.parsed_record is not None:
+            self.execute(ctx)
+        else:
+            raise CheckpointCorruptedError(
+                "Cannot rehydrate NormalizeStage: missing clauses in snapshot and parsed_record unavailable"
+            )
 
 
 class ClassifyStage(ReviewStage):
@@ -219,7 +268,19 @@ class ClassifyStage(ReviewStage):
             "category": ctx.category,
             "subtype": ctx.subtype,
             "confidence": ctx.classification_confidence,
+            "conflicts": ctx.classification_conflicts,
+            "findings": [f.to_dict() for f in ctx.findings],
         }
+
+    def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
+        if "category" not in snapshot or "subtype" not in snapshot:
+            raise CheckpointCorruptedError("ClassifyStage snapshot corrupted: missing category or subtype")
+        ctx.category = str(snapshot["category"])
+        ctx.subtype = str(snapshot["subtype"])
+        ctx.classification_confidence = float(snapshot.get("confidence", 0.0))
+        ctx.classification_conflicts = list(snapshot.get("conflicts", []))
+        if "findings" in snapshot:
+            ctx.findings = [Finding.from_dict(f) for f in snapshot["findings"]]
 
 
 class SelectTemplateStage(ReviewStage):
@@ -258,8 +319,15 @@ class SelectTemplateStage(ReviewStage):
                 )
             )
         return {
+            "matched_template": matched,
             "matched_template_id": matched["document_id"] if matched else None,
+            "findings": [f.to_dict() for f in ctx.findings],
         }
+
+    def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
+        ctx.matched_template = snapshot.get("matched_template")
+        if "findings" in snapshot:
+            ctx.findings = [Finding.from_dict(f) for f in snapshot["findings"]]
 
 
 class ExtractFieldsStage(ReviewStage):
@@ -300,11 +368,17 @@ class ExtractFieldsStage(ReviewStage):
             "detected_amounts_raw": amounts[:10],
         }
         return {
+            "extracted_fields": dict(ctx.extracted_fields),
             "has_contract_number": bool(contract_no),
             "has_party_a": bool(party_a),
             "has_party_b": bool(party_b),
             "amount_mentions": len(amounts),
         }
+
+    def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
+        if "extracted_fields" not in snapshot:
+            raise CheckpointCorruptedError("ExtractFieldsStage snapshot corrupted: missing extracted_fields")
+        ctx.extracted_fields.update(snapshot["extracted_fields"])
 
 
 class DeterministicValidationStage(ReviewStage):
@@ -364,7 +438,22 @@ class DeterministicValidationStage(ReviewStage):
         return {
             "rule_set_version": ctx.rule_set_version,
             "deterministic_findings_added": len(ctx.findings) - before_count,
+            "findings": [f.to_dict() for f in ctx.findings],
+            "extracted_fields": dict(ctx.extracted_fields),
+            "format_standard": ctx.format_standard,
         }
+
+    def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
+        if "findings" not in snapshot or "rule_set_version" not in snapshot:
+            raise CheckpointCorruptedError(
+                "DeterministicValidationStage snapshot corrupted or missing mandatory 'findings'/'rule_set_version'"
+            )
+        ctx.rule_set_version = str(snapshot["rule_set_version"])
+        ctx.findings = [Finding.from_dict(f) for f in snapshot["findings"]]
+        if "extracted_fields" in snapshot and isinstance(snapshot["extracted_fields"], dict):
+            ctx.extracted_fields.update(snapshot["extracted_fields"])
+        if "format_standard" in snapshot:
+            ctx.format_standard = snapshot["format_standard"]
 
     def _run_format_audit(self, ctx: PipelineContext) -> list[Finding]:
         out: list[Finding] = []
@@ -691,9 +780,15 @@ class RetrieveEvidenceStage(ReviewStage):
             else 1.0
         )
         return {
+            "rag_context": list(ctx.rag_context),
             "retrieved_chunks": len(rag_context),
             "citation_correctness": avg_cit,
         }
+
+    def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
+        if "rag_context" in snapshot:
+            ctx.rag_context = list(snapshot["rag_context"])
+
 
 
 class LLMSemanticReviewStage(ReviewStage):
@@ -846,7 +941,12 @@ class LLMSemanticReviewStage(ReviewStage):
             "llm_status": llm_result.status,
             "semantic_findings": len(llm_result.findings),
             "failure": llm_result.failure,
+            "findings": [f.to_dict() for f in ctx.findings],
         }
+
+    def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
+        if "findings" in snapshot:
+            ctx.findings = [Finding.from_dict(f) for f in snapshot["findings"]]
 
 
 class VerifyEvidenceStage(ReviewStage):
@@ -901,7 +1001,15 @@ class VerifyEvidenceStage(ReviewStage):
             elif not ref.node_ids:
                 f.source_reference = None
                 f.citation_status = "CITATION_UNVERIFIED"
-        return {"downgraded_count": downgraded, "bound_from_quote": bound_from_quote}
+        return {
+            "downgraded_count": downgraded,
+            "bound_from_quote": bound_from_quote,
+            "findings": [f.to_dict() for f in ctx.findings],
+        }
+
+    def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
+        if "findings" in snapshot:
+            ctx.findings = [Finding.from_dict(f) for f in snapshot["findings"]]
 
 
 class ResolveFindingsStage(ReviewStage):
@@ -920,7 +1028,15 @@ class ResolveFindingsStage(ReviewStage):
         before = len(ctx.findings)
         per_task_seed = f"{ctx.task_id}|{ctx.reproducibility_seed}|{ctx.rule_set_version}|{ctx.model_version}"
         ctx.findings = self.resolver.resolve(ctx.findings, per_task_seed)
-        return {"before_count": before, "resolved_count": len(ctx.findings)}
+        return {
+            "before_count": before,
+            "resolved_count": len(ctx.findings),
+            "findings": [f.to_dict() for f in ctx.findings],
+        }
+
+    def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
+        if "findings" in snapshot:
+            ctx.findings = [Finding.from_dict(f) for f in snapshot["findings"]]
 
 
 class HumanReviewStage(ReviewStage):
@@ -961,7 +1077,17 @@ class HumanReviewStage(ReviewStage):
             ctx.review_gate = "HUMAN_REVIEW_REQUIRED"
         else:
             ctx.review_gate = "PASS"
-        return {"review_gate": ctx.review_gate, "needs_human": needs_human}
+        return {
+            "review_gate": ctx.review_gate,
+            "needs_human": needs_human,
+            "findings": [f.to_dict() for f in ctx.findings],
+        }
+
+    def rehydrate(self, ctx: PipelineContext, snapshot: dict[str, Any]) -> None:
+        ctx.review_gate = str(snapshot.get("review_gate", ctx.review_gate))
+        if "findings" in snapshot:
+            ctx.findings = [Finding.from_dict(f) for f in snapshot["findings"]]
+
 
 
 class FinalizeReportStage(ReviewStage):

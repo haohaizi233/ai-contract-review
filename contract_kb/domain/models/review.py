@@ -78,6 +78,20 @@ class EvidenceReference:
             "char_offset_or_locator": self.char_offset_or_locator,
         }
 
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> EvidenceReference:
+        return cls(
+            document_id=str(d.get("document_id", "")),
+            node_ids=list(d.get("node_ids", []) or []),
+            clause_number=d.get("clause_number"),
+            original_text=str(d.get("original_text", "")),
+            section=str(d.get("section", "")),
+            clause_id=str(d.get("clause_id", "")),
+            exact_quote=str(d.get("exact_quote", "")),
+            char_offset_or_locator=d.get("char_offset_or_locator"),
+        )
+
+
 
 @dataclass
 class Finding:
@@ -164,6 +178,38 @@ class Finding:
             "human_note": self.human_note,
         }
 
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> Finding:
+        ref_data = d.get("source_reference")
+        ref: EvidenceReference | None = None
+        if isinstance(ref_data, dict):
+            ref = EvidenceReference.from_dict(ref_data)
+        elif isinstance(ref_data, EvidenceReference):
+            ref = ref_data
+
+        return cls(
+            issue_id=str(d.get("issue_id", "")),
+            rule_id=d.get("rule_id"),
+            severity=str(d.get("severity", "LOW")),
+            category=str(d.get("category", "")),
+            title=str(d.get("title", "")),
+            description=str(d.get("description", "")),
+            expected_value=d.get("expected_value"),
+            actual_value=d.get("actual_value"),
+            source_reference=ref,
+            knowledge_references=list(d.get("knowledge_references", []) or []),
+            suggestion=str(d.get("suggestion", "")),
+            execution_mode=str(d.get("execution_mode", "DETERMINISTIC")),
+            finding_source=str(d.get("finding_source", FindingSource.DETERMINISTIC.value)),
+            requires_human_review=bool(d.get("requires_human_review", False)),
+            confidence=d.get("confidence"),
+            check_status=str(d.get("check_status", CheckStatus.CHECKED.value)),
+            citation_status=str(d.get("citation_status", "VERIFIED")),
+            human_state=str(d.get("human_state", "PENDING")),
+            human_note=d.get("human_note"),
+        )
+
+
 
 @dataclass
 class StageExecutionRecord:
@@ -226,6 +272,7 @@ class PipelineContext:
     review_gate: str = "PASS"
     stage_records: list[StageExecutionRecord] = field(default_factory=list)
     resume_completed_stages: set[str] = field(default_factory=set)
+    stage_checkpoints: dict[str, Any] = field(default_factory=dict)
     deadline: Any = None
     cancel_token: Any = None
 
