@@ -117,7 +117,9 @@ def test_storage_log_audit_enforces_redaction(tmp_path: Path):
         target="target_obj",
         detail="user password=raw_super_secret_password_value and token=bearer_xyz12345",
     )
-    row = st.conn.execute("SELECT detail FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
+    row = st.conn.execute(
+        "SELECT detail FROM audit_log ORDER BY id DESC LIMIT 1"
+    ).fetchone()
     saved_detail = row["detail"]
     assert "raw_super_secret_password_value" not in saved_detail
     assert "bearer_xyz12345" not in saved_detail

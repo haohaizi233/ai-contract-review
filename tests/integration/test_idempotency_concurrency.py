@@ -51,7 +51,9 @@ def test_idempotency_concurrency_single_winner(tmp_path: Path):
             outcomes.append(f.result())
 
     created_count = sum(1 for o in outcomes if o.status == "CREATED")
-    in_progress_count = sum(1 for o in outcomes if o.status in ("IN_PROGRESS", "REPLAY"))
+    in_progress_count = sum(
+        1 for o in outcomes if o.status in ("IN_PROGRESS", "REPLAY")
+    )
 
     assert created_count == 1, f"并发预约必须有且仅有 1 个胜出者，实际={created_count}"
     assert in_progress_count == 7
@@ -69,6 +71,8 @@ def test_idempotency_concurrency_single_winner(tmp_path: Path):
         key="concurrent-key-001",
         fingerprint="different-fingerprint-sha256",
     )
-    res_conflict = storage.reserve_idempotency_key(conflict_ident, resource_id="new_cand")
+    res_conflict = storage.reserve_idempotency_key(
+        conflict_ident, resource_id="new_cand"
+    )
     assert res_conflict.status == "CONFLICT"
     storage.close()

@@ -47,7 +47,10 @@ def test_final_stage_timeout_prevents_completed_status(tmp_path: Path):
     )
 
     assert res.status == "TIMED_OUT", f"期望 TIMED_OUT，但实际为 {res.status}"
-    assert "timeout" in str(res.reason or "").lower() or "deadline" in str(res.reason or "").lower()
+    assert (
+        "timeout" in str(res.reason or "").lower()
+        or "deadline" in str(res.reason or "").lower()
+    )
 
     # 验证数据库中持久化的最终状态
     task = st.get_task(res.task_id)

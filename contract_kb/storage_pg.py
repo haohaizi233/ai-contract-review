@@ -1688,7 +1688,9 @@ class PgVectorStorage:
         cid = contract.contract_id
         time.time()
         tenant = getattr(contract, "tenant_id", "default") or "default"
-        contract_dict = contract.to_dict() if hasattr(contract, "to_dict") else dict(contract)
+        contract_dict = (
+            contract.to_dict() if hasattr(contract, "to_dict") else dict(contract)
+        )
 
         with self._lock:
             try:
@@ -1749,7 +1751,11 @@ class PgVectorStorage:
                     rows = cur.fetchall()
                     result = []
                     for r in rows:
-                        snap = r[3] if isinstance(r[3], dict) else (json.loads(r[3]) if r[3] else {})
+                        snap = (
+                            r[3]
+                            if isinstance(r[3], dict)
+                            else (json.loads(r[3]) if r[3] else {})
+                        )
                         result.append(
                             {
                                 "contract_id": r[0],
@@ -2013,7 +2019,9 @@ class PgVectorStorage:
         job_types: list[str] | None = None,
     ) -> JobLease | None:
         now_dt = datetime.fromtimestamp(time.time(), tz=timezone.utc)
-        lease_until_dt = datetime.fromtimestamp(time.time() + max(1, int(lease_seconds)), tz=timezone.utc)
+        lease_until_dt = datetime.fromtimestamp(
+            time.time() + max(1, int(lease_seconds)), tz=timezone.utc
+        )
         new_token = uuid.uuid4().hex
         with self._lock:
             try:
@@ -2035,7 +2043,18 @@ class PgVectorStorage:
                     if not row:
                         self._commit()
                         return None
-                    (jid, jtype, tid, cby, pjson, creq, attempts, max_att, status, temp_path) = row
+                    (
+                        jid,
+                        jtype,
+                        tid,
+                        cby,
+                        pjson,
+                        creq,
+                        attempts,
+                        max_att,
+                        status,
+                        temp_path,
+                    ) = row
                     if creq:
                         cur.execute(
                             "UPDATE async_jobs SET status='CANCELLED', updated_at=now() WHERE job_id=%s",
@@ -2070,7 +2089,11 @@ class PgVectorStorage:
                         (worker_id, new_token, lease_until_dt, new_att, jid),
                     )
                 self._commit()
-                payload = pjson if isinstance(pjson, dict) else (json.loads(pjson) if pjson else {})
+                payload = (
+                    pjson
+                    if isinstance(pjson, dict)
+                    else (json.loads(pjson) if pjson else {})
+                )
                 return JobLease(
                     job_id=jid,
                     worker_id=worker_id,
@@ -2091,7 +2114,9 @@ class PgVectorStorage:
         self, job_id: str, lease_token: str, extension_seconds: int = 60
     ) -> bool:
         now_dt = datetime.fromtimestamp(time.time(), tz=timezone.utc)
-        until_dt = datetime.fromtimestamp(time.time() + max(1, int(extension_seconds)), tz=timezone.utc)
+        until_dt = datetime.fromtimestamp(
+            time.time() + max(1, int(extension_seconds)), tz=timezone.utc
+        )
         with self._lock:
             try:
                 with self.conn.cursor() as cur:
@@ -2107,9 +2132,7 @@ class PgVectorStorage:
                 self._rollback()
                 raise
 
-    def finish_job(
-        self, job_id: str, lease_token: str, outcome: JobOutcome
-    ) -> bool:
+    def finish_job(self, job_id: str, lease_token: str, outcome: JobOutcome) -> bool:
         next_dt = (
             datetime.fromtimestamp(outcome.next_run_at, tz=timezone.utc)
             if outcome.next_run_at is not None
@@ -2142,19 +2165,25 @@ class PgVectorStorage:
                     ok = cur.rowcount > 0
                 self._commit()
                 if ok and outcome.status == "SUCCEEDED":
-                    self.finalize_idempotency_key(resource_id=job_id, status="COMPLETED")
+                    self.finalize_idempotency_key(
+                        resource_id=job_id, status="COMPLETED"
+                    )
                 return ok
             except Exception:
                 self._rollback()
                 raise
 
     def claim_next_async_job(self, job_types: list[str] | None = None) -> dict | None:
-        lease = self.claim_job(worker_id="default", lease_seconds=60, job_types=job_types)
+        lease = self.claim_job(
+            worker_id="default", lease_seconds=60, job_types=job_types
+        )
         if lease:
             return self.get_async_job(lease.job_id)
         return None
 
-    def _legacy_claim_next_async_job(self, job_types: list[str] | None = None) -> dict | None:
+    def _legacy_claim_next_async_job(
+        self, job_types: list[str] | None = None
+    ) -> dict | None:
         now_ts = datetime.fromtimestamp(time.time(), tz=timezone.utc)
         with self._lock:
             try:
@@ -2466,7 +2495,12 @@ class PgVectorStorage:
                         "FROM request_idempotency "
                         "WHERE tenant_id=%s AND actor_id=%s AND operation=%s AND idempotency_key=%s "
                         "FOR UPDATE",
-                        (identity.tenant_id, identity.actor_id, identity.operation, identity.key),
+                        (
+                            identity.tenant_id,
+                            identity.actor_id,
+                            identity.operation,
+                            identity.key,
+                        ),
                     )
                     row = cur.fetchone()
                     if row:
@@ -2515,7 +2549,12 @@ class PgVectorStorage:
                             "SELECT request_fingerprint, status, resource_id "
                             "FROM request_idempotency "
                             "WHERE tenant_id=%s AND actor_id=%s AND operation=%s AND idempotency_key=%s",
-                            (identity.tenant_id, identity.actor_id, identity.operation, identity.key),
+                            (
+                                identity.tenant_id,
+                                identity.actor_id,
+                                identity.operation,
+                                identity.key,
+                            ),
                         )
                         existing = cur.fetchone()
                         self._commit()
@@ -2535,7 +2574,9 @@ class PgVectorStorage:
                                 status="IN_PROGRESS",
                                 resource_id=existing[2],
                             )
-                        return IdempotencyOutcome(status="CREATED", resource_id=resource_id)
+                        return IdempotencyOutcome(
+                            status="CREATED", resource_id=resource_id
+                        )
             except Exception:
                 self._rollback()
                 raise
@@ -2585,7 +2626,10 @@ class PgVectorStorage:
         with self._lock:
             try:
                 with self.conn.cursor() as cur:
-                    cur.execute("DELETE FROM auth_replay_nonces WHERE expires_at < %s", (now_ts,))
+                    cur.execute(
+                        "DELETE FROM auth_replay_nonces WHERE expires_at < %s",
+                        (now_ts,),
+                    )
                     cur.execute(
                         "INSERT INTO auth_replay_nonces (nonce, tenant_id, user_id, created_at, expires_at) "
                         "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (nonce) DO NOTHING",
@@ -2597,3 +2641,7 @@ class PgVectorStorage:
             except Exception:
                 self._rollback()
                 raise
+
+
+# Clean Architecture alias
+StoragePG = PgVectorStorage

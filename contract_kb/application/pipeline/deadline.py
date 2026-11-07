@@ -40,7 +40,9 @@ class ExecutionDeadline:
             started_monotonic if started_monotonic is not None else self._clock()
         )
         self.expires_at = (
-            expires_at if expires_at is not None else (time.time() + self.timeout_seconds)
+            expires_at
+            if expires_at is not None
+            else (time.time() + self.timeout_seconds)
         )
 
     def remaining_seconds(self) -> float:

@@ -106,18 +106,12 @@ def ndcg_at_k(
     if not ideal_k or sum(ideal_k) == 0:
         return None
 
-    idcg = sum(
-        (2.0**g - 1.0) / math.log2(i + 2.0)
-        for i, g in enumerate(ideal_k)
-    )
+    idcg = sum((2.0**g - 1.0) / math.log2(i + 2.0) for i, g in enumerate(ideal_k))
     if idcg <= 0.0:
         return 0.0
 
     retrieved_k = retrieved_ids[:k]
     actual_grades = [relevant_grades.get(doc_id, 0) for doc_id in retrieved_k]
-    dcg = sum(
-        (2.0**g - 1.0) / math.log2(i + 2.0)
-        for i, g in enumerate(actual_grades)
-    )
+    dcg = sum((2.0**g - 1.0) / math.log2(i + 2.0) for i, g in enumerate(actual_grades))
 
     return float(dcg / idcg)

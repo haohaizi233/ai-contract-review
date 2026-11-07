@@ -27,10 +27,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+          python -m pip check
       - name: Ruff lint
-        run: ruff check contract_kb tests tools/wecom_wedrive_probe --select=E,F,W --ignore=E501
+        run: ruff check contract_kb tests tools/wecom_wedrive_probe scripts --select=E,F,W --ignore=E501
       - name: Ruff format check
-        run: ruff format --check contract_kb tests tools/wecom_wedrive_probe
+        run: ruff format --check contract_kb tests tools/wecom_wedrive_probe scripts
       - name: Mypy（核心模块）
         run: mypy contract_kb --ignore-missing-imports --no-error-summary
 
@@ -165,7 +166,7 @@ jobs:
         env:
           CONTRACT_KB_TEST_PG_DSN: postgresql://postgres:postgres@127.0.0.1:5432/contract_kb_test
         run: |
-          python -m pytest tests/test_pg_storage.py tests/test_pg_migration.py -q --junitxml=report-pg.xml
+          python -m pytest tests/test_pg_storage.py tests/test_pg_migration.py tests/integration/test_uow_and_pg18_relational.py -q --junitxml=report-pg.xml
       - name: 上传 PG 测试报告（仅失败时上传，7天过期）
         if: failure()
         continue-on-error: true

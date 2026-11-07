@@ -55,7 +55,9 @@ def test_async_job_idempotency_cross_owner_leak_prevented(isolated_api):
     docx_bytes = b"PK\x03\x04synthetic-alice-document"
     r_alice = client.post(
         "/api/v1/jobs/review",
-        files={"file": ("doc_a.docx", io.BytesIO(docx_bytes), "application/octet-stream")},
+        files={
+            "file": ("doc_a.docx", io.BytesIO(docx_bytes), "application/octet-stream")
+        },
         data={"mode": "STANDARD", "custom": "alice-private-rule"},
         headers={**ALICE_T1, "X-Idempotency-Key": key},
     )
@@ -68,7 +70,9 @@ def test_async_job_idempotency_cross_owner_leak_prevented(isolated_api):
     bob_bytes = b"PK\x03\x04synthetic-bob-document"
     r_bob = client.post(
         "/api/v1/jobs/review",
-        files={"file": ("doc_b.docx", io.BytesIO(bob_bytes), "application/octet-stream")},
+        files={
+            "file": ("doc_b.docx", io.BytesIO(bob_bytes), "application/octet-stream")
+        },
         data={"mode": "STANDARD", "custom": "bob-requirement"},
         headers={**BOB_T1, "X-Idempotency-Key": key},
     )

@@ -93,7 +93,9 @@ class ReviewPipeline:
             if find_idem is not None:
                 try:
                     existing = find_idem(
-                        idempotency_key, tenant_id=effective_tenant, created_by=created_by
+                        idempotency_key,
+                        tenant_id=effective_tenant,
+                        created_by=created_by,
                     )
                 except TypeError:
                     existing = find_idem(idempotency_key, tenant_id=effective_tenant)
@@ -170,7 +172,9 @@ class ReviewPipeline:
         )
 
         manifest_h = getattr(ctx, "manifest_hash", "default")
-        in_hash = hashlib.sha256(f"{ctx.task_id}:{stage.stage_name}".encode("utf-8")).hexdigest()[:16]
+        in_hash = hashlib.sha256(
+            f"{ctx.task_id}:{stage.stage_name}".encode("utf-8")
+        ).hexdigest()[:16]
         if ctx.task_id:
             self.checkpoint_store.save_checkpoint(
                 ExecutionCheckpoint(
@@ -208,7 +212,9 @@ class ReviewPipeline:
                 )
 
             if cancel_token.is_cancelled() or self._check_cancelled(ctx):
-                self._record_terminal_task(ctx, "CANCELLED", "cancelled_during_stage_execution")
+                self._record_terminal_task(
+                    ctx, "CANCELLED", "cancelled_during_stage_execution"
+                )
                 return ReviewResult(
                     task_id=ctx.task_id,
                     status="CANCELLED",
@@ -312,7 +318,9 @@ class ReviewPipeline:
             return cached
 
         start_mono = time.monotonic()
-        deadline = ExecutionDeadline(timeout_seconds=float(timeout_seconds), started_monotonic=start_mono)
+        deadline = ExecutionDeadline(
+            timeout_seconds=float(timeout_seconds), started_monotonic=start_mono
+        )
         cancel_token = CancelToken(check_fn=lambda: bool(cancel_requested))
 
         f_hash = ""
@@ -361,7 +369,9 @@ class ReviewPipeline:
 
         # 核心提交点保护：在最终完成提交前核查 deadline 与 cancellation
         if ctx.get_cancel_token().is_cancelled() or self._check_cancelled(ctx):
-            self._record_terminal_task(ctx, "CANCELLED", "cancelled_before_final_commit")
+            self._record_terminal_task(
+                ctx, "CANCELLED", "cancelled_before_final_commit"
+            )
             return ReviewResult(
                 task_id=ctx.task_id,
                 status="CANCELLED",
@@ -498,7 +508,11 @@ class ReviewPipeline:
         finalize_fn = getattr(self.storage, "finalize_idempotency_key", None)
         if finalize_fn is not None and ctx.idempotency_key:
             try:
-                finalize_fn(resource_id=ctx.task_id, status=status, tenant_id=ctx.effective_tenant)
+                finalize_fn(
+                    resource_id=ctx.task_id,
+                    status=status,
+                    tenant_id=ctx.effective_tenant,
+                )
             except Exception:
                 pass
 

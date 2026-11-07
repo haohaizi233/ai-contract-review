@@ -50,8 +50,26 @@ def test_orchestrator_sync_incremental_batch_dry_run(tmp_path: Path):
     e9_cols = ["requestid", "contract_no", "title", "createdate"]
     e9_adapter = E9SqlServerAdapter(lambda: DummyConn(e9_rows, e9_cols))
 
-    td_rows = [(201, "HT-2024-001", "研发技术服务合同", "甲方公司", "乙方公司", 50000.0, "2024-01-15")]
-    td_cols = ["id", "contract_no", "title", "party_a", "party_b", "total_amount", "update_time"]
+    td_rows = [
+        (
+            201,
+            "HT-2024-001",
+            "研发技术服务合同",
+            "甲方公司",
+            "乙方公司",
+            50000.0,
+            "2024-01-15",
+        )
+    ]
+    td_cols = [
+        "id",
+        "contract_no",
+        "title",
+        "party_a",
+        "party_b",
+        "total_amount",
+        "update_time",
+    ]
     td_adapter = TenderMysqlAdapter(lambda: DummyConn(td_rows, td_cols))
 
     orchestrator = ContractIntegrationOrchestrator(
@@ -61,7 +79,9 @@ def test_orchestrator_sync_incremental_batch_dry_run(tmp_path: Path):
         tender_adapter=td_adapter,
     )
 
-    result = orchestrator.sync_incremental_batch(tenant_id="tenant_a", batch_size=10, dry_run=True)
+    result = orchestrator.sync_incremental_batch(
+        tenant_id="tenant_a", batch_size=10, dry_run=True
+    )
     assert result["dry_run"] is True
     assert result["persisted_canonical_count"] == 0
     assert "reconciliation" in result

@@ -34,7 +34,9 @@ def test_setup(tmp_path: Path):
     db_path = tmp_path / "test_override.sqlite"
     st = Storage(db_path)
     engine = ReviewEngine(st)
-    res = engine.review_result(sample_file, tenant_id="tenant_alpha", task_id="task_001")
+    res = engine.review_result(
+        sample_file, tenant_id="tenant_alpha", task_id="task_001"
+    )
     assert len(res.issues) > 0, "测试样本必须包含至少一个审核问题"
     target_issue = res.issues[0]
 

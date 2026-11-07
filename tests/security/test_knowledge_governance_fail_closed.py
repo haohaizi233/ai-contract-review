@@ -27,7 +27,12 @@ def test_draft_and_archived_documents_blocked():
         "approved_status": "APPROVED",
         "tenant_id": "t1",
     }
-    assert KnowledgeGovernancePolicy.is_chunk_admissible(draft_hit, expected_tenant_id="t1") is False
+    assert (
+        KnowledgeGovernancePolicy.is_chunk_admissible(
+            draft_hit, expected_tenant_id="t1"
+        )
+        is False
+    )
 
     archived_hit = {
         "clause_id": "c_archived_1",
@@ -36,7 +41,12 @@ def test_draft_and_archived_documents_blocked():
         "approved_status": "APPROVED",
         "tenant_id": "t1",
     }
-    assert KnowledgeGovernancePolicy.is_chunk_admissible(archived_hit, expected_tenant_id="t1") is False
+    assert (
+        KnowledgeGovernancePolicy.is_chunk_admissible(
+            archived_hit, expected_tenant_id="t1"
+        )
+        is False
+    )
 
 
 def test_unapproved_rule_blocked():
@@ -48,7 +58,12 @@ def test_unapproved_rule_blocked():
         "approved_status": "PENDING_REVIEW",
         "tenant_id": "t1",
     }
-    assert KnowledgeGovernancePolicy.is_chunk_admissible(pending_rule, expected_tenant_id="t1") is False
+    assert (
+        KnowledgeGovernancePolicy.is_chunk_admissible(
+            pending_rule, expected_tenant_id="t1"
+        )
+        is False
+    )
 
 
 def test_missing_knowledge_type_rejected_fail_closed():
@@ -60,7 +75,12 @@ def test_missing_knowledge_type_rejected_fail_closed():
         "approved_status": "APPROVED",
         "tenant_id": "t1",
     }
-    assert KnowledgeGovernancePolicy.is_chunk_admissible(corrupt_hit, expected_tenant_id="t1") is False
+    assert (
+        KnowledgeGovernancePolicy.is_chunk_admissible(
+            corrupt_hit, expected_tenant_id="t1"
+        )
+        is False
+    )
 
 
 def test_cross_tenant_knowledge_leak_blocked():
@@ -73,7 +93,12 @@ def test_cross_tenant_knowledge_leak_blocked():
         "tenant_id": "tenant_A",
     }
     # 租户 B 发起审核检索，必须返回 False
-    assert KnowledgeGovernancePolicy.is_chunk_admissible(tenant_a_hit, expected_tenant_id="tenant_B") is False
+    assert (
+        KnowledgeGovernancePolicy.is_chunk_admissible(
+            tenant_a_hit, expected_tenant_id="tenant_B"
+        )
+        is False
+    )
 
 
 def test_historical_case_cannot_drive_mandatory_finding():

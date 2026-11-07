@@ -42,9 +42,13 @@ def test_price_version_consistency():
     assert res_v2.reserved_cost_usd == Decimal("0.0100")
 
     # 结算 v1 任务：按 v1 单价 $0.0020 结算
-    service.settle_budget(res_v1.reservation_id, TokenUsage(input_tokens=500, output_tokens=500))
+    service.settle_budget(
+        res_v1.reservation_id, TokenUsage(input_tokens=500, output_tokens=500)
+    )
     # 结算 v2 任务：按 v2 单价 $0.0100 结算
-    service.settle_budget(res_v2.reservation_id, TokenUsage(input_tokens=500, output_tokens=500))
+    service.settle_budget(
+        res_v2.reservation_id, TokenUsage(input_tokens=500, output_tokens=500)
+    )
 
     # 总消耗成本 = 0.0020 + 0.0100 = 0.0120
     assert service.get_total_consumed_cost() == Decimal("0.0120")

@@ -229,9 +229,7 @@ class BudgetLedgerService:
 
     def get_available_cost(self) -> Decimal:
         with self._lock:
-            allocated = (
-                self._consumed_cost + self._reserved_cost + self._uncertain_cost
-            )
+            allocated = self._consumed_cost + self._reserved_cost + self._uncertain_cost
             return max(Decimal("0.0000"), self.max_cost_usd - allocated)
 
     def get_total_consumed_cost(self) -> Decimal:

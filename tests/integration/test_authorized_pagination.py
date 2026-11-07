@@ -91,7 +91,9 @@ def test_review_tasks_authorized_pagination_pushdown(pagination_app):
     assert len(d3["items"]) == 0
 
     # 4. Admin 请求第一页：可见全量 6 条
-    r_admin = client.get("/api/v1/contract-review/tasks?limit=4&offset=0", headers=ADMIN_T1)
+    r_admin = client.get(
+        "/api/v1/contract-review/tasks?limit=4&offset=0", headers=ADMIN_T1
+    )
     assert r_admin.status_code == 200
     d_admin = r_admin.json()
     assert d_admin["total"] == 6

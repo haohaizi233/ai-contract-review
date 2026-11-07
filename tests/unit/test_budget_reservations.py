@@ -46,10 +46,15 @@ def test_pre_invocation_budget_reservation_blocks_before_call():
     # 2. 尝试预留 500 Token：600 + 500 = 1100 > 1000，必须在调用前抛出 BudgetLimitExceededError
     with pytest.raises(BudgetLimitExceededError) as exc_info:
         service.reserve_budget(input_tokens=100, max_output_tokens=400)
-    assert "token" in str(exc_info.value).lower() or "budget" in str(exc_info.value).lower()
+    assert (
+        "token" in str(exc_info.value).lower()
+        or "budget" in str(exc_info.value).lower()
+    )
 
     # 3. 结算第 1 次调用实际消耗 300 Token
-    service.settle_budget(res1.reservation_id, TokenUsage(input_tokens=200, output_tokens=100))
+    service.settle_budget(
+        res1.reservation_id, TokenUsage(input_tokens=200, output_tokens=100)
+    )
     assert res1.status == ReservationStatus.SETTLED
 
     # 4. 释放多余预留后，剩余 1000 - 300 = 700 可用，此时 500 Token 可以成功预留

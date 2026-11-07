@@ -200,7 +200,11 @@ class CheckpointStore:
                     rows = cur.fetchall()
                     result = []
                     for r in rows:
-                        snap = r[5] if isinstance(r[5], dict) else (json.loads(r[5]) if r[5] else {})
+                        snap = (
+                            r[5]
+                            if isinstance(r[5], dict)
+                            else (json.loads(r[5]) if r[5] else {})
+                        )
                         result.append(
                             ExecutionCheckpoint(
                                 task_id=r[0],

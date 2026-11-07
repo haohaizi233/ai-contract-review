@@ -26,12 +26,16 @@ def test_recall_at_k_calculation_versus_hit_at_k():
     hit_2 = hit_at_k(retrieved, relevant_ids, k=2)
     recall_2 = recall_at_k(retrieved, relevant_ids, k=2)
 
-    assert hit_2 == 1.0, "Hit@2 should be 1.0 since at least one relevant item was retrieved"
+    assert hit_2 == 1.0, (
+        "Hit@2 should be 1.0 since at least one relevant item was retrieved"
+    )
     assert recall_2 is not None
     assert math.isclose(recall_2, 1.0 / 3.0, rel_tol=1e-3), (
         f"Recall@2 must be 1/3 (retrieved 1 out of 3 relevant), got {recall_2}"
     )
-    assert hit_2 != recall_2, "Hit@K and Recall@K must be visibly distinct when not all relevant items are retrieved"
+    assert hit_2 != recall_2, (
+        "Hit@K and Recall@K must be visibly distinct when not all relevant items are retrieved"
+    )
 
 
 def test_recall_at_k_empty_relevant_returns_none():
@@ -59,7 +63,9 @@ def test_ndcg_at_k_uses_independent_qrels_idcg():
     # Expected NDCG@3 = 1.0 / 5.3928 =~ 0.1854
     ndcg_3 = ndcg_at_k(retrieved, qrels, k=3)
     assert ndcg_3 is not None
-    assert ndcg_3 < 0.25, f"NDCG@3 should be ~0.1854 due to missing grade 2 items, got {ndcg_3}"
+    assert ndcg_3 < 0.25, (
+        f"NDCG@3 should be ~0.1854 due to missing grade 2 items, got {ndcg_3}"
+    )
 
     # Verify IDCG does NOT degrade when fewer relevant items are retrieved
     retrieved_empty = ["c_junk_1", "c_junk_2"]
@@ -102,6 +108,7 @@ def test_synthetic_qrels_fixture_loads_and_evaluates():
     """Verify the fixture JSON adheres to schema and metrics compute over it."""
     import json
     from pathlib import Path
+
     p = Path("tests/fixtures/evaluation_synthetic/qrels.json")
     data = json.loads(p.read_text(encoding="utf-8"))
     manifest = EvaluationDatasetManifest(**data["manifest"])

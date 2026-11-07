@@ -99,6 +99,7 @@ def test_sync_batch_atomic_rollback_on_failure(tmp_path: Path):
         amounts=ContractAmountSummary(total_amount=Decimal("50000.00")),
         source_updated_at=200.0,
     )
+
     # 模拟在记录列表中注入破坏性错误触发异常
     class ExplodingRecord:
         tenant_id = "t1"
@@ -149,5 +150,7 @@ def test_optimistic_cursor_conflict_detection(tmp_path: Path):
     # 2. 另一个同步进程携带过时的期望游标 c0 尝试提交：必须被拦截并抛出 SyncBatchConflictError
     c_stale_new = SyncCursor("t1", "WEAVER_E9", "contracts", 120.0, "ext_old")
     with pytest.raises(SyncBatchConflictError):
-        service.commit_sync_batch("batch_conflict", [], expected_cursor=c0, new_cursor=c_stale_new)
+        service.commit_sync_batch(
+            "batch_conflict", [], expected_cursor=c0, new_cursor=c_stale_new
+        )
     st.close()

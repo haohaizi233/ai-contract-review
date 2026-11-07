@@ -194,7 +194,13 @@ AUDIT_EVENT_WHITELISTS: dict[str, set[str]] = {
     "approve_format_standard": {"standard_id", "version", "approver"},
     "approve_rule": {"rule_id", "version", "approver"},
     "cancel_job": {"job_id", "status"},
-    "document_import": {"document_id", "source_file", "source_hash", "status", "category"},
+    "document_import": {
+        "document_id",
+        "source_file",
+        "source_hash",
+        "status",
+        "category",
+    },
     "DEFAULT": {
         "action",
         "target",

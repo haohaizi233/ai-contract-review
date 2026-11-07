@@ -126,9 +126,7 @@ class KnowledgeStoragePort(Protocol):
         self, actor: str, action: str, target: str, detail: str = ""
     ) -> None: ...
 
-    def reserve_idempotency_key(
-        self, identity: Any, resource_id: str
-    ) -> Any: ...
+    def reserve_idempotency_key(self, identity: Any, resource_id: str) -> Any: ...
 
     def finalize_idempotency_key(
         self,

@@ -34,21 +34,27 @@ def test_crash_recovery_after_lease_expires(tmp_path: Path):
     job_id = job["job_id"]
 
     # 2. Worker 1 认领作业，设置租约时长为 1 秒（模拟短期租约）
-    lease1 = st.claim_job(worker_id="worker_alpha", lease_seconds=1, job_types=["CONTRACT_REVIEW"])
+    lease1 = st.claim_job(
+        worker_id="worker_alpha", lease_seconds=1, job_types=["CONTRACT_REVIEW"]
+    )
     assert lease1 is not None
     assert isinstance(lease1, JobLease)
     assert lease1.job_id == job_id
     assert lease1.worker_id == "worker_alpha"
 
     # 立即再次认领：租约未到期，其他 Worker 绝不能认领到
-    lease_busy = st.claim_job(worker_id="worker_beta", lease_seconds=1, job_types=["CONTRACT_REVIEW"])
+    lease_busy = st.claim_job(
+        worker_id="worker_beta", lease_seconds=1, job_types=["CONTRACT_REVIEW"]
+    )
     assert lease_busy is None
 
     # 3. 模拟 Worker 1 崩溃（未调用 finish_job），等待租约过期（> 1秒）
     time.sleep(1.2)
 
     # 4. Worker 2 启动认领：租约已过期，Worker 2 成功接管
-    lease2 = st.claim_job(worker_id="worker_beta", lease_seconds=10, job_types=["CONTRACT_REVIEW"])
+    lease2 = st.claim_job(
+        worker_id="worker_beta", lease_seconds=10, job_types=["CONTRACT_REVIEW"]
+    )
     assert lease2 is not None
     assert lease2.job_id == job_id
     assert lease2.worker_id == "worker_beta"
@@ -89,7 +95,9 @@ def test_heartbeat_renewal_prevents_premature_reclaim(tmp_path: Path):
         }
     )
 
-    lease = st.claim_job(worker_id="worker_1", lease_seconds=1, job_types=["CONTRACT_REVIEW"])
+    lease = st.claim_job(
+        worker_id="worker_1", lease_seconds=1, job_types=["CONTRACT_REVIEW"]
+    )
     assert lease is not None
 
     # 经过 0.6 秒后执行心跳续约 2 秒
@@ -99,7 +107,9 @@ def test_heartbeat_renewal_prevents_premature_reclaim(tmp_path: Path):
 
     # 再等待 0.8 秒（距离最初认领已 1.4 秒，原租约 1 秒已过，但因续约租约仍在）
     time.sleep(0.8)
-    competing_lease = st.claim_job(worker_id="worker_2", lease_seconds=1, job_types=["CONTRACT_REVIEW"])
+    competing_lease = st.claim_job(
+        worker_id="worker_2", lease_seconds=1, job_types=["CONTRACT_REVIEW"]
+    )
     assert competing_lease is None, "心跳续约中的作业不得被抢占"
 
     # 成功完成

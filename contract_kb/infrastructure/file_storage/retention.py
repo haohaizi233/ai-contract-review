@@ -61,7 +61,9 @@ def collect_expired_uploads(
         age = now - mtime
 
         # Check if protected by active lease or recent checkpoint
-        is_active = (entry.name in active_set) or (str(entry.relative_to(root)) in active_set)
+        is_active = (entry.name in active_set) or (
+            str(entry.relative_to(root)) in active_set
+        )
 
         if is_active or age < retention_seconds:
             retained_count += 1

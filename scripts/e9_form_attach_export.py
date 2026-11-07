@@ -23,6 +23,7 @@
 
 凭据取环境变量 DB_HOST / DB_PORT / DB_USER / DB_PWD_READONLY；Cookie 存本地不入库。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -53,22 +54,45 @@ NUM_RE = re.compile(r"^-?\d+(\.\d+)?$")
 MARK_BEGIN = "<!-- e9-form-attach-begin -->"
 MARK_END = "<!-- e9-form-attach-end -->"
 
-TECH_FIELDS = {"billid", "returnid", "mxid", "dw", "requestid", "id", "mainid", "formmodeid",
-               "modedatacreater", "modedatacreatertype", "modedatacreatedate",
-               "modedatacreatetime", "modedatamodifier", "modedatamodifydatetime",
-               "modeuuid", "form_biz_id"}
+TECH_FIELDS = {
+    "billid",
+    "returnid",
+    "mxid",
+    "dw",
+    "requestid",
+    "id",
+    "mainid",
+    "formmodeid",
+    "modedatacreater",
+    "modedatacreatertype",
+    "modedatacreatedate",
+    "modedatacreatetime",
+    "modedatamodifier",
+    "modedatamodifydatetime",
+    "modeuuid",
+    "form_biz_id",
+}
 TECH_LABELS = {"billid", "returnid", "returnId", "BILLID", "明细id", "id"}
 
 
 # ---------------- 连接池（长连接，全程复用） ----------------
 
+
 class ConnPool:
     def __init__(self, args, size: int):
         self.q: queue.Queue = queue.Queue()
         for _ in range(size):
-            self.q.put(pytds.connect(
-                dsn=args.host, port=args.port, user=args.user, password=args.password,
-                database=args.database, timeout=args.timeout, login_timeout=60))
+            self.q.put(
+                pytds.connect(
+                    dsn=args.host,
+                    port=args.port,
+                    user=args.user,
+                    password=args.password,
+                    database=args.database,
+                    timeout=args.timeout,
+                    login_timeout=60,
+                )
+            )
         self.size = size
 
     @contextmanager
@@ -123,7 +147,9 @@ def clean_html(s) -> str:
 def looks_like_html_error(data: bytes) -> bool:
     """FileDownload 鉴权失败/异常时返回 HTML 页面而非文件，识别之避免伪装落盘。"""
     s = data.lstrip()[:200].lower()
-    return s.startswith(b"<!doctype") or s.startswith(b"<html") or s.startswith(b"<head")
+    return (
+        s.startswith(b"<!doctype") or s.startswith(b"<html") or s.startswith(b"<head")
+    )
 
 
 def fs_name(s: str) -> str:
@@ -132,13 +158,16 @@ def fs_name(s: str) -> str:
 
 # ---------------- 元数据缓存（线程安全，惰性按 bill 加载） ----------------
 
+
 class MetaCache:
     def __init__(self):
         self._lock = threading.Lock()
         self._bills: dict[int, dict] = {}
-        self._tables: dict[str, list[str]] = {}          # 表名 → 列名列表
-        self._names: dict[str, str] = {}                 # "u:<id>" / "d:<id>" / "s:<id>" / "r:<id>" / "doc:<id>"
-        self._browser: dict[str, dict] = {}              # browser.XXX → {table,col,key}
+        self._tables: dict[str, list[str]] = {}  # 表名 → 列名列表
+        self._names: dict[
+            str, str
+        ] = {}  # "u:<id>" / "d:<id>" / "s:<id>" / "r:<id>" / "doc:<id>"
+        self._browser: dict[str, dict] = {}  # browser.XXX → {table,col,key}
         self._browser_val: dict[tuple, str] = {}
 
     # ---- 通用名解析 ----
@@ -172,13 +201,29 @@ class MetaCache:
                 return self._browser[fielddbtype]
         meta = None
         try:
-            r = rows(cur, ("SELECT tablename, columname, keycolumname FROM workflow_browserurl "
-                           "WHERE fielddbtype=%s AND useable IN ('1','y')") % esc(fielddbtype))
+            r = rows(
+                cur,
+                (
+                    "SELECT tablename, columname, keycolumname FROM workflow_browserurl "
+                    "WHERE fielddbtype=%s AND useable IN ('1','y')"
+                )
+                % esc(fielddbtype),
+            )
             if not r:
-                r = rows(cur, ("SELECT tablename, columname, keycolumname FROM workflow_browserurl "
-                               "WHERE fielddbtype=%s") % esc(fielddbtype))
+                r = rows(
+                    cur,
+                    (
+                        "SELECT tablename, columname, keycolumname FROM workflow_browserurl "
+                        "WHERE fielddbtype=%s"
+                    )
+                    % esc(fielddbtype),
+                )
             if r and r[0]["tablename"]:
-                meta = {"table": r[0]["tablename"], "col": r[0]["columname"], "key": r[0]["keycolumname"]}
+                meta = {
+                    "table": r[0]["tablename"],
+                    "col": r[0]["columname"],
+                    "key": r[0]["keycolumname"],
+                }
         except Exception:
             cur.connection.rollback()
         with self._lock:
@@ -193,9 +238,17 @@ class MetaCache:
                 return self._browser[key]
         meta = None
         try:
-            r = rows(cur, "SELECT tablename, columname, keycolumname FROM workflow_browserurl WHERE id=%d" % int(ftype))
+            r = rows(
+                cur,
+                "SELECT tablename, columname, keycolumname FROM workflow_browserurl WHERE id=%d"
+                % int(ftype),
+            )
             if r and r[0]["tablename"]:
-                meta = {"table": r[0]["tablename"], "col": r[0]["columname"], "key": r[0]["keycolumname"]}
+                meta = {
+                    "table": r[0]["tablename"],
+                    "col": r[0]["columname"],
+                    "key": r[0]["keycolumname"],
+                }
         except Exception:
             cur.connection.rollback()
         with self._lock:
@@ -210,8 +263,11 @@ class MetaCache:
                 return self._browser[key]
         meta = None
         try:
-            r = rows(cur, "SELECT TOP 1 sqltext1, keyfield, showfield FROM MODE_BROWSER WHERE name=%s OR showname=%s"
-                     % (esc(name), esc(name)))
+            r = rows(
+                cur,
+                "SELECT TOP 1 sqltext1, keyfield, showfield FROM MODE_BROWSER WHERE name=%s OR showname=%s"
+                % (esc(name), esc(name)),
+            )
             if r and r[0]["sqltext1"]:
                 meta = {"sql": r[0]["sqltext1"], "key": r[0]["keyfield"]}
         except Exception:
@@ -244,8 +300,11 @@ class MetaCache:
                 return self._browser_val[bkey]
         val = None
         try:
-            r = rows(cur, "SELECT %s AS n FROM %s WHERE %s=%s"
-                     % (meta["col"], meta["table"], meta["key"], int(ident)))
+            r = rows(
+                cur,
+                "SELECT %s AS n FROM %s WHERE %s=%s"
+                % (meta["col"], meta["table"], meta["key"], int(ident)),
+            )
             if r:
                 val = str(r[0]["n"])
         except Exception:
@@ -258,8 +317,14 @@ class MetaCache:
         with self._lock:
             if table in self._tables:
                 return self._tables[table]
-        r = rows(cur, ("SELECT COLUMN_NAME AS c FROM INFORMATION_SCHEMA.COLUMNS "
-                       "WHERE TABLE_NAME=%s ORDER BY ORDINAL_POSITION") % esc(table))
+        r = rows(
+            cur,
+            (
+                "SELECT COLUMN_NAME AS c FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_NAME=%s ORDER BY ORDINAL_POSITION"
+            )
+            % esc(table),
+        )
         cols = [x["c"] for x in r]
         with self._lock:
             self._tables[table] = cols
@@ -276,26 +341,46 @@ class MetaCache:
             if not b:
                 return None
             info = {"table": b[0]["tablename"], "fields": {}, "details": []}
-            flds = rows(cur, """SELECT f.id, f.fieldname, f.fielddbtype, f.fieldhtmltype, f.type,
+            flds = rows(
+                cur,
+                """SELECT f.id, f.fieldname, f.fielddbtype, f.fieldhtmltype, f.type,
                                       f.childfieldid, f.dsporder, i.labelname
                                FROM workflow_billfield f
                                LEFT JOIN HtmlLabelInfo i ON i.indexid=f.fieldlabel AND i.languageid=7
-                               WHERE f.billid=-%d""" % bill_abs)
+                               WHERE f.billid=-%d"""
+                % bill_abs,
+            )
             for f in flds:
                 f["label"] = (f["labelname"] or f["fieldname"]).strip()
                 info["fields"].setdefault(f["fieldname"], []).append(f)
             for lst in info["fields"].values():
                 lst.sort(key=lambda x: (x["dsporder"] or 0, x["id"]))
-            opts = rows(cur, """SELECT fieldid, selectvalue, selectname FROM workflow_SelectItem
+            opts = rows(
+                cur,
+                """SELECT fieldid, selectvalue, selectname FROM workflow_SelectItem
                                 WHERE isbill=1 AND fieldid IN
-                                (SELECT id FROM workflow_billfield WHERE billid=-%d)""" % bill_abs)
+                                (SELECT id FROM workflow_billfield WHERE billid=-%d)"""
+                % bill_abs,
+            )
             o: dict[int, dict] = {}
             for x in opts:
-                o.setdefault(x["fieldid"], {})[str(x["selectvalue"])] = (x["selectname"] or "").strip()
+                o.setdefault(x["fieldid"], {})[str(x["selectvalue"])] = (
+                    x["selectname"] or ""
+                ).strip()
             info["options"] = o
-            for d in rows(cur, """SELECT tablename, title, orderid FROM Workflow_billdetailtable
-                                  WHERE billid=-%d ORDER BY orderid, id""" % bill_abs):
-                info["details"].append({"table": d["tablename"], "title": d["title"], "orderid": d["orderid"]})
+            for d in rows(
+                cur,
+                """SELECT tablename, title, orderid FROM Workflow_billdetailtable
+                                  WHERE billid=-%d ORDER BY orderid, id"""
+                % bill_abs,
+            ):
+                info["details"].append(
+                    {
+                        "table": d["tablename"],
+                        "title": d["title"],
+                        "orderid": d["orderid"],
+                    }
+                )
         except Exception:
             cur.connection.rollback()
             raise
@@ -326,11 +411,19 @@ META = MetaCache()
 
 # ---------------- 附件下载 ----------------
 
+
 class AttachFetcher:
     """fileid → 本地 attachments/<案号>/<fileid>-<文件名>；限速 + 退避重试。"""
 
-    def __init__(self, out_dir: Path, oa_base: str, cookie: str, max_concurrent: int = 2,
-                 min_interval: float = 0.4, do_download: bool = True):
+    def __init__(
+        self,
+        out_dir: Path,
+        oa_base: str,
+        cookie: str,
+        max_concurrent: int = 2,
+        min_interval: float = 0.4,
+        do_download: bool = True,
+    ):
         self.out_dir = out_dir
         self.oa_base = oa_base.rstrip("/")
         self.do_download = do_download
@@ -351,6 +444,7 @@ class AttachFetcher:
 
     def remote_url(self, fileid) -> str:
         return self.oa_base + "/weaver/weaver.file.FileDownload?fileid=" + str(fileid)
+
     def fetch(self, mark_dir_name: str, fileid, orig_name: str, size_hint) -> dict:
         """返回 {ok, relpath, name, size, url}；relpath 为 md 相对路径。"""
         url = self.remote_url(fileid)
@@ -359,16 +453,28 @@ class AttachFetcher:
         rel = "attachments/%s/%s" % (mark_dir_name, fname)
         target = self.out_dir / "attachments" / mark_dir_name / fname
         if not self.do_download:
-            return {"ok": True, "relpath": None, "name": orig_name or fname,
-                    "size": size_hint, "url": url, "remote_only": True}
+            return {
+                "ok": True,
+                "relpath": None,
+                "name": orig_name or fname,
+                "size": size_hint,
+                "url": url,
+                "remote_only": True,
+            }
         if target.exists() and target.stat().st_size > 0:
             with open(target, "rb") as fh:
                 head = fh.read(300)
             if not looks_like_html_error(head):
                 with self._lock:
                     self.skipped += 1
-                return {"ok": True, "relpath": rel, "name": orig_name or fname,
-                        "size": target.stat().st_size, "url": url, "remote_only": False}
+                return {
+                    "ok": True,
+                    "relpath": rel,
+                    "name": orig_name or fname,
+                    "size": target.stat().st_size,
+                    "url": url,
+                    "remote_only": False,
+                }
             target.unlink()  # 历史遗留的 HTML 错误页伪装文件，删掉重新下载
         data = b""
         for attempt in range(3):
@@ -393,16 +499,31 @@ class AttachFetcher:
             os.replace(tmp, target)
             with self._lock:
                 self.downloaded += 1
-            return {"ok": True, "relpath": rel, "name": orig_name or fname,
-                    "size": len(data), "url": url, "remote_only": False}
+            return {
+                "ok": True,
+                "relpath": rel,
+                "name": orig_name or fname,
+                "size": len(data),
+                "url": url,
+                "remote_only": False,
+            }
         with self._lock:
             self.failed += 1
-        return {"ok": False, "relpath": None, "name": orig_name or fname,
-                "size": size_hint, "url": url, "remote_only": False,
-                "error": "html-error-page" if (len(data) >= 32 and looks_like_html_error(data)) else "empty"}
+        return {
+            "ok": False,
+            "relpath": None,
+            "name": orig_name or fname,
+            "size": size_hint,
+            "url": url,
+            "remote_only": False,
+            "error": "html-error-page"
+            if (len(data) >= 32 and looks_like_html_error(data))
+            else "empty",
+        }
 
 
 # ---------------- 表单渲染 ----------------
+
 
 def fmt_value(cur, field: dict | None, col_type: str, raw, info: dict | None):
     """字段值 → 展示文本（多值合并为 '、'）；返回 None 表示不展示。"""
@@ -416,7 +537,7 @@ def fmt_value(cur, field: dict | None, col_type: str, raw, info: dict | None):
     htmltype = (field or {}).get("fieldhtmltype")
     ftype = (field or {}).get("type")
 
-    if htmltype == "5":        # 下拉/单选/复选
+    if htmltype == "5":  # 下拉/单选/复选
         opts = (info or {}).get("options", {}).get(field["id"]) if field else None
         toks = [t for t in re.split(r"[,;\s]+", s) if t]
         if opts and toks:
@@ -425,11 +546,11 @@ def fmt_value(cur, field: dict | None, col_type: str, raw, info: dict | None):
                 return "、".join(resolved)
         return s
 
-    if htmltype == "3":        # 浏览框
+    if htmltype == "3":  # 浏览框
         toks = [t for t in re.split(r"[,;\s]+", s) if t]
         if not toks:
             return None
-        if ftype == 2:          # 日期
+        if ftype == 2:  # 日期
             return s
         # 1) 通用浏览框映射（workflow_browserurl.id == type）
         meta = META.sys_browser(cur, ftype) if ftype is not None else None
@@ -457,8 +578,18 @@ def fmt_value(cur, field: dict | None, col_type: str, raw, info: dict | None):
 
 def render_case(cur, mark: str, req: dict, out_dir: Path, fetcher: AttachFetcher):
     """生成 md 补丁块；返回 (block, stats)。"""
-    stats = {"fields": 0, "attach_total": 0, "attach_ok": 0, "attach_fail": 0, "detail_rows": 0}
-    fm = rows(cur, "SELECT billformid, billid FROM workflow_form WHERE requestid=%d" % req["requestid"])
+    stats = {
+        "fields": 0,
+        "attach_total": 0,
+        "attach_ok": 0,
+        "attach_fail": 0,
+        "detail_rows": 0,
+    }
+    fm = rows(
+        cur,
+        "SELECT billformid, billid FROM workflow_form WHERE requestid=%d"
+        % req["requestid"],
+    )
     lines: list[str] = [MARK_BEGIN, "", "## 审批表单", ""]
     attach_lines: list[str] = []
     mark_dir = fs_name(mark)
@@ -488,7 +619,6 @@ def render_case(cur, mark: str, req: dict, out_dir: Path, fetcher: AttachFetcher
         lines.append("（主表 %s 中无 id=%d 的数据行）" % (info["table"], billid))
     else:
         row = main[0]
-        colset = {c.lower(): c for c in cols}
         rendered = []
         for col, val in row.items():
             if col.lower() in ("id", "requestid"):
@@ -499,7 +629,7 @@ def render_case(cur, mark: str, req: dict, out_dir: Path, fetcher: AttachFetcher
                 continue
             if f and (f["fieldname"] in TECH_FIELDS or f["label"] in TECH_LABELS):
                 continue
-            if f and (f["fieldhtmltype"] == "6"):     # 附件字段，稍后单独渲染
+            if f and (f["fieldhtmltype"] == "6"):  # 附件字段，稍后单独渲染
                 continue
             txt = fmt_value(cur, f, col_type, val, info)
             if txt is None:
@@ -516,13 +646,19 @@ def render_case(cur, mark: str, req: dict, out_dir: Path, fetcher: AttachFetcher
         dcols = META.table_columns(cur, d["table"])
         if "mainid" not in [c.lower() for c in dcols]:
             continue
-        drows = rows(cur, "SELECT * FROM %s WHERE mainid=%d ORDER BY id" % (d["table"], billid))
+        drows = rows(
+            cur, "SELECT * FROM %s WHERE mainid=%d ORDER BY id" % (d["table"], billid)
+        )
         if not drows:
             continue
         title = d["title"]
         tlabel = None
         if title not in (None, "") and str(title).strip().lstrip("-").isdigit():
-            r = rows(cur, "SELECT labelname FROM HtmlLabelInfo WHERE indexid=%d AND languageid=7" % int(title))
+            r = rows(
+                cur,
+                "SELECT labelname FROM HtmlLabelInfo WHERE indexid=%d AND languageid=7"
+                % int(title),
+            )
             if r:
                 tlabel = r[0]["labelname"]
         tlabel = tlabel or str(title or "").strip() or d["table"]
@@ -576,7 +712,9 @@ def render_case(cur, mark: str, req: dict, out_dir: Path, fetcher: AttachFetcher
         dcols = META.table_columns(cur, d["table"])
         if "mainid" not in [c.lower() for c in dcols]:
             continue
-        for dr in rows(cur, "SELECT * FROM %s WHERE mainid=%d ORDER BY id" % (d["table"], billid)):
+        for dr in rows(
+            cur, "SELECT * FROM %s WHERE mainid=%d ORDER BY id" % (d["table"], billid)
+        ):
             for label, fid in collect(dr, dcols):
                 att_items.append((label, fid))
 
@@ -586,20 +724,36 @@ def render_case(cur, mark: str, req: dict, out_dir: Path, fetcher: AttachFetcher
             continue
         seen.add(fid)
         stats["attach_total"] += 1
-        meta = rows(cur, "SELECT imagefilename, imagefiletype, fileSize FROM imagefile WHERE imagefileid=%d" % fid)
+        meta = rows(
+            cur,
+            "SELECT imagefilename, imagefiletype, fileSize FROM imagefile WHERE imagefileid=%d"
+            % fid,
+        )
         orig_name = meta[0]["imagefilename"] if meta else None
         size_hint = meta[0]["fileSize"] if meta else None
         res = fetcher.fetch(mark_dir, fid, orig_name, size_hint)
         if res.get("remote_only"):
-            attach_lines.append("- **%s**：[%s](%s)（%s，仅远端链接）" % (label, res["name"], res["url"], size_hint or "大小未知"))
+            attach_lines.append(
+                "- **%s**：[%s](%s)（%s，仅远端链接）"
+                % (label, res["name"], res["url"], size_hint or "大小未知")
+            )
             stats["attach_ok"] += 1
         elif res["ok"]:
             sz = res["size"]
-            szs = ("%s B" % sz) if isinstance(sz, int) else (str(sz) if sz else "大小未知")
-            attach_lines.append("- **%s**：[%s](%s)（%s）" % (label, res["name"], res["relpath"], szs))
+            szs = (
+                ("%s B" % sz)
+                if isinstance(sz, int)
+                else (str(sz) if sz else "大小未知")
+            )
+            attach_lines.append(
+                "- **%s**：[%s](%s)（%s）" % (label, res["name"], res["relpath"], szs)
+            )
             stats["attach_ok"] += 1
         else:
-            attach_lines.append("- **%s**：[%s](%s)（**下载失败**，%s）" % (label, res["name"], res["url"], size_hint or "大小未知"))
+            attach_lines.append(
+                "- **%s**：[%s](%s)（**下载失败**，%s）"
+                % (label, res["name"], res["url"], size_hint or "大小未知")
+            )
             stats["attach_fail"] += 1
 
     if attach_lines:
@@ -624,7 +778,7 @@ def patch_md(md_path: Path, block: str) -> str:
         if idx < 0:
             new = text.rstrip() + "\n\n" + block + "\n"
         else:
-            new = text[:idx + 1] + block + "\n\n" + text[idx + 1:]
+            new = text[: idx + 1] + block + "\n\n" + text[idx + 1 :]
         action = "inserted"
     if new != text:
         tmp = md_path.with_suffix(md_path.suffix + ".tmp")
@@ -654,7 +808,8 @@ class StateDB:
             "status TEXT NOT NULL DEFAULT 'pending',"
             "attempts INTEGER NOT NULL DEFAULT 0,"
             "detail TEXT NOT NULL DEFAULT '',"
-            "updated_at REAL NOT NULL DEFAULT 0)")
+            "updated_at REAL NOT NULL DEFAULT 0)"
+        )
         c.execute("CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status)")
         c.commit()
 
@@ -673,7 +828,8 @@ class StateDB:
         now = time.time()
         c.executemany(
             "INSERT OR IGNORE INTO cases(stem, status, updated_at) VALUES(?, 'pending', ?)",
-            [(s, now) for s in stems])
+            [(s, now) for s in stems],
+        )
         c.commit()
 
     def seed_done(self, md_files, marker):
@@ -695,7 +851,9 @@ class StateDB:
                     rows_.append((now, p.stem))
         c.executemany(
             "UPDATE cases SET status='done', detail='seeded:marker', updated_at=? "
-            "WHERE stem=? AND status='pending' AND attempts=0", rows_)
+            "WHERE stem=? AND status='pending' AND attempts=0",
+            rows_,
+        )
         c.commit()
         return len(rows_)
 
@@ -706,14 +864,17 @@ class StateDB:
             "UPDATE cases SET status='running', attempts=attempts+1, updated_at=? "
             "WHERE stem=? AND attempts<? AND (status IN ('pending','failed','stalled') "
             "OR (status='running' AND updated_at<?))",
-            (now, stem, max_attempts, now - stale_seconds))
+            (now, stem, max_attempts, now - stale_seconds),
+        )
         c.commit()
         return cur.rowcount == 1
 
     def finish(self, stem, status, detail=""):
         c = self._conn()
-        c.execute("UPDATE cases SET status=?, detail=?, updated_at=? WHERE stem=?",
-                  (status, str(detail)[:300], time.time(), stem))
+        c.execute(
+            "UPDATE cases SET status=?, detail=?, updated_at=? WHERE stem=?",
+            (status, str(detail)[:300], time.time(), stem),
+        )
         c.commit()
 
     def reset_stale(self, stale_seconds):
@@ -722,7 +883,8 @@ class StateDB:
         cur = c.execute(
             "UPDATE cases SET status='stalled', updated_at=? "
             "WHERE status='running' AND updated_at<?",
-            (now, now - stale_seconds))
+            (now, now - stale_seconds),
+        )
         c.commit()
         return cur.rowcount
 
@@ -732,21 +894,28 @@ class StateDB:
         now = time.time()
         before = c.total_changes
         if stems is None:
-            c.execute("UPDATE cases SET status='stalled', updated_at=? WHERE status='running'",
-                      (now,))
+            c.execute(
+                "UPDATE cases SET status='stalled', updated_at=? WHERE status='running'",
+                (now,),
+            )
         else:
             c.executemany(
                 "UPDATE cases SET status='stalled', updated_at=? WHERE stem=? AND status='running'",
-                [(now, s) for s in stems])
+                [(now, s) for s in stems],
+            )
         c.commit()
         return c.total_changes - before
 
     def counts(self, max_attempts=3):
         c = self._conn()
-        by_status = dict(c.execute("SELECT status, COUNT(*) FROM cases GROUP BY status").fetchall())
+        by_status = dict(
+            c.execute("SELECT status, COUNT(*) FROM cases GROUP BY status").fetchall()
+        )
         row = c.execute(
             "SELECT COUNT(*) FROM cases WHERE status IN ('pending','stalled','running') "
-            "OR (status='failed' AND attempts<?)", (max_attempts,)).fetchone()
+            "OR (status='failed' AND attempts<?)",
+            (max_attempts,),
+        ).fetchone()
         return by_status, int(row[0])
 
 
@@ -764,18 +933,39 @@ def main(argv=None) -> int:
     ap.add_argument("--cookie-file", default=str(PROJECT_ROOT / "data" / ".e9_cookie"))
     ap.add_argument("--requestmark", nargs="*", default=None, help="只处理指定案号")
     ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--skip-existing", action="store_true", help="跳过已有回填标记的 md（断点续跑）")
-    ap.add_argument("--no-download", action="store_true", help="附件只出远端链接，不下载")
-    ap.add_argument("--shard-index", type=int, default=0,
-                    help="分片序号（从 0 开始）；多进程并发时各进程处理互不重叠的子集")
+    ap.add_argument(
+        "--skip-existing", action="store_true", help="跳过已有回填标记的 md（断点续跑）"
+    )
+    ap.add_argument(
+        "--no-download", action="store_true", help="附件只出远端链接，不下载"
+    )
+    ap.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help="分片序号（从 0 开始）；多进程并发时各进程处理互不重叠的子集",
+    )
     ap.add_argument("--shard-count", type=int, default=1, help="分片总数")
-    ap.add_argument("--state-db", default=None,
-                    help="SQLite WAL 状态账本路径（默认 <out>/_form_attach_state.sqlite3）")
-    ap.add_argument("--no-state-db", action="store_true", help="禁用状态账本（不保证跨进程幂等）")
-    ap.add_argument("--max-attempts", type=int, default=3, help="单案号最大处理尝试次数")
-    ap.add_argument("--stale-seconds", type=int, default=1800,
-                    help="running 超过该秒数视为中断，允许被重新抢占")
-    ap.add_argument("--no-seed", action="store_true", help="不把已有回填标记块的 md 预置为 done")
+    ap.add_argument(
+        "--state-db",
+        default=None,
+        help="SQLite WAL 状态账本路径（默认 <out>/_form_attach_state.sqlite3）",
+    )
+    ap.add_argument(
+        "--no-state-db", action="store_true", help="禁用状态账本（不保证跨进程幂等）"
+    )
+    ap.add_argument(
+        "--max-attempts", type=int, default=3, help="单案号最大处理尝试次数"
+    )
+    ap.add_argument(
+        "--stale-seconds",
+        type=int,
+        default=1800,
+        help="running 超过该秒数视为中断，允许被重新抢占",
+    )
+    ap.add_argument(
+        "--no-seed", action="store_true", help="不把已有回填标记块的 md 预置为 done"
+    )
     args = ap.parse_args(argv)
 
     if not (args.host and args.user and args.password):
@@ -790,12 +980,21 @@ def main(argv=None) -> int:
     if not args.no_download:
         ck = Path(args.cookie_file)
         if not ck.exists():
-            print("下载附件需要登录 Cookie：%s 不存在（或用 --no-download 只出链接）" % ck, file=sys.stderr)
+            print(
+                "下载附件需要登录 Cookie：%s 不存在（或用 --no-download 只出链接）"
+                % ck,
+                file=sys.stderr,
+            )
             return 2
         cookie = ck.read_text(encoding="utf-8").strip()
-    fetcher = AttachFetcher(out_dir, args.oa_base, cookie,
-                            max_concurrent=2, min_interval=0.4,
-                            do_download=not args.no_download)
+    fetcher = AttachFetcher(
+        out_dir,
+        args.oa_base,
+        cookie,
+        max_concurrent=2,
+        min_interval=0.4,
+        do_download=not args.no_download,
+    )
 
     # 目标 md：磁盘上已有的案号文档
     md_files = [p for p in out_dir.rglob("*.md") if not p.name.startswith("_")]
@@ -807,14 +1006,18 @@ def main(argv=None) -> int:
         if not (0 <= args.shard_index < args.shard_count):
             print("shard-index 必须在 [0, shard-count) 内", file=sys.stderr)
             return 2
-        md_files = md_files[args.shard_index::args.shard_count]
+        md_files = md_files[args.shard_index :: args.shard_count]
     if args.limit:
-        md_files = md_files[:args.limit]
+        md_files = md_files[: args.limit]
     print("待回填 md：%d 个" % len(md_files), flush=True)
 
     state = None
     if not args.no_state_db:
-        state = StateDB(Path(args.state_db) if args.state_db else out_dir / "_form_attach_state.sqlite3")
+        state = StateDB(
+            Path(args.state_db)
+            if args.state_db
+            else out_dir / "_form_attach_state.sqlite3"
+        )
         state.reset_stale(args.stale_seconds)
         state.register([p.stem for p in md_files])
         if not args.no_seed:
@@ -825,8 +1028,18 @@ def main(argv=None) -> int:
     pool = ConnPool(args, max(2, args.workers))
     t0 = time.time()
     stats_lock = threading.Lock()
-    totals = {"done": 0, "replaced": 0, "inserted": 0, "skipped": 0, "no_mark": 0,
-              "fields": 0, "attach_total": 0, "attach_ok": 0, "attach_fail": 0, "detail_rows": 0}
+    totals = {
+        "done": 0,
+        "replaced": 0,
+        "inserted": 0,
+        "skipped": 0,
+        "no_mark": 0,
+        "fields": 0,
+        "attach_total": 0,
+        "attach_ok": 0,
+        "attach_fail": 0,
+        "detail_rows": 0,
+    }
     shard_tag = ("_s%d" % args.shard_index) if args.shard_count > 1 else ""
     err_path = out_dir / ("_form_attach_errors%s.csv" % shard_tag)
     rep_path = out_dir / ("_form_attach_report%s.csv" % shard_tag)
@@ -845,15 +1058,25 @@ def main(argv=None) -> int:
                     if state is not None:
                         state.finish(stem, "done", "skip-existing")
                     return
-            if state is not None and not state.claim(stem, args.stale_seconds, args.max_attempts):
+            if state is not None and not state.claim(
+                stem, args.stale_seconds, args.max_attempts
+            ):
                 with stats_lock:
                     totals["skipped"] += 1
                 return
             with pool.acquire() as conn:
                 cur = conn.cursor()
-                r = rows(cur, "SELECT requestid, requestmark, workflowid FROM workflow_requestbase WHERE requestmark=%s" % esc(stem))
+                r = rows(
+                    cur,
+                    "SELECT requestid, requestmark, workflowid FROM workflow_requestbase WHERE requestmark=%s"
+                    % esc(stem),
+                )
                 if not r:
-                    r = rows(cur, "SELECT requestid, requestmark, workflowid FROM workflow_requestbase WHERE requestmark LIKE %s" % esc(stem + "%"))
+                    r = rows(
+                        cur,
+                        "SELECT requestid, requestmark, workflowid FROM workflow_requestbase WHERE requestmark LIKE %s"
+                        % esc(stem + "%"),
+                    )
                 if not r:
                     with stats_lock:
                         totals["no_mark"] += 1
@@ -870,10 +1093,26 @@ def main(argv=None) -> int:
                 with stats_lock:
                     totals["done"] += 1
                     totals[action] = totals.get(action, 0) + 1
-                    for k in ("fields", "attach_total", "attach_ok", "attach_fail", "detail_rows"):
+                    for k in (
+                        "fields",
+                        "attach_total",
+                        "attach_ok",
+                        "attach_fail",
+                        "detail_rows",
+                    ):
                         totals[k] += st[k]
-                    rep_rows.append([mark, req["requestid"], st["fields"], st["detail_rows"],
-                                     st["attach_total"], st["attach_ok"], st["attach_fail"], action])
+                    rep_rows.append(
+                        [
+                            mark,
+                            req["requestid"],
+                            st["fields"],
+                            st["detail_rows"],
+                            st["attach_total"],
+                            st["attach_ok"],
+                            st["attach_fail"],
+                            action,
+                        ]
+                    )
         except Exception as e:
             with stats_lock:
                 err_rows.append([stem, "work", repr(e)[:300]])
@@ -892,8 +1131,17 @@ def main(argv=None) -> int:
         for i, f in enumerate(futs, 1):
             f.result()
             if i % 200 == 0 or i == len(futs):
-                print("进度 %d/%d  附件: 下载%d 失败%d 跳过%d"
-                      % (i, len(futs), fetcher.downloaded, fetcher.failed, fetcher.skipped), flush=True)
+                print(
+                    "进度 %d/%d  附件: 下载%d 失败%d 跳过%d"
+                    % (
+                        i,
+                        len(futs),
+                        fetcher.downloaded,
+                        fetcher.failed,
+                        fetcher.skipped,
+                    ),
+                    flush=True,
+                )
 
     pool.close()
 
@@ -903,15 +1151,36 @@ def main(argv=None) -> int:
         w.writerows(err_rows)
     with open(rep_path, "w", newline="", encoding="utf-8-sig") as fh:
         w = csv.writer(fh)
-        w.writerow(["案号", "requestid", "字段数", "明细行数", "附件数", "附件OK", "附件失败", "写入方式"])
+        w.writerow(
+            [
+                "案号",
+                "requestid",
+                "字段数",
+                "明细行数",
+                "附件数",
+                "附件OK",
+                "附件失败",
+                "写入方式",
+            ]
+        )
         w.writerows(rep_rows)
 
     print("\n===== 汇总 =====", flush=True)
-    print("处理 md：%d（插入 %d / 替换 %d / 跳过 %d / 无案号 %d）"
-          % (totals["done"], totals["inserted"], totals["replaced"], totals["skipped"], totals["no_mark"]))
+    print(
+        "处理 md：%d（插入 %d / 替换 %d / 跳过 %d / 无案号 %d）"
+        % (
+            totals["done"],
+            totals["inserted"],
+            totals["replaced"],
+            totals["skipped"],
+            totals["no_mark"],
+        )
+    )
     print("表单字段：%d   明细行：%d" % (totals["fields"], totals["detail_rows"]))
-    print("附件：%d（下载 %d / 已存在 %d / 失败 %d）"
-          % (totals["attach_total"], fetcher.downloaded, fetcher.skipped, fetcher.failed))
+    print(
+        "附件：%d（下载 %d / 已存在 %d / 失败 %d）"
+        % (totals["attach_total"], fetcher.downloaded, fetcher.skipped, fetcher.failed)
+    )
     print("错误 %d 条 → %s" % (len(err_rows), err_path))
     print("明细报告 → %s" % rep_path)
     print("耗时 %.1f s" % (time.time() - t0))

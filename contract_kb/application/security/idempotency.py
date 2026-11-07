@@ -23,7 +23,9 @@ from typing import Any, Sequence
 class IdempotencyConflictError(Exception):
     """幂等键冲突异常（同一作用域下复用同一 Key 但请求参数或指纹不一致）。"""
 
-    def __init__(self, message: str = "Idempotency key conflict: request parameters changed"):
+    def __init__(
+        self, message: str = "Idempotency key conflict: request parameters changed"
+    ):
         super().__init__(message)
 
 
@@ -75,7 +77,9 @@ def compute_request_fingerprint(
             content_hash = ""
 
     norm_mode = (mode or "").strip().upper()
-    norm_reqs = sorted([str(r).strip() for r in (custom_requirements or []) if str(r).strip()])
+    norm_reqs = sorted(
+        [str(r).strip() for r in (custom_requirements or []) if str(r).strip()]
+    )
 
     norm_extra = ""
     if extra_params:

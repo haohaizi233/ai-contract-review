@@ -136,7 +136,10 @@ def test_v2_signature_tamper_detection(tmp_path):
 
     # 1. 篡改 Method（POST 改为 GET）
     req_tamper_method = _make_request(
-        method="GET", path="/api/v1/jobs/review", query="mode=STANDARD", headers=base_headers
+        method="GET",
+        path="/api/v1/jobs/review",
+        query="mode=STANDARD",
+        headers=base_headers,
     )
     with pytest.raises(HTTPException) as exc:
         auth.authenticate(req_tamper_method)
@@ -144,7 +147,10 @@ def test_v2_signature_tamper_detection(tmp_path):
 
     # 2. 篡改 Path（发往未授权路径）
     req_tamper_path = _make_request(
-        method="POST", path="/api/v1/contract-kb/rules", query="mode=STANDARD", headers=base_headers
+        method="POST",
+        path="/api/v1/contract-kb/rules",
+        query="mode=STANDARD",
+        headers=base_headers,
     )
     with pytest.raises(HTTPException) as exc:
         auth.authenticate(req_tamper_path)
@@ -152,7 +158,10 @@ def test_v2_signature_tamper_detection(tmp_path):
 
     # 3. 篡改 Query（更改参数）
     req_tamper_query = _make_request(
-        method="POST", path="/api/v1/jobs/review", query="mode=CUSTOM", headers=base_headers
+        method="POST",
+        path="/api/v1/jobs/review",
+        query="mode=CUSTOM",
+        headers=base_headers,
     )
     with pytest.raises(HTTPException) as exc:
         auth.authenticate(req_tamper_query)
@@ -187,7 +196,9 @@ def test_v2_signature_clock_skew_rejected(tmp_path):
         "X-Auth-Signature": sig,
         "X-Auth-Version": "2",
     }
-    req = _make_request(method="GET", path="/api/v1/contract-kb/documents", headers=headers)
+    req = _make_request(
+        method="GET", path="/api/v1/contract-kb/documents", headers=headers
+    )
     with pytest.raises(HTTPException) as exc:
         auth.authenticate(req)
     assert exc.value.status_code == 401
@@ -208,7 +219,9 @@ def test_v2_mode_rejects_missing_nonce(tmp_path):
         "X-Auth-Signature": "some_sig",
         "X-Auth-Version": "2",
     }
-    req = _make_request(method="GET", path="/api/v1/contract-kb/documents", headers=headers)
+    req = _make_request(
+        method="GET", path="/api/v1/contract-kb/documents", headers=headers
+    )
     with pytest.raises(HTTPException) as exc:
         auth.authenticate(req)
     assert exc.value.status_code == 401

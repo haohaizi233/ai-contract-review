@@ -438,9 +438,13 @@ class Storage:
         if "lease_token" not in job_cols:
             self.conn.execute("ALTER TABLE async_jobs ADD COLUMN lease_token TEXT")
         if "lease_until" not in job_cols:
-            self.conn.execute("ALTER TABLE async_jobs ADD COLUMN lease_until REAL NOT NULL DEFAULT 0.0")
+            self.conn.execute(
+                "ALTER TABLE async_jobs ADD COLUMN lease_until REAL NOT NULL DEFAULT 0.0"
+            )
         if "heartbeat_at" not in job_cols:
-            self.conn.execute("ALTER TABLE async_jobs ADD COLUMN heartbeat_at REAL NOT NULL DEFAULT 0.0")
+            self.conn.execute(
+                "ALTER TABLE async_jobs ADD COLUMN heartbeat_at REAL NOT NULL DEFAULT 0.0"
+            )
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_async_jobs_lease_recovery ON async_jobs(status, lease_until, next_run_at)"
         )
@@ -1679,7 +1683,9 @@ class Storage:
         cid = contract.contract_id
         now = time.time()
         tenant = getattr(contract, "tenant_id", "default") or "default"
-        contract_dict = contract.to_dict() if hasattr(contract, "to_dict") else dict(contract)
+        contract_dict = (
+            contract.to_dict() if hasattr(contract, "to_dict") else dict(contract)
+        )
 
         with self._lock:
             if expected_version is not None:
@@ -1995,12 +2001,29 @@ class Storage:
                 if r["status"] in ("PENDING", "RETRYING"):
                     cur = self.conn.execute(
                         "UPDATE async_jobs SET status='RUNNING', worker_id=?, lease_token=?, lease_until=?, heartbeat_at=?, attempts=?, updated_at=? WHERE job_id=? AND status IN ('PENDING', 'RETRYING')",
-                        (worker_id, new_token, lease_until, now, new_attempts, now, job_id),
+                        (
+                            worker_id,
+                            new_token,
+                            lease_until,
+                            now,
+                            new_attempts,
+                            now,
+                            job_id,
+                        ),
                     )
                 else:
                     cur = self.conn.execute(
                         "UPDATE async_jobs SET status='RUNNING', worker_id=?, lease_token=?, lease_until=?, heartbeat_at=?, attempts=?, updated_at=? WHERE job_id=? AND status='RUNNING' AND lease_until <= ?",
-                        (worker_id, new_token, lease_until, now, new_attempts, now, job_id, now),
+                        (
+                            worker_id,
+                            new_token,
+                            lease_until,
+                            now,
+                            new_attempts,
+                            now,
+                            job_id,
+                            now,
+                        ),
                     )
                 if cur.rowcount == 1:
                     self._commit()
@@ -2034,9 +2057,7 @@ class Storage:
                 self._commit()
             return ok
 
-    def finish_job(
-        self, job_id: str, lease_token: str, outcome: JobOutcome
-    ) -> bool:
+    def finish_job(self, job_id: str, lease_token: str, outcome: JobOutcome) -> bool:
         now = time.time()
         with self._lock:
             res_json = (
@@ -2062,16 +2083,22 @@ class Storage:
             if ok:
                 self._commit()
                 if outcome.status == "SUCCEEDED":
-                    self.finalize_idempotency_key(resource_id=job_id, status="COMPLETED")
+                    self.finalize_idempotency_key(
+                        resource_id=job_id, status="COMPLETED"
+                    )
             return ok
 
     def claim_next_async_job(self, job_types: list[str] | None = None) -> dict | None:
-        lease = self.claim_job(worker_id="default", lease_seconds=60, job_types=job_types)
+        lease = self.claim_job(
+            worker_id="default", lease_seconds=60, job_types=job_types
+        )
         if lease:
             return self.get_async_job(lease.job_id)
         return None
 
-    def _legacy_claim_next_async_job(self, job_types: list[str] | None = None) -> dict | None:
+    def _legacy_claim_next_async_job(
+        self, job_types: list[str] | None = None
+    ) -> dict | None:
         now = time.time()
         with self._lock:
             sql = (
@@ -2308,7 +2335,12 @@ class Storage:
             cur = self.conn.execute(
                 "SELECT request_fingerprint, status, resource_id FROM request_idempotency "
                 "WHERE tenant_id=? AND actor_id=? AND operation=? AND idempotency_key=?",
-                (identity.tenant_id, identity.actor_id, identity.operation, identity.key),
+                (
+                    identity.tenant_id,
+                    identity.actor_id,
+                    identity.operation,
+                    identity.key,
+                ),
             )
             row = cur.fetchone()
             if row:
@@ -2353,7 +2385,12 @@ class Storage:
                 cur = self.conn.execute(
                     "SELECT request_fingerprint, status, resource_id FROM request_idempotency "
                     "WHERE tenant_id=? AND actor_id=? AND operation=? AND idempotency_key=?",
-                    (identity.tenant_id, identity.actor_id, identity.operation, identity.key),
+                    (
+                        identity.tenant_id,
+                        identity.actor_id,
+                        identity.operation,
+                        identity.key,
+                    ),
                 )
                 existing = cur.fetchone()
                 if existing:
@@ -2413,7 +2450,9 @@ class Storage:
         now = time.time()
         with self._lock:
             try:
-                self.conn.execute("DELETE FROM auth_replay_nonces WHERE expires_at < ?", (now,))
+                self.conn.execute(
+                    "DELETE FROM auth_replay_nonces WHERE expires_at < ?", (now,)
+                )
             except Exception:
                 pass
             try:

@@ -254,7 +254,11 @@ class HumanOverrideService:
             issue = storage.get_issue(issue_id)
             if not issue:
                 raise KeyError(f"未找到审核问题：{issue_id}")
-            if tenant_id is not None and issue.get("task_tenant_id") and issue["task_tenant_id"] != tenant_id:
+            if (
+                tenant_id is not None
+                and issue.get("task_tenant_id")
+                and issue["task_tenant_id"] != tenant_id
+            ):
                 raise PermissionError("跨租户人工复核覆盖被拒绝")
 
             prev_state = issue.get("human_state") or "PENDING"
@@ -274,7 +278,9 @@ class HumanOverrideService:
             override_id = f"ovr_{uuid.uuid4().hex[:12]}"
             record_fn = getattr(storage, "record_human_override", None)
             if record_fn is None:
-                raise RuntimeError("存储层未实现 record_human_override 接口，覆写无法留痕")
+                raise RuntimeError(
+                    "存储层未实现 record_human_override 接口，覆写无法留痕"
+                )
 
             record_fn(
                 override_id=override_id,

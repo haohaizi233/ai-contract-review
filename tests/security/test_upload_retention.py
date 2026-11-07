@@ -21,10 +21,13 @@ def test_collect_expired_uploads_dry_run_preserves_files(tmp_path: Path):
     # Simulate file from 2 days ago
     old_time = time.time() - (48 * 3600)
     import os
+
     os.utime(old_file, (old_time, old_time))
 
     now = time.time()
-    result = collect_expired_uploads(upload_dir, now=now, retention_seconds=86400, dry_run=True)
+    result = collect_expired_uploads(
+        upload_dir, now=now, retention_seconds=86400, dry_run=True
+    )
 
     assert result["dry_run"] is True
     assert result["scanned_count"] == 1
@@ -42,13 +45,16 @@ def test_collect_expired_uploads_live_purges_past_retention(tmp_path: Path):
     old_file.write_text("expired", encoding="utf-8")
     old_time = time.time() - (48 * 3600)
     import os
+
     os.utime(old_file, (old_time, old_time))
 
     new_file = upload_dir / "recent_doc.docx"
     new_file.write_text("recent", encoding="utf-8")
 
     now = time.time()
-    result = collect_expired_uploads(upload_dir, now=now, retention_seconds=86400, dry_run=False)
+    result = collect_expired_uploads(
+        upload_dir, now=now, retention_seconds=86400, dry_run=False
+    )
 
     assert result["dry_run"] is False
     assert result["scanned_count"] == 2
@@ -67,6 +73,7 @@ def test_active_leases_and_checkpoints_protected_from_cleanup(tmp_path: Path):
     leased_file.write_text("leased contract", encoding="utf-8")
     old_time = time.time() - (48 * 3600)
     import os
+
     os.utime(leased_file, (old_time, old_time))
 
     now = time.time()

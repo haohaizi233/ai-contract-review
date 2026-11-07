@@ -87,7 +87,6 @@ class Principal:
         )
 
 
-
 EMPTY_BODY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 
@@ -133,6 +132,7 @@ def compute_auth_signature_v2(
     return hmac.new(
         key.encode("utf-8"), canonical_msg.encode("utf-8"), hashlib.sha256
     ).hexdigest()
+
 
 class TrustedHeaderAuth:
     """受信任认证层适配器（支持签名 V2 完整载荷绑定与防重放 Nonce 校验）。"""
@@ -200,7 +200,9 @@ class TrustedHeaderAuth:
 
                 now = time.time()
                 # 内存快速去重与 TTL 清理
-                self._seen_nonces = {k: exp for k, exp in self._seen_nonces.items() if exp > now}
+                self._seen_nonces = {
+                    k: exp for k, exp in self._seen_nonces.items() if exp > now
+                }
                 if nonce in self._seen_nonces:
                     raise HTTPException(401, "认证请求重放（Nonce 已被使用）")
 
@@ -235,8 +237,14 @@ class TrustedHeaderAuth:
                     raise HTTPException(401, "认证签名无效")
             else:
                 # V1 模式校验
-                if self._auth_version == "2" or os.environ.get("CONTRACT_KB_AUTH_VERSION") == "2":
-                    raise HTTPException(401, "系统已启用签名 V2 强制模式，拒绝 V1 签名（缺少 Nonce/版本）")
+                if (
+                    self._auth_version == "2"
+                    or os.environ.get("CONTRACT_KB_AUTH_VERSION") == "2"
+                ):
+                    raise HTTPException(
+                        401,
+                        "系统已启用签名 V2 强制模式，拒绝 V1 签名（缺少 Nonce/版本）",
+                    )
 
                 require_ts = (
                     os.environ.get("CONTRACT_KB_REQUIRE_AUTH_TIMESTAMP", "0") == "1"

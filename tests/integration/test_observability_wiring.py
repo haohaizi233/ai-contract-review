@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
-from contract_kb.infrastructure.observability.metrics import MetricsCollector, normalize_route_path
+from contract_kb.infrastructure.observability.metrics import (
+    MetricsCollector,
+    normalize_route_path,
+)
 
 
 def test_normalize_route_path_prevents_cardinality_explosion():

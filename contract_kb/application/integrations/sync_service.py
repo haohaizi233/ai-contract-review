@@ -161,7 +161,9 @@ class SyncWatermarkService:
                     )
                     row = cur.fetchone()
                     if not row:
-                        return SyncCursor(tenant_id, source_system, source_scope, 0.0, "")
+                        return SyncCursor(
+                            tenant_id, source_system, source_scope, 0.0, ""
+                        )
                     return SyncCursor(
                         tenant_id=tenant_id,
                         source_system=source_system,
@@ -236,17 +238,12 @@ class SyncWatermarkService:
                         title=existing_dict.get("title", ""),
                         business_category=existing_dict.get("business_category", ""),
                         contract_subtype=existing_dict.get("contract_subtype", ""),
-                        lifecycle_status=existing_dict.get(
-                            "lifecycle_status", "DRAFT"
-                        ),
+                        lifecycle_status=existing_dict.get("lifecycle_status", "DRAFT"),
                         source_system=existing_dict.get("source_system", "UPLOAD"),
-                        source_document_id=existing_dict.get(
-                            "source_document_id", ""
-                        ),
+                        source_document_id=existing_dict.get("source_document_id", ""),
                         source_hash=existing_dict.get("source_hash", ""),
                         parties=[
-                            ContractParty(**p)
-                            for p in existing_dict.get("parties", [])
+                            ContractParty(**p) for p in existing_dict.get("parties", [])
                         ],
                         amounts=ContractAmountSummary(
                             total_amount=existing_dict.get("amounts", {}).get(

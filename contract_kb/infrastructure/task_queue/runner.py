@@ -165,7 +165,9 @@ class PersistentTaskRunner:
                 elif outcome.status in ("IN_PROGRESS", "REPLAY"):
                     if temp_file_path:
                         self._cleanup_temp_file(str(temp_file_path))
-                    job = self.storage.get_async_job(outcome.resource_id, tenant_id=tenant_id)
+                    job = self.storage.get_async_job(
+                        outcome.resource_id, tenant_id=tenant_id
+                    )
                     if job:
                         return job, False
                 elif outcome.status == "CREATED":
@@ -272,7 +274,11 @@ class PersistentTaskRunner:
                 )
                 finalize_fn = getattr(self.storage, "finalize_idempotency_key", None)
                 if finalize_fn is not None:
-                    finalize_fn(resource_id=job_id, status="COMPLETED", tenant_id=job.get("tenant_id"))
+                    finalize_fn(
+                        resource_id=job_id,
+                        status="COMPLETED",
+                        tenant_id=job.get("tenant_id"),
+                    )
                 GLOBAL_METRICS.record_async_job_event("async_jobs_succeeded")
                 self._cleanup_temp_file(temp_path)
         except Exception as exc:

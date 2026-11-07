@@ -35,16 +35,28 @@ def test_cross_verify_and_merge_cli_dry_run_and_help():
         errors="replace",
     )
     assert res_help.returncode == 0
-    assert "cross_verify_and_merge" in res_help.stdout or "help" in res_help.stdout.lower()
+    assert (
+        "cross_verify_and_merge" in res_help.stdout or "help" in res_help.stdout.lower()
+    )
 
     res_dry = subprocess.run(
-        [sys.executable, "tools/cross_verify_and_merge.py", "--dry-run", "--limit", "5"],
+        [
+            sys.executable,
+            "tools/cross_verify_and_merge.py",
+            "--dry-run",
+            "--limit",
+            "5",
+        ],
         capture_output=True,
         text=True,
         errors="replace",
     )
     assert res_dry.returncode == 0, f"Dry-run failed with stderr: {res_dry.stderr}"
-    assert "DRY_RUN" in res_dry.stdout or "完成" in res_dry.stdout or "dry_run" in res_dry.stdout.lower()
+    assert (
+        "DRY_RUN" in res_dry.stdout
+        or "完成" in res_dry.stdout
+        or "dry_run" in res_dry.stdout.lower()
+    )
 
 
 def test_live_db_merge_cli_dry_run_and_help():
@@ -64,7 +76,11 @@ def test_live_db_merge_cli_dry_run_and_help():
         errors="replace",
     )
     assert res_dry.returncode == 0, f"Dry-run failed with stderr: {res_dry.stderr}"
-    assert "DRY_RUN" in res_dry.stdout or "完成" in res_dry.stdout or "dry_run" in res_dry.stdout.lower()
+    assert (
+        "DRY_RUN" in res_dry.stdout
+        or "完成" in res_dry.stdout
+        or "dry_run" in res_dry.stdout.lower()
+    )
 
 
 def test_tender_case_export_cli_dry_run_and_help():

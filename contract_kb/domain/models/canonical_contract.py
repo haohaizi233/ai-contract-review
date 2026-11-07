@@ -352,9 +352,7 @@ def merge_canonical(
         if incoming.lifecycle_status != ContractLifecycleStatus.DRAFT.value
         else existing.lifecycle_status
     )
-    merged_hash = (
-        incoming.source_hash if incoming.source_hash else existing.source_hash
-    )
+    merged_hash = incoming.source_hash if incoming.source_hash else existing.source_hash
 
     merged_contract = CanonicalContract(
         contract_id=existing.contract_id,
