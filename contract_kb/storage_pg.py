@@ -29,6 +29,7 @@ import numpy as np
 
 from .application.security.idempotency import IdempotencyOutcome, RequestIdentity
 from .embeddings import EmbeddingProvider, get_embedding_provider
+from .infrastructure.observability.redaction import redact_sensitive_text
 from .storage_errors import EmbeddingConfigMismatch
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
@@ -508,12 +509,13 @@ class PgVectorStorage:
                 raise
 
     def log_audit(self, actor: str, action: str, target: str, detail: str = "") -> None:
+        safe_detail = redact_sensitive_text(detail, max_len=1000)
         with self._lock:
             try:
                 with self.conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO audit_log (actor, action, target, detail) VALUES (%s,%s,%s,%s)",
-                        (actor, action, target, detail),
+                        (actor, action, target, safe_detail),
                     )
                 self._commit()
             except Exception:

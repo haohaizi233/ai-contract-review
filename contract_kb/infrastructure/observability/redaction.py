@@ -7,12 +7,13 @@
 
 from __future__ import annotations
 
+import ast
 import contextvars
 import json
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, Mapping
 
 _TRACE_CTX: contextvars.ContextVar[dict[str, str]] = contextvars.ContextVar(
     "contract_kb_trace_ctx", default={}
@@ -41,20 +42,76 @@ _DSN_PWD_RE = re.compile(
 )
 _BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]{8,}", re.I)
 _KV_SECRET_RE = re.compile(
-    r"((?:api[_-]?key|secret|password|passwd|token|shared[_-]?key)\s*[:=]\s*['\"]?)([^\s,'\"&;]{4,})",
+    r"""((?:['"]?(?:api[_-]?key|secret|password|passwd|token|shared[_-]?key|auth(?:orization)?|credential)['"]?\s*[:=]\s*['"]?))([^\s,'\"&;]{3,})(['"]?)""",
     re.I,
 )
 _BANK_OR_CARD_RE = re.compile(r"\b\d{12,22}\b")
 _CN_MOBILE_RE = re.compile(r"(?<!\d)(1[3-9]\d)\d{4}(\d{4})(?!\d)")
+_COOKIE_SECRET_RE = re.compile(
+    r"""((?:session(?:id)?|token|sid|auth|jwt|ticket)\s*=\s*)([^\s;,"']{4,})""",
+    re.I,
+)
+
+SENSITIVE_KEY_KEYWORDS = frozenset(
+    {
+        "password",
+        "passwd",
+        "secret",
+        "apikey",
+        "token",
+        "auth",
+        "authorization",
+        "xauthsig",
+        "xauthtoken",
+        "dsn",
+        "bankaccount",
+        "cookie",
+        "setcookie",
+        "credential",
+        "privatekey",
+        "privkey",
+    }
+)
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    norm = re.sub(r"[-_\s]", "", str(key)).lower()
+    return any(k in norm for k in SENSITIVE_KEY_KEYWORDS)
 
 
 def redact_sensitive_text(text: str, *, max_len: int = 500) -> str:
     """对日志、错误消息与审计字段执行确定性敏感信息脱敏与长度截断。"""
     if not text:
         return ""
+
+    stripped = text.strip()
+    # 尝试结构化解析：优先 JSON 文本，其次安全 Python dict/list 文本
+    if (stripped.startswith("{") and stripped.endswith("}")) or (
+        stripped.startswith("[") and stripped.endswith("]")
+    ):
+        try:
+            parsed = json.loads(stripped)
+            cleaned = redact_value(parsed)
+            res = json.dumps(cleaned, ensure_ascii=False)
+            if len(res) > max_len:
+                return res[:max_len] + "...[TRUNCATED]"
+            return res
+        except Exception:
+            try:
+                node = ast.literal_eval(stripped)
+                if isinstance(node, (dict, list)):
+                    cleaned = redact_value(node)
+                    res = json.dumps(cleaned, ensure_ascii=False)
+                    if len(res) > max_len:
+                        return res[:max_len] + "...[TRUNCATED]"
+                    return res
+            except Exception:
+                pass
+
     out = _DSN_PWD_RE.sub(r"\1***REDACTED***\3", text)
     out = _BEARER_RE.sub(r"\1***REDACTED***", out)
-    out = _KV_SECRET_RE.sub(r"\1***REDACTED***", out)
+    out = _KV_SECRET_RE.sub(r"\1***REDACTED***\3", out)
+    out = _COOKIE_SECRET_RE.sub(r"\1***REDACTED***", out)
     out = _CN_MOBILE_RE.sub(r"\1****\2", out)
     out = _BANK_OR_CARD_RE.sub("[REDACTED_ACCOUNT_NO]", out)
     if len(out) > max_len:
@@ -62,34 +119,109 @@ def redact_sensitive_text(text: str, *, max_len: int = 500) -> str:
     return out
 
 
-def redact_dict(payload: dict[str, Any]) -> dict[str, Any]:
-    """递归脱敏字典结构中的敏感键值。"""
-    sensitive_keys = {
-        "password",
-        "passwd",
-        "secret",
-        "api_key",
-        "token",
-        "authorization",
-        "x-auth-sig",
-        "dsn",
-        "bank_account",
-    }
-    cleaned: dict[str, Any] = {}
-    for k, v in payload.items():
-        if k.lower() in sensitive_keys:
-            cleaned[k] = "***REDACTED***"
-        elif isinstance(v, str):
-            cleaned[k] = redact_sensitive_text(v)
-        elif isinstance(v, dict):
-            cleaned[k] = redact_dict(v)
-        elif isinstance(v, list):
-            cleaned[k] = [
-                redact_sensitive_text(x) if isinstance(x, str) else x for x in v[:50]
-            ]
-        else:
-            cleaned[k] = v
-    return cleaned
+def redact_value(
+    value: Any,
+    *,
+    max_depth: int = 20,
+    _seen: set[int] | None = None,
+) -> Any:
+    """递归脱敏任意对象（字典、列表、集合、元组、字符串），防止循环引用与深层栈溢出。"""
+    if max_depth <= 0:
+        return "[MAX_DEPTH_EXCEEDED]"
+
+    if _seen is None:
+        _seen = set()
+
+    val_id = id(value)
+    if isinstance(value, (dict, list, tuple, set)):
+        if val_id in _seen:
+            return "[CIRCULAR_REFERENCE]"
+        _seen = set(_seen)
+        _seen.add(val_id)
+
+    if isinstance(value, dict):
+        cleaned_dict: dict[str, Any] = {}
+        for k, v in value.items():
+            if _is_sensitive_key(k):
+                cleaned_dict[str(k)] = "***REDACTED***"
+            else:
+                cleaned_dict[str(k)] = redact_value(
+                    v, max_depth=max_depth - 1, _seen=_seen
+                )
+        return cleaned_dict
+
+    if isinstance(value, list):
+        return [
+            redact_value(item, max_depth=max_depth - 1, _seen=_seen)
+            for item in value[:200]
+        ]
+
+    if isinstance(value, tuple):
+        return tuple(
+            redact_value(item, max_depth=max_depth - 1, _seen=_seen)
+            for item in value[:200]
+        )
+
+    if isinstance(value, set):
+        return {
+            redact_value(item, max_depth=max_depth - 1, _seen=_seen)
+            for item in list(value)[:200]
+        }
+
+    if isinstance(value, str):
+        return redact_sensitive_text(value, max_len=1000)
+
+    return value
+
+
+def redact_dict(payload: dict[str, Any], *, max_depth: int = 20) -> dict[str, Any]:
+    """递归脱敏字典结构中的敏感键值（向后兼容）。"""
+    res = redact_value(payload, max_depth=max_depth)
+    return res if isinstance(res, dict) else {"data": res}
+
+
+AUDIT_EVENT_WHITELISTS: dict[str, set[str]] = {
+    "review_task": {"mode", "bytes", "task_id", "status", "source_file"},
+    "enqueue_review_job": {"created", "mode", "bytes", "job_id", "job_type"},
+    "issue_feedback": {
+        "action",
+        "note",
+        "previous_state",
+        "new_state",
+        "issue_id",
+        "task_id",
+    },
+    "approve_format_standard": {"standard_id", "version", "approver"},
+    "approve_rule": {"rule_id", "version", "approver"},
+    "cancel_job": {"job_id", "status"},
+    "document_import": {"document_id", "source_file", "source_hash", "status", "category"},
+    "DEFAULT": {
+        "action",
+        "target",
+        "status",
+        "mode",
+        "bytes",
+        "version",
+        "count",
+        "task_id",
+        "job_id",
+        "created",
+    },
+}
+
+
+def safe_audit_detail(event_type: str, fields: Mapping[str, object]) -> str:
+    """根据审计事件类型白名单安全构建审计 detail 字符串。"""
+    allowed_keys = AUDIT_EVENT_WHITELISTS.get(
+        event_type, AUDIT_EVENT_WHITELISTS["DEFAULT"]
+    )
+    items: list[str] = []
+    for k in sorted(fields.keys()):
+        if k in allowed_keys:
+            val_str = redact_sensitive_text(str(fields[k]), max_len=200)
+            items.append(f"{k}={val_str}")
+    detail_str = " ".join(items)
+    return redact_sensitive_text(detail_str, max_len=500)
 
 
 class StructuredJsonFormatter(logging.Formatter):

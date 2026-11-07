@@ -14,9 +14,9 @@
 |---|---|---|---|---|---|---|---|
 | **T00** | 冻结基线与建立隔离执行环境 | F13 | **COMPLETED** | `6a1ad50` | `git status`, `manifest.json` | 无 | 进入 T01 |
 | **T01** | 修复同步/异步幂等的 owner 与请求内容绑定 | F01 | **COMPLETED** | `edf912c` | `pytest tests/security/test_idempotency_authorization.py tests/integration/test_idempotency_concurrency.py` (4 passed) | 无 | 进入 T02 |
-| **T02** | 人工覆写的事务、并发和审计原子化 | F02 | **COMPLETED** | 待提交 (`fix: make human override and audit atomic`) | `pytest tests/integration/test_human_override_atomicity.py` (5 passed) | 无 | 进入 T03 |
-| **T03** | 统一递归脱敏与审计入口保护 | F07 | **IN_PROGRESS** | - | `pytest tests/security/test_redaction_boundaries.py` | T02 | 先写失败断言测试 |
-| **T04** | 认证签名 V2 与真实防重放 | F08 | **NOT_STARTED** | - | `pytest tests/security/test_auth_replay_v2.py` | T03、网关协同 | - |
+| **T02** | 人工覆写的事务、并发和审计原子化 | F02 | **COMPLETED** | `701566d` | `pytest tests/integration/test_human_override_atomicity.py` (5 passed) | 无 | 进入 T03 |
+| **T03** | 统一递归脱敏与审计入口保护 | F07 | **COMPLETED** | 待提交 (`fix: redact structured logs and persisted audit details`) | `pytest tests/security/test_redaction_boundaries.py` (6 passed) | 无 | 进入 T04 |
+| **T04** | 认证签名 V2 与真实防重放 | F08 | **IN_PROGRESS** | - | `pytest tests/security/test_auth_replay_v2.py` | 网关协同 | 先写失败断言测试 |
 | **T05** | 授权条件下推数据库后再分页 | F10 | **NOT_STARTED** | - | `pytest tests/integration/test_authorized_pagination.py` | T01 | - |
 | **T06** | 持久化作业租约、心跳与失联恢复 | F03 | **NOT_STARTED** | - | `pytest tests/integration/test_job_lease_recovery.py` | T01, T02 | - |
 | **T07** | 统一 deadline、可取消 IO 与最终提交保护 | F04 | **NOT_STARTED** | - | `pytest tests/unit/test_execution_deadline.py` | T06 | - |

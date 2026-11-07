@@ -186,12 +186,12 @@ flowchart TD
 
 **契约：**`redact_value(value: object) -> object`递归处理dict/list/tuple；`safe_audit_detail(event_type: str, fields: Mapping[str, object]) -> str`仅接受事件白名单字段。兼容原字符串入口，但先解析可识别JSON，再进行限长与保守文本脱敏。
 
-- [ ] 写失败测试覆盖JSON字符串、Python风格字典文本、list嵌套对象、大小写/连字符变体的token/password/DSN/cookie，以及异常堆栈里的凭据。
-- [ ] 增加自定义对象、超深嵌套、循环引用、超长note测试；处理失败须产出安全占位信息，不能回退原文。
-- [ ] 运行 `python -m pytest tests/security/test_redaction_boundaries.py -q`，确认当前JSON与列表缺口失败。
-- [ ] 把审计脱敏放到唯一持久化入口；完整业务理由可以在受控业务记录保存，审计只保留必要摘要/引用和actor，不复制合同正文。
-- [ ] 对SQLite/PG审计表和捕获日志做负向断言：合成敏感标记不能出现；普通错误仍可通过request/task ID定位。
-- [ ] 通过目标测试与安全回归后提交 `fix: redact structured logs and persisted audit details`。
+- [x] 写失败测试覆盖JSON字符串、Python风格字典文本、list嵌套对象、大小写/连字符变体的token/password/DSN/cookie，以及异常堆栈里的凭据。
+- [x] 增加自定义对象、超深嵌套、循环引用、超长note测试；处理失败须产出安全占位信息，不能回退原文。
+- [x] 运行 `python -m pytest tests/security/test_redaction_boundaries.py -q`，确认当前JSON与列表缺口失败。
+- [x] 把审计脱敏放到唯一持久化入口；完整业务理由可以在受控业务记录保存，审计只保留必要摘要/引用和actor，不复制合同正文。
+- [x] 对SQLite/PG审计表和捕获日志做负向断言：合成敏感标记不能出现；普通错误仍可通过request/task ID定位。
+- [x] 通过目标测试与安全回归后提交 `fix: redact structured logs and persisted audit details`。
 
 **通过条件：**敏感内容不进入日志/trace/audit；限长递归可控；不因脱敏破坏正常查询和排障。
 

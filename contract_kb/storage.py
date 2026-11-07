@@ -27,6 +27,7 @@ import numpy as np
 from . import config
 from .application.security.idempotency import IdempotencyOutcome, RequestIdentity
 from .embeddings import EmbeddingProvider, get_embedding_provider
+from .infrastructure.observability.redaction import redact_sensitive_text
 from .storage_errors import EmbeddingConfigMismatch, StorageConfigError
 
 __all__ = [
@@ -694,10 +695,11 @@ class Storage:
             return True
 
     def log_audit(self, actor: str, action: str, target: str, detail: str = "") -> None:
+        safe_detail = redact_sensitive_text(detail, max_len=1000)
         with self._lock:
             self.conn.execute(
                 "INSERT INTO audit_log VALUES (NULL,?,?,?,?,?)",
-                (time.time(), actor, action, target, detail),
+                (time.time(), actor, action, target, safe_detail),
             )
             self._commit()
 
