@@ -22,8 +22,8 @@
 | **T07** | 统一 deadline、可取消 IO 与最终提交保护 | F04 | **COMPLETED** | `55a3d90` | `pytest tests/unit/test_execution_deadline.py tests/integration/test_deadline_finalization.py` (5 passed) | T06 | 进入 T08 |
 | **T08** | 调用前预算预留与并发硬约束 | F05 | **COMPLETED** | `dc13b80` | `pytest tests/unit/test_budget_reservations.py tests/integration/test_provider_budget_limits.py` (5 passed) | T07 | 进入 T09 |
 | **T09** | 阶段强类型契约、快照和可复现 manifest | F09 | **COMPLETED** | `7b95b32` | `pytest tests/contract/test_stage_schemas.py tests/integration/test_checkpoint_resume.py tests/unit/test_execution_manifest.py` (6 passed) | T01, T06-T08 | 进入 T10 |
-| **T10** | 稳定合同实体、来源合流和业务版本 | F06 | **COMPLETED** | 待提交 | `pytest tests/unit/test_canonical_merge.py tests/integration/test_canonical_versions.py` (5 passed) | T02, T09 | 进入 T11 |
-| **T11** | 租户水位线、更新捕获和原子同步批次 | F06/F12 | **NOT_STARTED** | - | `pytest tests/integration/test_incremental_sync_recovery.py` | T06, T10 | - |
+| **T10** | 稳定合同实体、来源合流和业务版本 | F06 | **COMPLETED** | `e54b7d0` | `pytest tests/unit/test_canonical_merge.py tests/integration/test_canonical_versions.py` (5 passed) | T02, T09 | 进入 T11 |
+| **T11** | 租户水位线、更新捕获和原子同步批次 | F06/F12 | **COMPLETED** | 待提交 | `pytest tests/integration/test_incremental_sync_recovery.py` (3 passed) | T06, T10 | 进入 T12 |
 | **T12** | RAG 准入 fail-closed、来源权限及证据定位 | F11 | **NOT_STARTED** | - | `pytest tests/security/test_knowledge_governance_fail_closed.py` | T01, T09 | - |
 | **T13** | 独立 qrels、真实效果分层和成本口径 | F14 | **NOT_STARTED** | - | `pytest tests/unit/test_evaluation_metrics.py` | T09, T12 | - |
 | **T14** | 可选 Agent 边界与三个重点工具逐步接线 | F12 | **NOT_STARTED** | - | `pytest tests/contract/test_legacy_cli_compatibility.py` | T08, T11, T12 | - |
