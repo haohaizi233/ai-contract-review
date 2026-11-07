@@ -1524,6 +1524,7 @@ def main():
     ap.add_argument("--refresh-oa", action="store_true", help="忽略旧 OA 缓存重拉")
     ap.add_argument("--web-port", type=int, default=8771)
     ap.add_argument("--no-web", action="store_true")
+    ap.add_argument("--dry-run", action="store_true", help="演练模式：无破坏性副作用，无需真实数据库凭据")
     args = ap.parse_args()
 
     env = load_env()
@@ -1542,6 +1543,15 @@ def main():
     t0 = time.time()
     try:
         prog.step(0, "running")
+        if args.dry_run:
+            print("[DRY_RUN] 演练模式：跳过真实数据库连接与写出，无副作用。")
+            prog.step(0, "done", "dry-run")
+            prog.step(1, "done", "dry-run")
+            prog.step(2, "done", "dry-run")
+            prog.step(3, "done", "dry-run")
+            prog.step(4, "done", "dry-run")
+            prog.state = "done"
+            return
         db = MySQL(env)
         scope_ids = args.apply_id
         if args.scope_index:

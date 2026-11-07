@@ -35,8 +35,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import pymysql
-import pytds
+try:
+    import pymysql
+except ImportError:
+    pymysql = None
+
+try:
+    import pytds
+except ImportError:
+    pytds = None
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
@@ -165,7 +172,13 @@ def get_file_md5(p: Path) -> str:
 # 第一步：在线直连两个数据库查询 2024 年及以后的主数据
 # ==============================================================================
 
-def query_live_e9_db(env: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
+def query_live_e9_db(env: Dict[str, str], dry_run: bool = False) -> Dict[str, Dict[str, Any]]:
+    if dry_run or pytds is None or not env.get("DB_HOST") or not env.get("DB_USER"):
+        if dry_run:
+            print("  [DRY_RUN] 演练模式：返回空/样本集合")
+            return {}
+        if pytds is None:
+            sys.exit("缺少 pytds 依赖，请先安装: pip install pytds")
     print("[1/7] 直连 e9 SQL Server (ecologyE9) 查询 2024 年及以后合同单据主数据 ...")
     conn = pytds.connect(
         dsn=env["DB_HOST"], port=int(env["DB_PORT"]),
@@ -226,13 +239,19 @@ def query_live_e9_db(env: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
     return e9_data
 
 
-def query_live_tender_db(env: Dict[str, str]) -> Tuple[
+def query_live_tender_db(env: Dict[str, str], dry_run: bool = False) -> Tuple[
     Dict[str, List[Dict[str, Any]]],
     Dict[str, List[Dict[str, Any]]],
     Dict[str, List[Dict[str, Any]]],
     Dict[str, int],
     Dict[str, Dict[str, Any]],
 ]:
+    if dry_run or pymysql is None or not env.get("MYSQL_HOST") or not env.get("MYSQL_USER"):
+        if dry_run:
+            print("  [DRY_RUN] 演练模式：返回空/样本集合")
+            return {}, {}, {}, {}, {}
+        if pymysql is None:
+            sys.exit("缺少 pymysql 依赖，请先安装: pip install pymysql")
     print("[2/7] 直连新系统 MySQL (tender_contract & tender_bpm) 查询 2024 年及以后主数据表 ...")
     conn = pymysql.connect(
         host=env["MYSQL_HOST"], port=int(env["MYSQL_PORT"]),
@@ -362,7 +381,7 @@ def query_live_tender_db(env: Dict[str, str]) -> Tuple[
 # 第二步：扫描两库物理文件资产（附件库与相册库）
 # ==============================================================================
 
-def index_all_physical_assets() -> Tuple[
+def index_all_physical_assets(limit: int = 0) -> Tuple[
     Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]],
     Dict[str, List[Dict[str, Any]]], Dict[str, List[Dict[str, Any]]]
 ]:
@@ -374,6 +393,8 @@ def index_all_physical_assets() -> Tuple[
     if E9_ATTACH_DIR.exists():
         for case_dir in E9_ATTACH_DIR.iterdir():
             if case_dir.is_dir():
+                if limit > 0 and len(e9_att_by_no) >= limit:
+                    break
                 for c_no in keys_of(case_dir.name):
                     for fpath in case_dir.iterdir():
                         if fpath.is_file():
@@ -444,6 +465,7 @@ def execute_union_merge(
     e9_att_by_no: Dict[str, List[Dict[str, Any]]],
     e9_png_by_no: Dict[str, List[Dict[str, Any]]],
     tender_bpm_by_no: Dict[str, List[Dict[str, Any]]],
+    limit: int = 0,
 ) -> Dict[str, Any]:
     print("[4/7] 执行 2024+ 真实两库全量比对：相同的取合集只留一份，不同的互补合成一份 ...")
 
@@ -757,7 +779,10 @@ def execute_union_merge(
 # 第四步：写出合成版总账表与全量直连交叉报告
 # ==============================================================================
 
-def write_merged_deliverables(res: Dict[str, Any]):
+def write_merged_deliverables(res: Dict[str, Any], dry_run: bool = False):
+    if dry_run:
+        print("[DRY_RUN] 演练模式完成，跳过磁盘写出，未产生副作用。")
+        return
     print("[5/7] 写出最终合成版主数据表 contracts_merged.csv / jsonl ...")
     contracts = res["contracts"]
     attachments = res["attachments"]
@@ -908,17 +933,23 @@ flowchart LR
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="live_db_merge: 在线两库全量交叉对照与最终合成工具")
+    parser.add_argument("--dry-run", action="store_true", help="演练模式：无破坏性副作用，无需真实数据库凭据")
+    parser.add_argument("--limit", type=int, default=0, help="处理案件上限（0表示全部）")
+    args = parser.parse_args()
+
     t0 = time.time()
     env = load_env()
-    if not env.get("DB_HOST") or not env.get("MYSQL_HOST"):
+    if not args.dry_run and (not env.get("DB_HOST") or not env.get("MYSQL_HOST")):
         sys.exit("data/.db_env 缺少数据库凭据")
 
     # 1. 直连在线真实数据库查询（2024 年及以后）
-    e9_db = query_live_e9_db(env)
-    applies, archives, attachments, opinions, manifest = query_live_tender_db(env)
+    e9_db = query_live_e9_db(env, dry_run=args.dry_run)
+    applies, archives, attachments, opinions, manifest = query_live_tender_db(env, dry_run=args.dry_run)
 
     # 2. 扫描物理资产
-    e9_att_by_id, e9_att_by_no, e9_png_by_no, tender_bpm_by_no = index_all_physical_assets()
+    e9_att_by_id, e9_att_by_no, e9_png_by_no, tender_bpm_by_no = index_all_physical_assets(limit=args.limit)
 
     # 3. 执行取合集只留一份、两库互补合成一份
     res = execute_union_merge(
@@ -926,10 +957,11 @@ def main():
         attachments=attachments, opinions=opinions, manifest=manifest,
         e9_att_by_id=e9_att_by_id, e9_att_by_no=e9_att_by_no,
         e9_png_by_no=e9_png_by_no, tender_bpm_by_no=tender_bpm_by_no,
+        limit=args.limit,
     )
 
     # 4. 写出最终交付物与报告
-    write_merged_deliverables(res)
+    write_merged_deliverables(res, dry_run=args.dry_run)
 
     t1 = time.time()
     print(f"\n[OK] 2024 年及以后真实两库直连交叉对照、取合集只留一份与互补合成彻底完成！总耗时: {t1 - t0:.2f} 秒。")

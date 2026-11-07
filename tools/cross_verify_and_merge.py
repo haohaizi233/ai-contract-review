@@ -111,7 +111,7 @@ def sql_query(sql: str, env: Dict[str, str]) -> List[List[str]]:
 # 第一步：加载 e9 资产库（元数据、附件、MD 内嵌 base64 提取落盘）
 # ==============================================================================
 
-def load_e9_metadata() -> Dict[str, Dict[str, Any]]:
+def load_e9_metadata(limit: int = 0) -> Dict[str, Dict[str, Any]]:
     """加载 e9 索引，按规范化合同编号聚合"""
     print("[1/6] 加载 e9 OA 索引与 MD 列表 ...")
     e9: Dict[str, Dict[str, Any]] = {}
@@ -162,7 +162,7 @@ def load_e9_metadata() -> Dict[str, Dict[str, Any]]:
     return e9
 
 
-def index_e9_attachments() -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+def index_e9_attachments(limit: int = 0) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
     """扫描 e9 附件目录：建立 imagefileid -> 附件信息 和 contract_no -> [附件...] 索引"""
     print("[2/6] 扫描与索引 e9 物理附件库（26,260 份存量文件）...")
     by_fileid: Dict[str, Dict[str, Any]] = {}
@@ -174,6 +174,8 @@ def index_e9_attachments() -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Di
 
     for entry in E9_ATTACH_DIR.iterdir():
         if entry.is_dir():
+            if limit > 0 and len(by_contract) >= limit:
+                break
             case_no = norm_no(entry.name)
             for file_path in entry.iterdir():
                 if file_path.is_file():
@@ -212,8 +214,11 @@ def index_e9_attachments() -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Di
     return by_fileid, by_contract
 
 
-def extract_e9_md_base64_images(e9_dict: Dict[str, Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+def extract_e9_md_base64_images(e9_dict: Dict[str, Dict[str, Any]], dry_run: bool = False) -> Dict[str, List[Dict[str, Any]]]:
     """提取 e9 MD 文件中内嵌的 base64 图片，解码落盘为真实物理图片，并返回相册图片索引"""
+    if dry_run:
+        print("  [DRY_RUN] 演练模式：跳过 17,243 张 base64 图片解码落盘")
+        return {}
     print("[3/6] 解码并落盘 e9 MD 内嵌的 17,243 张 base64 图片为物理相册文件 ...")
     ALBUM_IMAGES_OUT.mkdir(parents=True, exist_ok=True)
 
@@ -293,7 +298,7 @@ def extract_e9_md_base64_images(e9_dict: Dict[str, Dict[str, Any]]) -> Dict[str,
 # 第二步：加载 tender 新系统主数据与资产
 # ==============================================================================
 
-def load_tender_master_and_files(env: Dict[str, str]) -> Tuple[
+def load_tender_master_and_files(env: Dict[str, str], dry_run: bool = False) -> Tuple[
     Dict[str, List[Dict[str, Any]]],
     Dict[str, List[Dict[str, Any]]],
     Dict[str, List[Dict[str, Any]]],
@@ -302,6 +307,9 @@ def load_tender_master_and_files(env: Dict[str, str]) -> Tuple[
 ]:
     """从 MySQL 查询新库 contract_apply, contract_archive, contract_attachment, act_hi_comment，并加载 manifest.csv"""
     print("[4/6] 查询新系统 tender 库主数据表与 MinIO 文件清单 ...")
+    if dry_run and ("MYSQL_HOST" not in env or not env.get("MYSQL_HOST")):
+        print("  [DRY_RUN] 无可用 MySQL 凭据，使用空样本集运行演练")
+        return {}, {}, {}, {}, {}
     apply_rows = sql_query(
         "SELECT contract_no, id, IFNULL(oa_id,''), IFNULL(oa_source,''), IFNULL(contract_name,''), "
         "IFNULL(contract_status,''), IFNULL(applicant_name,''), IFNULL(applicant_dept_name,''), "
@@ -379,7 +387,7 @@ def load_tender_master_and_files(env: Dict[str, str]) -> Tuple[
     return applies, archives, attachments, opinions, manifest
 
 
-def load_tender_case_dossiers() -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+def load_tender_case_dossiers(limit: int = 0) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
     """加载 tender-case-export 产物（MD、_index.csv、_relations.jsonl、images）"""
     case_by_no: Dict[str, Dict[str, Any]] = {}
     case_images_by_no: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
@@ -402,6 +410,8 @@ def load_tender_case_dossiers() -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Li
             md_full = TENDER_EXPORT_DIR / md_rel if md_rel else None
             sz = md_full.stat().st_size if (md_full and md_full.exists()) else 0
 
+            if limit > 0 and len(case_by_no) >= limit:
+                break
             case_by_no[k] = {
                 "apply_id": row.get("申请ID", ""),
                 "contract_no": k,
@@ -485,10 +495,13 @@ def execute_cross_verification_and_merge(
     manifest: Dict[str, Dict[str, Any]],
     case_dossiers: Dict[str, Dict[str, Any]],
     case_images: Dict[str, List[Dict[str, Any]]],
+    limit: int = 0,
 ) -> Dict[str, Any]:
     print("[5/6] 执行全要素两库交叉验证、附件补漏对账与多媒体相册统合 ...")
 
     all_contract_keys = sorted(set(e9_meta) | set(applies) | set(archives) | set(case_dossiers))
+    if limit > 0:
+        all_contract_keys = all_contract_keys[:limit]
 
     unified_contracts: List[Dict[str, Any]] = []
     unified_attachments: List[Dict[str, Any]] = []
@@ -852,7 +865,10 @@ def execute_cross_verification_and_merge(
 # 第四步：写出全套产物文件与综合交叉报告
 # ==============================================================================
 
-def write_outputs(res: Dict[str, Any]):
+def write_outputs(res: Dict[str, Any], dry_run: bool = False):
+    if dry_run:
+        print("[DRY_RUN] 演练模式完成，跳过磁盘写出，未产生副作用。")
+        return
     print("[6/6] 写出合并成果（CSV、JSONL、附件台账、相册总账与审计报告）...")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1080,19 +1096,25 @@ flowchart TD
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="cross_verify_and_merge: 两库数据交叉验证与深度合并工具")
+    parser.add_argument("--dry-run", action="store_true", help="演练模式：无破坏性副作用，无需真实数据库凭据")
+    parser.add_argument("--limit", type=int, default=0, help="处理案件上限（0表示全部）")
+    args = parser.parse_args()
+
     start_time = time.time()
     env = load_env()
-    if "MYSQL_HOST" not in env:
+    if not args.dry_run and "MYSQL_HOST" not in env:
         sys.exit("data/.db_env 缺少 MYSQL_* 凭据")
 
     # 1. e9 资产加载与 base64 提取
-    e9_meta = load_e9_metadata()
-    e9_attach_by_fileid, e9_attach_by_contract = index_e9_attachments()
-    e9_b64_albums = extract_e9_md_base64_images(e9_meta)
+    e9_meta = load_e9_metadata(limit=args.limit)
+    e9_attach_by_fileid, e9_attach_by_contract = index_e9_attachments(limit=args.limit)
+    e9_b64_albums = extract_e9_md_base64_images(e9_meta, dry_run=args.dry_run)
 
     # 2. tender 资产加载
-    applies, archives, attachments, opinions, manifest = load_tender_master_and_files(env)
-    case_dossiers, case_images = load_tender_case_dossiers()
+    applies, archives, attachments, opinions, manifest = load_tender_master_and_files(env, dry_run=args.dry_run)
+    case_dossiers, case_images = load_tender_case_dossiers(limit=args.limit)
 
     # 3. 交叉验证与合并
     result = execute_cross_verification_and_merge(
@@ -1107,10 +1129,11 @@ def main():
         manifest=manifest,
         case_dossiers=case_dossiers,
         case_images=case_images,
+        limit=args.limit,
     )
 
     # 4. 写出成果
-    write_outputs(result)
+    write_outputs(result, dry_run=args.dry_run)
 
     elapsed = time.time() - start_time
     print(f"\n[OK] 全部交叉对照、验证与合并流水线顺利完成！总耗时: {elapsed:.2f} 秒。")
