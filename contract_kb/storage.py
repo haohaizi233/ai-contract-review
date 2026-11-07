@@ -1393,6 +1393,7 @@ class Storage:
         status: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        created_by: str | None = None,
     ) -> tuple[list[dict], int]:
         with self._lock:
             where = " WHERE 1=1"
@@ -1403,6 +1404,9 @@ class Storage:
             if status:
                 where += " AND status=?"
                 params.append(status)
+            if created_by is not None:
+                where += " AND created_by=?"
+                params.append(created_by)
             total = int(
                 self.conn.execute(
                     "SELECT COUNT(*) AS c FROM review_tasks" + where, params
@@ -1784,6 +1788,7 @@ class Storage:
         status: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        created_by: str | None = None,
     ) -> tuple[list[dict], int]:
         with self._lock:
             where = " WHERE 1=1"
@@ -1794,6 +1799,9 @@ class Storage:
             if status:
                 where += " AND status=?"
                 params.append(status)
+            if created_by is not None:
+                where += " AND created_by=?"
+                params.append(created_by)
             total = int(
                 self.conn.execute(
                     "SELECT COUNT(*) AS c FROM async_jobs" + where, params

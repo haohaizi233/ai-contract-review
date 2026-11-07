@@ -218,11 +218,11 @@ flowchart TD
 
 **契约：**列表端口增加可选 `created_by: str | None`，返回 `items,total,limit,offset`；只有授权admin查询可传None，普通用户由应用层强制注入actor，不接收客户端自报owner覆盖。
 
-- [ ] 用交错Alice/Bob数据写失败测试：limit1的第一页必须有Alice自己的首条记录，total为Alice全部授权记录数；第二页、空页、tenant和admin分别验证。
-- [ ] 运行 `python -m pytest tests/integration/test_authorized_pagination.py -q`。
-- [ ] SQL WHERE先包含tenant/owner，再COUNT与ORDER BY/LIMIT/OFFSET；稳定排序包含唯一ID避免同时间翻页漂移。
-- [ ] 保留原分页字段与旧路由兼容；如旧接口形状不同，写明确适配器，不能顺手变更响应格式。
-- [ ] 双库通过后提交 `fix: paginate tasks within authorized ownership scope`。
+- [x] 用交错Alice/Bob数据写失败测试：limit1的第一页必须有Alice自己的首条记录，total为Alice全部授权记录数；第二页、空页、tenant和admin分别验证。
+- [x] 运行 `python -m pytest tests/integration/test_authorized_pagination.py -q`。
+- [x] SQL WHERE先包含tenant/owner，再COUNT与ORDER BY/LIMIT/OFFSET；稳定排序包含唯一ID避免同时间翻页漂移。
+- [x] 保留原分页字段与旧路由兼容；如旧接口形状不同，写明确适配器，不能顺手变更响应格式。
+- [x] 双库通过后提交 `fix: paginate tasks within authorized ownership scope`。
 
 ### T06：持久化作业租约、心跳与失联恢复
 

@@ -563,16 +563,14 @@ def list_review_tasks(
     offset: int = Query(default=0, ge=0),
 ):
     p = _principal(request)
+    created_by = None if p.has_role(ROLE_ADMIN) else p.user_id
     items, total = get_storage().list_tasks(
-        tenant_id=p.tenant_id, status=status, limit=limit, offset=offset
+        tenant_id=p.tenant_id,
+        status=status,
+        limit=limit,
+        offset=offset,
+        created_by=created_by,
     )
-    if not p.has_role(ROLE_ADMIN):
-        items = [
-            t
-            for t in items
-            if not t.get("created_by") or t.get("created_by") == p.user_id
-        ]
-        total = len(items)
     return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 
@@ -730,16 +728,14 @@ def list_jobs(
     offset: int = Query(default=0, ge=0),
 ):
     p = _principal(request)
+    created_by = None if p.has_role(ROLE_ADMIN) else p.user_id
     items, total = get_storage().list_async_jobs(
-        tenant_id=p.tenant_id, status=status, limit=limit, offset=offset
+        tenant_id=p.tenant_id,
+        status=status,
+        limit=limit,
+        offset=offset,
+        created_by=created_by,
     )
-    if not p.has_role(ROLE_ADMIN):
-        items = [
-            j
-            for j in items
-            if not j.get("created_by") or j.get("created_by") == p.user_id
-        ]
-        total = len(items)
     return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 

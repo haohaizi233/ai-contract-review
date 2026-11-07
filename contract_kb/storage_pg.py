@@ -1325,6 +1325,7 @@ class PgVectorStorage:
         status: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        created_by: str | None = None,
     ) -> tuple[list[dict], int]:
         with self._lock:
             where = " WHERE 1=1"
@@ -1335,6 +1336,9 @@ class PgVectorStorage:
             if status:
                 where += " AND status=%s"
                 params.append(status)
+            if created_by is not None:
+                where += " AND created_by=%s"
+                params.append(created_by)
             with self.conn.cursor() as cur:
                 cur.execute("SELECT COUNT(*) FROM review_tasks" + where, params)
                 total = int(cur.fetchone()[0])
@@ -1871,6 +1875,7 @@ class PgVectorStorage:
         status: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        created_by: str | None = None,
     ) -> tuple[list[dict], int]:
         with self._lock:
             where = " WHERE 1=1"
@@ -1881,6 +1886,9 @@ class PgVectorStorage:
             if status:
                 where += " AND status=%s"
                 params.append(status)
+            if created_by is not None:
+                where += " AND created_by=%s"
+                params.append(created_by)
             with self.conn.cursor() as cur:
                 cur.execute("SELECT COUNT(*) FROM async_jobs" + where, params)
                 total = int(cur.fetchone()[0])

@@ -16,9 +16,9 @@
 | **T01** | 修复同步/异步幂等的 owner 与请求内容绑定 | F01 | **COMPLETED** | `edf912c` | `pytest tests/security/test_idempotency_authorization.py tests/integration/test_idempotency_concurrency.py` (4 passed) | 无 | 进入 T02 |
 | **T02** | 人工覆写的事务、并发和审计原子化 | F02 | **COMPLETED** | `701566d` | `pytest tests/integration/test_human_override_atomicity.py` (5 passed) | 无 | 进入 T03 |
 | **T03** | 统一递归脱敏与审计入口保护 | F07 | **COMPLETED** | `d989151` | `pytest tests/security/test_redaction_boundaries.py` (6 passed) | 无 | 进入 T04 |
-| **T04** | 认证签名 V2 与真实防重放 | F08 | **COMPLETED** | 待提交 (`fix: add request-bound authentication and replay protection`) | `pytest tests/security/test_auth_replay_v2.py` (4 passed) | 无 | 进入 T05 |
-| **T05** | 授权条件下推数据库后再分页 | F10 | **IN_PROGRESS** | - | `pytest tests/integration/test_authorized_pagination.py` | T01 | 先写失败断言测试 |
-| **T06** | 持久化作业租约、心跳与失联恢复 | F03 | **NOT_STARTED** | - | `pytest tests/integration/test_job_lease_recovery.py` | T01, T02 | - |
+| **T04** | 认证签名 V2 与真实防重放 | F08 | **COMPLETED** | `c6e9c93` | `pytest tests/security/test_auth_replay_v2.py` (4 passed) | 无 | 进入 T05 |
+| **T05** | 授权条件下推数据库后再分页 | F10 | **COMPLETED** | 待提交 (`fix: paginate tasks within authorized ownership scope`) | `pytest tests/integration/test_authorized_pagination.py` (2 passed) | 无 | 进入 T06 |
+| **T06** | 持久化作业租约、心跳与失联恢复 | F03 | **IN_PROGRESS** | - | `pytest tests/integration/test_job_lease_recovery.py` | T01, T02 | 先写失败断言测试 |
 | **T07** | 统一 deadline、可取消 IO 与最终提交保护 | F04 | **NOT_STARTED** | - | `pytest tests/unit/test_execution_deadline.py` | T06 | - |
 | **T08** | 调用前预算预留与并发硬约束 | F05 | **NOT_STARTED** | - | `pytest tests/unit/test_budget_reservations.py` | T07 | - |
 | **T09** | 阶段强类型契约、快照和可复现 manifest | F09 | **NOT_STARTED** | - | `pytest tests/contract/test_stage_schemas.py` | T01, T06-T08 | - |
