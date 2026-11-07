@@ -26,6 +26,7 @@ import numpy as np
 
 from . import config
 from .application.security.idempotency import IdempotencyOutcome, RequestIdentity
+from .domain.models.execution import JobLease, JobOutcome
 from .embeddings import EmbeddingProvider, get_embedding_provider
 from .infrastructure.observability.redaction import redact_sensitive_text
 from .storage_errors import EmbeddingConfigMismatch, StorageConfigError
@@ -182,6 +183,10 @@ CREATE TABLE IF NOT EXISTS async_jobs (
     cancel_requested INTEGER NOT NULL DEFAULT 0,
     temp_file_path TEXT,
     created_by TEXT,
+    worker_id TEXT,
+    lease_token TEXT,
+    lease_until REAL NOT NULL DEFAULT 0.0,
+    heartbeat_at REAL NOT NULL DEFAULT 0.0,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -403,6 +408,18 @@ class Storage:
         )
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_async_jobs_tenant_idem ON async_jobs(tenant_id, idempotency_key)"
+        )
+        job_cols = self._table_cols("async_jobs")
+        if "worker_id" not in job_cols:
+            self.conn.execute("ALTER TABLE async_jobs ADD COLUMN worker_id TEXT")
+        if "lease_token" not in job_cols:
+            self.conn.execute("ALTER TABLE async_jobs ADD COLUMN lease_token TEXT")
+        if "lease_until" not in job_cols:
+            self.conn.execute("ALTER TABLE async_jobs ADD COLUMN lease_until REAL NOT NULL DEFAULT 0.0")
+        if "heartbeat_at" not in job_cols:
+            self.conn.execute("ALTER TABLE async_jobs ADD COLUMN heartbeat_at REAL NOT NULL DEFAULT 0.0")
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_async_jobs_lease_recovery ON async_jobs(status, lease_until, next_run_at)"
         )
         self.conn.execute(
             """
@@ -1815,7 +1832,142 @@ class Storage:
             ).fetchall()
             return [self._decode_job_row(dict(r)) for r in rows], total
 
+    def claim_job(
+        self,
+        worker_id: str,
+        lease_seconds: int = 60,
+        job_types: list[str] | None = None,
+    ) -> JobLease | None:
+        now = time.time()
+        lease_until = now + max(1, int(lease_seconds))
+        new_token = uuid.uuid4().hex
+        with self._lock:
+            sql = (
+                "SELECT * FROM async_jobs WHERE ("
+                "(status IN ('PENDING', 'RETRYING') AND next_run_at <= ?) "
+                "OR (status = 'RUNNING' AND lease_until < ?)"
+                ")"
+            )
+            params: list[Any] = [now, now]
+            if job_types:
+                placeholders = ",".join("?" for _ in job_types)
+                sql += f" AND job_type IN ({placeholders})"
+                params.extend(job_types)
+            sql += " ORDER BY next_run_at ASC, created_at ASC"
+            rows = self.conn.execute(sql, params).fetchall()
+            for r in rows:
+                job_id = r["job_id"]
+                if r["cancel_requested"]:
+                    self.conn.execute(
+                        "UPDATE async_jobs SET status='CANCELLED', updated_at=? WHERE job_id=?",
+                        (now, job_id),
+                    )
+                    self._commit()
+                    continue
+
+                curr_attempts = int(r["attempts"] or 0)
+                max_attempts = int(r["max_attempts"] or 3)
+
+                # 如果处于 RUNNING 且租约已过期，检查是否耗尽重试次数
+                if r["status"] == "RUNNING" and curr_attempts >= max_attempts:
+                    dlq_reason = f"lease_expired_attempts_exhausted({max_attempts})"
+                    self.conn.execute(
+                        "UPDATE async_jobs SET status='DEAD_LETTER', dead_letter_reason=?, updated_at=? WHERE job_id=? AND status='RUNNING'",
+                        (dlq_reason, now, job_id),
+                    )
+                    self._commit()
+                    continue
+
+                new_attempts = curr_attempts + 1
+                if new_attempts > max_attempts:
+                    dlq_reason = f"lease_expired_attempts_exhausted({max_attempts})"
+                    self.conn.execute(
+                        "UPDATE async_jobs SET status='DEAD_LETTER', dead_letter_reason=?, updated_at=? WHERE job_id=? AND status=?",
+                        (dlq_reason, now, job_id, r["status"]),
+                    )
+                    self._commit()
+                    continue
+
+                if r["status"] in ("PENDING", "RETRYING"):
+                    cur = self.conn.execute(
+                        "UPDATE async_jobs SET status='RUNNING', worker_id=?, lease_token=?, lease_until=?, heartbeat_at=?, attempts=?, updated_at=? WHERE job_id=? AND status IN ('PENDING', 'RETRYING')",
+                        (worker_id, new_token, lease_until, now, new_attempts, now, job_id),
+                    )
+                else:
+                    cur = self.conn.execute(
+                        "UPDATE async_jobs SET status='RUNNING', worker_id=?, lease_token=?, lease_until=?, heartbeat_at=?, attempts=?, updated_at=? WHERE job_id=? AND status='RUNNING' AND lease_until <= ?",
+                        (worker_id, new_token, lease_until, now, new_attempts, now, job_id, now),
+                    )
+                if cur.rowcount == 1:
+                    self._commit()
+                    decoded = self.get_async_job(job_id)
+                    return JobLease(
+                        job_id=job_id,
+                        worker_id=worker_id,
+                        lease_token=new_token,
+                        lease_until=lease_until,
+                        attempt=new_attempts,
+                        job_type=r["job_type"],
+                        tenant_id=r["tenant_id"],
+                        created_by=str(r["created_by"] or "system"),
+                        payload=decoded.get("payload") or {} if decoded else {},
+                        temp_file_path=r["temp_file_path"],
+                    )
+            return None
+
+    def heartbeat_job(
+        self, job_id: str, lease_token: str, extension_seconds: int = 60
+    ) -> bool:
+        now = time.time()
+        new_until = now + max(1, int(extension_seconds))
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE async_jobs SET lease_until=?, heartbeat_at=?, updated_at=? WHERE job_id=? AND lease_token=? AND status='RUNNING' AND lease_until >= ?",
+                (new_until, now, now, job_id, lease_token, now),
+            )
+            ok = cur.rowcount > 0
+            if ok:
+                self._commit()
+            return ok
+
+    def finish_job(
+        self, job_id: str, lease_token: str, outcome: JobOutcome
+    ) -> bool:
+        now = time.time()
+        with self._lock:
+            res_json = (
+                json.dumps(outcome.result, ensure_ascii=False)
+                if outcome.result is not None
+                else None
+            )
+            cur = self.conn.execute(
+                "UPDATE async_jobs SET status=?, result_json=?, error_message=?, dead_letter_reason=?, progress=?, next_run_at=COALESCE(?, next_run_at), updated_at=? WHERE job_id=? AND lease_token=?",
+                (
+                    outcome.status,
+                    res_json,
+                    outcome.error_message,
+                    outcome.dead_letter_reason,
+                    outcome.progress,
+                    outcome.next_run_at,
+                    now,
+                    job_id,
+                    lease_token,
+                ),
+            )
+            ok = cur.rowcount > 0
+            if ok:
+                self._commit()
+                if outcome.status == "SUCCEEDED":
+                    self.finalize_idempotency_key(resource_id=job_id, status="COMPLETED")
+            return ok
+
     def claim_next_async_job(self, job_types: list[str] | None = None) -> dict | None:
+        lease = self.claim_job(worker_id="default", lease_seconds=60, job_types=job_types)
+        if lease:
+            return self.get_async_job(lease.job_id)
+        return None
+
+    def _legacy_claim_next_async_job(self, job_types: list[str] | None = None) -> dict | None:
         now = time.time()
         with self._lock:
             sql = (

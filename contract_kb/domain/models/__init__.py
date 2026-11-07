@@ -8,6 +8,7 @@ from .canonical_contract import (
     SourceRecordMapping,
     SourceSystemType,
 )
+from .execution import JobLease, JobOutcome
 from .review import (
     CheckStatus,
     EvidenceReference,
@@ -30,6 +31,8 @@ __all__ = [
     "EvidenceReference",
     "Finding",
     "FindingSource",
+    "JobLease",
+    "JobOutcome",
     "PipelineContext",
     "ReviewResult",
     "SourceRecordMapping",

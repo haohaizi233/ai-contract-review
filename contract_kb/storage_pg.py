@@ -28,6 +28,7 @@ from typing import Any
 import numpy as np
 
 from .application.security.idempotency import IdempotencyOutcome, RequestIdentity
+from .domain.models.execution import JobLease, JobOutcome
 from .embeddings import EmbeddingProvider, get_embedding_provider
 from .infrastructure.observability.redaction import redact_sensitive_text
 from .storage_errors import EmbeddingConfigMismatch
@@ -1903,7 +1904,155 @@ class PgVectorStorage:
             self._commit()
             return [self._decode_job_row(dict(zip(cols, r))) for r in rows], total
 
+    def claim_job(
+        self,
+        worker_id: str,
+        lease_seconds: int = 60,
+        job_types: list[str] | None = None,
+    ) -> JobLease | None:
+        now_dt = datetime.fromtimestamp(time.time(), tz=timezone.utc)
+        lease_until_dt = datetime.fromtimestamp(time.time() + max(1, int(lease_seconds)), tz=timezone.utc)
+        new_token = uuid.uuid4().hex
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    sql = (
+                        "SELECT job_id, job_type, tenant_id, created_by, payload_json, cancel_requested, attempts, max_attempts, status, temp_file_path "
+                        "FROM async_jobs "
+                        "WHERE ((status IN ('PENDING', 'RETRYING') AND next_run_at <= %s) "
+                        "OR (status = 'RUNNING' AND lease_until < %s))"
+                    )
+                    params: list[Any] = [now_dt, now_dt]
+                    if job_types:
+                        placeholders = ",".join("%s" for _ in job_types)
+                        sql += f" AND job_type IN ({placeholders})"
+                        params.extend(job_types)
+                    sql += " ORDER BY next_run_at ASC, created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                    cur.execute(sql, params)
+                    row = cur.fetchone()
+                    if not row:
+                        self._commit()
+                        return None
+                    (jid, jtype, tid, cby, pjson, creq, attempts, max_att, status, temp_path) = row
+                    if creq:
+                        cur.execute(
+                            "UPDATE async_jobs SET status='CANCELLED', updated_at=now() WHERE job_id=%s",
+                            (jid,),
+                        )
+                        self._commit()
+                        return None
+
+                    curr_att = int(attempts or 0)
+                    m_att = int(max_att or 3)
+                    if status == "RUNNING" and curr_att >= m_att:
+                        dlq_reason = f"lease_expired_attempts_exhausted({m_att})"
+                        cur.execute(
+                            "UPDATE async_jobs SET status='DEAD_LETTER', dead_letter_reason=%s, updated_at=now() WHERE job_id=%s",
+                            (dlq_reason, jid),
+                        )
+                        self._commit()
+                        return None
+
+                    new_att = curr_att + 1
+                    if new_att > m_att:
+                        dlq_reason = f"lease_expired_attempts_exhausted({m_att})"
+                        cur.execute(
+                            "UPDATE async_jobs SET status='DEAD_LETTER', dead_letter_reason=%s, updated_at=now() WHERE job_id=%s",
+                            (dlq_reason, jid),
+                        )
+                        self._commit()
+                        return None
+
+                    cur.execute(
+                        "UPDATE async_jobs SET status='RUNNING', worker_id=%s, lease_token=%s, lease_until=%s, heartbeat_at=now(), attempts=%s, updated_at=now() WHERE job_id=%s",
+                        (worker_id, new_token, lease_until_dt, new_att, jid),
+                    )
+                self._commit()
+                payload = pjson if isinstance(pjson, dict) else (json.loads(pjson) if pjson else {})
+                return JobLease(
+                    job_id=jid,
+                    worker_id=worker_id,
+                    lease_token=new_token,
+                    lease_until=time.time() + max(1, int(lease_seconds)),
+                    attempt=new_att,
+                    job_type=jtype,
+                    tenant_id=tid,
+                    created_by=str(cby or "system"),
+                    payload=payload,
+                    temp_file_path=temp_path,
+                )
+            except Exception:
+                self._rollback()
+                raise
+
+    def heartbeat_job(
+        self, job_id: str, lease_token: str, extension_seconds: int = 60
+    ) -> bool:
+        now_dt = datetime.fromtimestamp(time.time(), tz=timezone.utc)
+        until_dt = datetime.fromtimestamp(time.time() + max(1, int(extension_seconds)), tz=timezone.utc)
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE async_jobs SET lease_until=%s, heartbeat_at=%s, updated_at=now() "
+                        "WHERE job_id=%s AND lease_token=%s AND status='RUNNING' AND lease_until >= %s",
+                        (until_dt, now_dt, job_id, lease_token, now_dt),
+                    )
+                    ok = cur.rowcount > 0
+                self._commit()
+                return ok
+            except Exception:
+                self._rollback()
+                raise
+
+    def finish_job(
+        self, job_id: str, lease_token: str, outcome: JobOutcome
+    ) -> bool:
+        next_dt = (
+            datetime.fromtimestamp(outcome.next_run_at, tz=timezone.utc)
+            if outcome.next_run_at is not None
+            else None
+        )
+        res_json = (
+            json.dumps(outcome.result, ensure_ascii=False)
+            if outcome.result is not None
+            else None
+        )
+        with self._lock:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE async_jobs SET status=%s, result_json=%s, error_message=%s, "
+                        "dead_letter_reason=%s, progress=%s, "
+                        "next_run_at=COALESCE(%s, next_run_at), updated_at=now() "
+                        "WHERE job_id=%s AND lease_token=%s",
+                        (
+                            outcome.status,
+                            res_json,
+                            outcome.error_message,
+                            outcome.dead_letter_reason,
+                            outcome.progress,
+                            next_dt,
+                            job_id,
+                            lease_token,
+                        ),
+                    )
+                    ok = cur.rowcount > 0
+                self._commit()
+                if ok and outcome.status == "SUCCEEDED":
+                    self.finalize_idempotency_key(resource_id=job_id, status="COMPLETED")
+                return ok
+            except Exception:
+                self._rollback()
+                raise
+
     def claim_next_async_job(self, job_types: list[str] | None = None) -> dict | None:
+        lease = self.claim_job(worker_id="default", lease_seconds=60, job_types=job_types)
+        if lease:
+            return self.get_async_job(lease.job_id)
+        return None
+
+    def _legacy_claim_next_async_job(self, job_types: list[str] | None = None) -> dict | None:
         now_ts = datetime.fromtimestamp(time.time(), tz=timezone.utc)
         with self._lock:
             try:
