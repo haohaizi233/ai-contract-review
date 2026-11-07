@@ -264,7 +264,10 @@ def test_pg18_full_review_pipeline_tenant_isolation_and_async_jobs(
     )
     alpha_items, alpha_total = st.list_canonical_contracts(tenant_id="tenant_alpha")
     beta_items, beta_total = st.list_canonical_contracts(tenant_id="tenant_beta")
-    assert alpha_total == 1 and len(alpha_items) == 1
+    # 含流水线 FinalizeReport 自动沉淀的 UPLOAD 合同 + 显式写入的 PG_CC_ALPHA_1 共 2 条
+    assert alpha_total == 2 and len(alpha_items) == 2
+    assert "PG_CC_ALPHA_1" in {it["contract_id"] for it in alpha_items}
+    assert any(it["source_system"] == "UPLOAD" for it in alpha_items)
     assert beta_total == 0 and len(beta_items) == 0
 
     # 验证 PG18 async_jobs 幂等入队与 FOR UPDATE SKIP LOCKED 认领

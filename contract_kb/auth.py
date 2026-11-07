@@ -27,8 +27,11 @@ ROLE_ADMIN = config.ROLE_ADMIN
 
 # 路径 → 最低所需角色（支持 /api/* 与 /api/v1/* 双路由）
 _BASE_ROUTE_ROLES: dict[str, str] = {
+    "GET /healthz": ROLE_VIEWER,
+    "GET /readyz": ROLE_VIEWER,
     "GET /api/healthz": ROLE_VIEWER,
     "GET /api/readyz": ROLE_VIEWER,
+    "GET /api/metrics": ROLE_ADMIN,
     "GET /api/contract-kb/documents": ROLE_VIEWER,
     "GET /api/contract-kb/documents/": ROLE_VIEWER,
     "GET /api/contract-kb/taxonomy": ROLE_VIEWER,
@@ -46,8 +49,13 @@ _BASE_ROUTE_ROLES: dict[str, str] = {
     "GET /api/contract-review/tasks/": ROLE_REVIEWER,
     "POST /api/contract-review/tasks/": ROLE_REVIEWER,
     "POST /api/contract-review/issues/": ROLE_REVIEWER,
+    "GET /api/canonical-contracts": ROLE_VIEWER,
+    "GET /api/canonical-contracts/": ROLE_VIEWER,
+    "GET /api/jobs": ROLE_REVIEWER,
     "GET /api/jobs/": ROLE_REVIEWER,
+    "POST /api/jobs": ROLE_REVIEWER,
     "POST /api/jobs/": ROLE_REVIEWER,
+    "POST /api/jobs/worker/": ROLE_ADMIN,
 }
 
 ROUTE_ROLES: dict[str, str] = dict(_BASE_ROUTE_ROLES)

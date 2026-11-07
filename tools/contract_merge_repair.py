@@ -151,15 +151,27 @@ def rewrite_body(body, source_md, store, case, source):
     return body
 
 
+def _load_safe_cache(json_path: Path, legacy_pkl_path: Path):
+    if json_path.exists():
+        raw = json.loads(json_path.read_text(encoding='utf-8'))
+        if 'logs' in raw:
+            raw['logs'] = {int(k): v for k, v in raw['logs'].items()}
+        for sk in ('covered', 'covered_reqs', 'covered_approvals'):
+            if sk in raw:
+                raw[sk] = set(raw[sk])
+        return raw
+    if legacy_pkl_path.exists():
+        if os.environ.get('ALLOW_UNSAFE_PICKLE_CACHE', '0') != '1':
+            raise PermissionError(f'Blocked unsafe pickle cache load: {legacy_pkl_path}')
+        with legacy_pkl_path.open('rb') as f:
+            return pickle.load(f)
+    return None
+
+
 def load_oa(contracts, refresh):
-    with (DATA / 'tender-case-export/_cache/oa.pkl').open('rb') as f:
-        oa = pickle.load(f)
-    extra_path = DATA / 'contract_merge_oa_extra.pkl'
-    if extra_path.exists():
-        with extra_path.open('rb') as f:
-            extra = pickle.load(f)
-    else:
-        extra = {'logs': {}, 'covered': set()}
+    oa = _load_safe_cache(DATA / 'tender-case-export/_cache/oa.json', DATA / 'tender-case-export/_cache/oa.pkl') or {'logs': {}, 'covered_reqs': set(), 'covered_approvals': set()}
+    extra_json = DATA / 'contract_merge_oa_extra.json'
+    extra = _load_safe_cache(extra_json, DATA / 'contract_merge_oa_extra.pkl') or {'logs': {}, 'covered': set()}
     ids = {int(r) for c in contracts for r in c.get('e9_requestids', '').split(';') if r.isdigit()}
     covered = set(oa.get('covered_reqs', set())) & set(oa.get('covered_approvals', set()))
     todo = sorted(ids - covered - extra['covered'])
@@ -191,10 +203,9 @@ def load_oa(contracts, refresh):
                 for rid in chunk:
                     extra['logs'][rid] = staged[rid]
                 extra['covered'].update(chunk)
-                temp = extra_path.with_suffix('.tmp')
-                with temp.open('wb') as f:
-                    pickle.dump(extra, f)
-                temp.replace(extra_path)
+                temp = extra_json.with_suffix('.tmp')
+                temp.write_text(json.dumps({'logs': {str(k): v for k, v in extra['logs'].items()}, 'covered': sorted(extra['covered'])}, ensure_ascii=False), encoding='utf-8')
+                temp.replace(extra_json)
                 print(f'旧意见补齐 {min(start + 400, len(todo))}/{len(todo)}', flush=True)
     oa['logs'].update(extra['logs'])
     oa['available'] = covered | extra['covered']

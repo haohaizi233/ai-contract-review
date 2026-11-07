@@ -1,24 +1,29 @@
 # -*- coding: utf-8 -*-
-"""FastAPI 服务（企业级加固版）：鉴权/授权/租户过滤/流式限额/仓储端口/审计。
+"""FastAPI 服务（企业级加固与 v1 版本治理版）：
+鉴权/授权/租户过滤/流式限额/仓储端口/异步任务/全链路可观测性与审计。
 
-- 身份来自受信任认证层（auth.TrustedHeaderAuth），不接受客户端自报 actor/approver；
-- RBAC：viewer 只读 / reviewer 审核+反馈 / admin 规则+导入；
-- tenant_id 强制过滤（文档、检索、规则、格式标准、审核任务与人工反馈全链路）；
-- 通过 `storage.create_storage()` 统一存储工厂注入 SQLite 或 PostgreSQL + pgvector；
-- 上传文件采用分块流式读取限流并在审核完成后按保留策略自动清理临时文件。
+核心架构约束：
+- 身份来自受信任认证层（`auth.TrustedHeaderAuth`），不接受客户端自报 actor/approver；
+- RBAC：viewer 只读 / reviewer 审核+反馈+异步任务 / admin 规则+标准+导入+运维指标；
+- `tenant_id` 全链路强制过滤，任务与异步作业强制校验创建者所有权（或 admin）；
+- 同时暴露 `/api/v1/*`（标准企业契约，支持分页、幂等键、阶段查询、取消与异步作业）与
+  `/api/*`（平滑兼容期路由，自动注入 RFC 8594 `Deprecation` / `Link` 响应头）；
+- 通过 `storage.create_storage()` 统一存储工厂注入 SQLite 或 PostgreSQL + pgvector。
 """
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import json
 import os
-import threading
-import uuid
 from pathlib import Path
+import threading
+import time
 from typing import Any
+import uuid
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import PlainTextResponse
 
 from . import config
 from .auth import (
@@ -29,13 +34,32 @@ from .auth import (
     authorize,
     enforce_input_limits,
 )
+from .infrastructure.observability import GLOBAL_METRICS
+from .infrastructure.task_queue import PersistentTaskRunner
+from .interfaces.http import (
+    CompareReq,
+    ErrorEnvelope,
+    FeedbackIn,
+    FormatStandardApproveIn,
+    FormatStandardIn,
+    HealthResponse,
+    PaginatedResponse,
+    ReadinessResponse,
+    ReviewTaskIn,
+    RuleIn,
+    SearchReq,
+    install_observability_and_error_handlers,
+)
+from .modules.rules.governance import HumanOverrideService
 from .review_engine import ReviewEngine
 from .storage import Storage, create_storage
 
-app = FastAPI(title="contract-kb", version="0.3.0")
 _lock = threading.Lock()
 _storage: Any = None
+_runner: PersistentTaskRunner | None = None
+_runner_storage_ref: Any = None
 _auth = TrustedHeaderAuth()
+_override_service = HumanOverrideService()
 
 UPLOAD_CHUNK_SIZE = 64 * 1024
 
@@ -46,6 +70,50 @@ def get_storage() -> Storage:
         if _storage is None:
             _storage = create_storage()
         return _storage
+
+
+def get_runner() -> PersistentTaskRunner:
+    """获取与当前活跃存储实例绑定的持久化异步任务执行器。"""
+    global _runner, _runner_storage_ref
+    st = get_storage()
+    with _lock:
+        if _runner is None or _runner_storage_ref is not st:
+            if _runner is not None:
+                _runner.stop_background_workers(timeout=1.0)
+            _runner = PersistentTaskRunner(st)
+            _runner_storage_ref = st
+        return _runner
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    enable_worker = os.environ.get("CONTRACT_KB_ENABLE_JOB_WORKER", "0") == "1"
+    if enable_worker:
+        get_runner().start_background_workers()
+    try:
+        yield
+    finally:
+        if _runner is not None:
+            _runner.stop_background_workers(timeout=2.0)
+
+
+app = FastAPI(
+    title="contract-kb",
+    version="1.0.0",
+    description="AI 合同智能审查与模板知识库企业级 API（支持 /api/v1/* 与 /api/* 渐进兼容）",
+    lifespan=_lifespan,
+    responses={
+        400: {"model": ErrorEnvelope},
+        401: {"model": ErrorEnvelope},
+        403: {"model": ErrorEnvelope},
+        404: {"model": ErrorEnvelope},
+        409: {"model": ErrorEnvelope},
+        413: {"model": ErrorEnvelope},
+        422: {"model": ErrorEnvelope},
+        500: {"model": ErrorEnvelope},
+    },
+)
+install_observability_and_error_handlers(app)
 
 
 def _read_upload_bounded(upload: UploadFile, max_bytes: int) -> bytes:
@@ -63,49 +131,19 @@ def _read_upload_bounded(upload: UploadFile, max_bytes: int) -> bytes:
     return b"".join(chunks)
 
 
-class SearchReq(BaseModel):
-    query: str = Field(min_length=1)
-    top_k: int = Field(default=8, ge=1, le=50)
-    business_category: str | None = None
-    contract_subtype: str | None = None
-    clause_number: str | None = None
-    keyword: str | None = Field(default=None)
-    rerank: bool = True
-
-
-class CompareReq(BaseModel):
-    clause_texts: list[str] = Field(min_length=2, max_length=2)
-
-
-class RuleIn(BaseModel):
-    rule_id: str = Field(min_length=3, max_length=80)
-    name: str = Field(max_length=200)
-    rule_type: str
-    execution_mode: str
-    severity: str
-    contract_types: list[str] = ["*"]
-    parameters: dict = {}
-    source_clauses: list = []
-
-
-class ReviewTaskIn(BaseModel):
-    mode: str = "STANDARD"
-    custom_requirements: list[str] = []
-
-
-class FeedbackIn(BaseModel):
-    action: str
-    note: str = Field(default="", max_length=2000)
-
-
-class FormatStandardIn(BaseModel):
-    standard_id: str = Field(default="company_format", min_length=3, max_length=80)
-    params: dict
-    note: str = Field(default="", max_length=500)
-
-
-class FormatStandardApproveIn(BaseModel):
-    version: int = Field(ge=1)
+def _validate_and_stage_docx(
+    upload: UploadFile, prefix: str = ""
+) -> tuple[Path, bytes]:
+    safe_name = Path(upload.filename or "upload.docx").name
+    suffix = Path(safe_name).suffix.lower()
+    if suffix != ".docx":
+        raise HTTPException(400, "only .docx accepted")
+    data = _read_upload_bounded(upload, config.MAX_DOCX_BYTES)
+    config.ensure_dirs()
+    tmp = config.DATA_DIR / "upload" / f"{prefix}{uuid.uuid4().hex[:12]}{suffix}"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_bytes(data)
+    return tmp, data
 
 
 def _principal(request: Request) -> Principal:
@@ -114,7 +152,7 @@ def _principal(request: Request) -> Principal:
     return p
 
 
-def _owned_task(st: Any, task_id: str, p: Principal) -> dict:
+def _owned_task(st: Any, task_id: str, p: Principal) -> dict[str, Any]:
     """强制租户 + 资源所有权检查：
     - 跨租户或不存在 → 404（不泄露资源存在性）；
     - 同租户但非创建者且非 admin → 403（资源所有权校验）。"""
@@ -127,28 +165,61 @@ def _owned_task(st: Any, task_id: str, p: Principal) -> dict:
     return t
 
 
-@app.exception_handler(HTTPException)
-async def _http_exc(request: Request, exc: HTTPException):
-    from fastapi.responses import JSONResponse
-
-    req_id = (
-        request.headers.get("X-Request-ID")
-        or request.headers.get("X-Request-Id")
-        or getattr(request.state, "request_id", "")
-    )
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": exc.detail,
-            "request_id": req_id,
-        },
-    )
+def _owned_job(st: Any, job_id: str, p: Principal) -> dict[str, Any]:
+    job = st.get_async_job(job_id, tenant_id=p.tenant_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    owner = job.get("created_by")
+    if owner and owner != p.user_id and not p.has_role(ROLE_ADMIN):
+        raise HTTPException(403, "资源所有权校验失败：仅任务创建者或 admin 可访问")
+    return job
 
 
-# ---------------- 知识库 ----------------
+# ---------------- 存活与就绪探针（Liveness / Readiness） ----------------
 
 
-@app.post("/api/contract-kb/import")
+def _check_readiness() -> ReadinessResponse:
+    t0 = time.perf_counter()
+    try:
+        st = get_storage()
+        st.list_tasks(tenant_id="__readyz__", limit=1, offset=0)
+    except Exception as exc:
+        raise HTTPException(503, "storage backend unavailable") from exc
+    latency_ms = round((time.perf_counter() - t0) * 1000.0, 3)
+    GLOBAL_METRICS.record_db_query(latency_ms)
+    return ReadinessResponse(status="ready", db_ready=True, db_latency_ms=latency_ms)
+
+
+@app.get("/healthz", response_model=HealthResponse, tags=["observability"])
+@app.get("/api/healthz", response_model=HealthResponse, tags=["observability"])
+@app.get("/api/v1/healthz", response_model=HealthResponse, tags=["observability"])
+def healthz() -> HealthResponse:
+    return HealthResponse(status="ok", service="contract-kb", version=app.version)
+
+
+@app.get("/readyz", response_model=ReadinessResponse, tags=["observability"])
+@app.get("/api/readyz", response_model=ReadinessResponse, tags=["observability"])
+@app.get("/api/v1/readyz", response_model=ReadinessResponse, tags=["observability"])
+def readyz() -> ReadinessResponse:
+    return _check_readiness()
+
+
+# ---------------- 共享业务路由（同时挂载至 /api/v1 与 /api） ----------------
+
+shared_router = APIRouter()
+
+
+@shared_router.get("/metrics", tags=["observability"])
+def get_metrics(request: Request, fmt: str = Query(default="json", alias="format")):
+    p = _principal(request)
+    if not p.has_role(ROLE_ADMIN):
+        raise HTTPException(403, "指标查询需要 admin")
+    if fmt == "prometheus":
+        return PlainTextResponse(GLOBAL_METRICS.render_prometheus())
+    return GLOBAL_METRICS.snapshot()
+
+
+@shared_router.post("/contract-kb/import", tags=["knowledge-base"])
 def import_templates(request: Request):
     p = _principal(request)
     st = get_storage()
@@ -175,13 +246,36 @@ def import_templates(request: Request):
     }
 
 
-@app.get("/api/contract-kb/documents")
-def list_documents(request: Request):
+@app.get("/api/contract-kb/documents", tags=["knowledge-base-legacy"])
+def list_documents_legacy(request: Request):
+    """兼容期路由：保持返回裸数组，避免破坏存量调用方。"""
     p = _principal(request)
     return get_storage().list_documents(tenant_id=p.tenant_id)
 
 
-@app.get("/api/contract-kb/documents/{doc_id}")
+@app.get(
+    "/api/v1/contract-kb/documents",
+    response_model=PaginatedResponse,
+    tags=["knowledge-base"],
+)
+def list_documents_v1(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """v1 标准分页文档列表。"""
+    p = _principal(request)
+    all_docs = get_storage().list_documents(tenant_id=p.tenant_id)
+    total = len(all_docs)
+    return PaginatedResponse(
+        items=all_docs[offset : offset + limit],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@shared_router.get("/contract-kb/documents/{doc_id}", tags=["knowledge-base"])
 def get_document(doc_id: str, request: Request):
     p = _principal(request)
     st = get_storage()
@@ -204,7 +298,7 @@ def get_document(doc_id: str, request: Request):
     return {"document": doc, "clauses": clauses}
 
 
-@app.get("/api/contract-kb/taxonomy")
+@shared_router.get("/contract-kb/taxonomy", tags=["knowledge-base"])
 def taxonomy(request: Request):
     _principal(request)
     p = config.DATA_DIR / "taxonomy.json"
@@ -213,7 +307,7 @@ def taxonomy(request: Request):
     return json.loads(p.read_text(encoding="utf-8"))
 
 
-@app.post("/api/contract-kb/search")
+@shared_router.post("/contract-kb/search", tags=["knowledge-base"])
 def search(req: SearchReq, request: Request):
     p = _principal(request)
     enforce_input_limits(query=req.query + " " + (req.keyword or ""))
@@ -227,10 +321,11 @@ def search(req: SearchReq, request: Request):
         rerank=req.rerank,
         tenant_id=p.tenant_id,
     )
+    GLOBAL_METRICS.record_rag_query(hit_count=len(hits))
     return {"query": req.query, "count": len(hits), "results": hits}
 
 
-@app.post("/api/contract-kb/compare")
+@shared_router.post("/contract-kb/compare", tags=["knowledge-base"])
 def compare(req: CompareReq, request: Request):
     """合同文本比较：字符串相似度仅作检索/差异提示，不作“语义等价”断言。"""
     _principal(request)
@@ -277,13 +372,13 @@ def compare(req: CompareReq, request: Request):
     }
 
 
-@app.get("/api/contract-kb/rules")
+@shared_router.get("/contract-kb/rules", tags=["rules"])
 def list_rules(request: Request, status: str | None = None):
     p = _principal(request)
     return get_storage().get_rules(status=status, tenant_id=p.tenant_id)
 
 
-@app.post("/api/contract-kb/rules")
+@shared_router.post("/contract-kb/rules", tags=["rules"])
 def create_rule(rule: RuleIn, request: Request):
     p = _principal(request)
     if not p.has_role(ROLE_ADMIN):
@@ -306,7 +401,7 @@ def create_rule(rule: RuleIn, request: Request):
     return {"rule_id": rule.rule_id, "version": ver, "status": "DRAFT"}
 
 
-@app.post("/api/contract-kb/rules/{rule_id}/approve")
+@shared_router.post("/contract-kb/rules/{rule_id}/approve", tags=["rules"])
 def approve_rule(rule_id: str, request: Request):
     """审批身份来自认证层（p.user_id），不接受客户端传 approver。"""
     p = _principal(request)
@@ -321,7 +416,7 @@ def approve_rule(rule_id: str, request: Request):
 # ---------------- 公司格式标准（可配置 / 可审批 / 可版本化） ----------------
 
 
-@app.get("/api/contract-kb/format-standards")
+@shared_router.get("/contract-kb/format-standards", tags=["format-standards"])
 def list_format_standards(request: Request):
     p = _principal(request)
     st = get_storage()
@@ -335,9 +430,8 @@ def list_format_standards(request: Request):
     }
 
 
-@app.post("/api/contract-kb/format-standards")
+@shared_router.post("/contract-kb/format-standards", tags=["format-standards"])
 def create_format_standard(body: FormatStandardIn, request: Request):
-    """创建格式标准新版本（DRAFT）。版本化留痕：不覆盖历史版本。"""
     p = _principal(request)
     if not p.has_role(ROLE_ADMIN):
         raise HTTPException(403, "格式标准创建需要 admin")
@@ -362,11 +456,12 @@ def create_format_standard(body: FormatStandardIn, request: Request):
     }
 
 
-@app.post("/api/contract-kb/format-standards/{standard_id}/approve")
+@shared_router.post(
+    "/contract-kb/format-standards/{standard_id}/approve", tags=["format-standards"]
+)
 def approve_format_standard(
     standard_id: str, body: FormatStandardApproveIn, request: Request
 ):
-    """审批格式标准版本：审批身份来自认证层；仅 DRAFT 可审批。"""
     p = _principal(request)
     if not p.has_role(ROLE_ADMIN):
         raise HTTPException(403, "格式标准审批需要 admin")
@@ -383,10 +478,10 @@ def approve_format_standard(
     }
 
 
-# ---------------- 合同审核 ----------------
+# ---------------- 合同审核与阶段治理 ----------------
 
 
-@app.post("/api/contract-review/tasks")
+@shared_router.post("/contract-review/tasks", tags=["contract-review"])
 def create_review_task(
     request: Request,
     file: UploadFile = File(...),
@@ -397,14 +492,8 @@ def create_review_task(
     if not p.has_role(ROLE_REVIEWER):
         raise HTTPException(403, "审核需要 reviewer")
     enforce_input_limits(custom=custom)
-    safe_name = Path(file.filename or "upload.docx").name
-    suffix = Path(safe_name).suffix.lower()
-    if suffix != ".docx":
-        raise HTTPException(400, "only .docx accepted")
-    data = _read_upload_bounded(file, config.MAX_DOCX_BYTES)
-    config.ensure_dirs()
-    tmp = config.DATA_DIR / "upload" / f"{uuid.uuid4().hex[:12]}{suffix}"
-    tmp.parent.mkdir(parents=True, exist_ok=True)
+    idem_key = request.headers.get("X-Idempotency-Key", "").strip() or None
+    tmp, data = _validate_and_stage_docx(file, prefix="")
     retention = int(
         os.environ.get(
             "CONTRACT_KB_UPLOAD_RETENTION_SECONDS",
@@ -412,22 +501,26 @@ def create_review_task(
         )
     )
     try:
-        tmp.write_bytes(data)
-        engine = ReviewEngine(get_storage())
-        result = engine.review(
+        st = get_storage()
+        engine = ReviewEngine(st)
+        res = engine.review_result(
             tmp,
             mode=mode,
             custom_requirements=[c.strip() for c in custom.split(";") if c.strip()],
             tenant_id=p.tenant_id,
             created_by=p.user_id,
+            idempotency_key=idem_key,
         )
-        get_storage().log_audit(
+        GLOBAL_METRICS.record_review(
+            status=res.status, stages=res.stages, issues=res.issues
+        )
+        st.log_audit(
             p.user_id,
             "review_task",
-            result.get("task_id", ""),
+            res.task_id,
             f"mode={mode} bytes={len(data)}",
         )
-        return result
+        return res.to_dict()
     finally:
         if retention <= 0 and tmp.exists():
             try:
@@ -436,22 +529,80 @@ def create_review_task(
                 pass
 
 
-@app.get("/api/contract-review/tasks/{task_id}")
+@shared_router.get(
+    "/contract-review/tasks",
+    response_model=PaginatedResponse,
+    tags=["contract-review"],
+)
+def list_review_tasks(
+    request: Request,
+    status: str | None = None,
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    p = _principal(request)
+    items, total = get_storage().list_tasks(
+        tenant_id=p.tenant_id, status=status, limit=limit, offset=offset
+    )
+    if not p.has_role(ROLE_ADMIN):
+        items = [
+            t
+            for t in items
+            if not t.get("created_by") or t.get("created_by") == p.user_id
+        ]
+        total = len(items)
+    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@shared_router.get("/contract-review/tasks/{task_id}", tags=["contract-review"])
 def get_task(task_id: str, request: Request):
     p = _principal(request)
     return _owned_task(get_storage(), task_id, p)
 
 
-@app.get("/api/contract-review/tasks/{task_id}/issues")
+@shared_router.get("/contract-review/tasks/{task_id}/issues", tags=["contract-review"])
 def get_issues(task_id: str, request: Request):
     p = _principal(request)
-    _owned_task(get_storage(), task_id, p)
-    return get_storage().get_issues(task_id)
+    st = get_storage()
+    _owned_task(st, task_id, p)
+    return st.get_issues(task_id)
 
 
-@app.post("/api/contract-review/issues/{issue_id}/feedback")
+@shared_router.get("/contract-review/tasks/{task_id}/stages", tags=["contract-review"])
+def get_task_stages(task_id: str, request: Request):
+    p = _principal(request)
+    st = get_storage()
+    _owned_task(st, task_id, p)
+    return {"task_id": task_id, "stages": st.get_stage_states(task_id)}
+
+
+@shared_router.get(
+    "/contract-review/tasks/{task_id}/overrides", tags=["contract-review"]
+)
+def get_task_overrides(task_id: str, request: Request):
+    p = _principal(request)
+    st = get_storage()
+    _owned_task(st, task_id, p)
+    return {"task_id": task_id, "overrides": st.list_human_overrides(task_id)}
+
+
+@shared_router.post("/contract-review/tasks/{task_id}/cancel", tags=["contract-review"])
+def cancel_review_task(task_id: str, request: Request):
+    p = _principal(request)
+    if not p.has_role(ROLE_REVIEWER):
+        raise HTTPException(403, "取消任务需要 reviewer")
+    st = get_storage()
+    _owned_task(st, task_id, p)
+    ok = st.request_cancel_task(task_id, tenant_id=p.tenant_id)
+    st.log_audit(p.user_id, "cancel_review_task", task_id, f"ok={ok}")
+    return {"task_id": task_id, "cancel_requested": ok}
+
+
+@shared_router.post(
+    "/contract-review/issues/{issue_id}/feedback", tags=["contract-review"]
+)
 def issue_feedback(issue_id: str, fb: FeedbackIn, request: Request):
-    """反馈人身份来自认证层（不接受客户端 actor 字段）；强制租户 + 资源所有权检查。"""
+    """带不可篡改审计的人工复核覆盖：身份来自认证层，写入 human_overrides 与 audit_log。"""
     p = _principal(request)
     if not p.has_role(ROLE_REVIEWER):
         raise HTTPException(403, "反馈需要 reviewer")
@@ -460,6 +611,154 @@ def issue_feedback(issue_id: str, fb: FeedbackIn, request: Request):
     if not issue:
         raise HTTPException(404, "issue not found")
     _owned_task(st, issue["task_id"], p)
-    if not st.feedback_issue(issue_id, fb.action, p.user_id, fb.note):
-        raise HTTPException(400, "invalid action or issue not found")
-    return {"issue_id": issue_id, "human_state": fb.action, "actor": p.user_id}
+    try:
+        return _override_service.apply_override(
+            st,
+            issue_id=issue_id,
+            action=fb.action,
+            actor=p.user_id,
+            reason=fb.note,
+            tenant_id=p.tenant_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, "invalid action or issue not found") from exc
+
+
+# ---------------- 标准合同实体（Canonical Contracts） ----------------
+
+
+@shared_router.get(
+    "/canonical-contracts",
+    response_model=PaginatedResponse,
+    tags=["canonical-contracts"],
+)
+def list_canonical_contracts(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    p = _principal(request)
+    items, total = get_storage().list_canonical_contracts(
+        tenant_id=p.tenant_id, limit=limit, offset=offset
+    )
+    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@shared_router.get("/canonical-contracts/{contract_id}", tags=["canonical-contracts"])
+def get_canonical_contract(contract_id: str, request: Request):
+    p = _principal(request)
+    rec = get_storage().get_canonical_contract(contract_id, tenant_id=p.tenant_id)
+    if not rec:
+        raise HTTPException(404, "canonical contract not found")
+    return rec
+
+
+# ---------------- 异步任务执行器（Async Jobs） ----------------
+
+
+@shared_router.post("/jobs/review", status_code=202, tags=["async-jobs"])
+def enqueue_review_job(
+    request: Request,
+    file: UploadFile = File(...),
+    mode: str = "STANDARD",
+    custom: str = "",
+):
+    p = _principal(request)
+    if not p.has_role(ROLE_REVIEWER):
+        raise HTTPException(403, "提交异步审核任务需要 reviewer")
+    enforce_input_limits(custom=custom)
+    idem_key = request.headers.get("X-Idempotency-Key", "").strip() or None
+    tmp, data = _validate_and_stage_docx(file, prefix="async_")
+    job, created = get_runner().submit(
+        "CONTRACT_REVIEW",
+        {
+            "docx_path": str(tmp),
+            "mode": mode,
+            "custom_requirements": [c.strip() for c in custom.split(";") if c.strip()],
+            "idempotency_key": idem_key,
+        },
+        tenant_id=p.tenant_id,
+        created_by=p.user_id,
+        idempotency_key=idem_key,
+        temp_file_path=tmp,
+    )
+    get_storage().log_audit(
+        p.user_id,
+        "enqueue_review_job",
+        job["job_id"],
+        f"created={created} mode={mode} bytes={len(data)}",
+    )
+    return {"job": job, "created": created}
+
+
+@shared_router.get("/jobs", response_model=PaginatedResponse, tags=["async-jobs"])
+def list_jobs(
+    request: Request,
+    status: str | None = None,
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    p = _principal(request)
+    items, total = get_storage().list_async_jobs(
+        tenant_id=p.tenant_id, status=status, limit=limit, offset=offset
+    )
+    if not p.has_role(ROLE_ADMIN):
+        items = [
+            j
+            for j in items
+            if not j.get("created_by") or j.get("created_by") == p.user_id
+        ]
+        total = len(items)
+    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@shared_router.get("/jobs/{job_id}", tags=["async-jobs"])
+def get_job(job_id: str, request: Request):
+    p = _principal(request)
+    return _owned_job(get_storage(), job_id, p)
+
+
+@shared_router.post("/jobs/{job_id}/cancel", tags=["async-jobs"])
+def cancel_job(job_id: str, request: Request):
+    p = _principal(request)
+    if not p.has_role(ROLE_REVIEWER):
+        raise HTTPException(403, "取消任务需要 reviewer")
+    st = get_storage()
+    _owned_job(st, job_id, p)
+    ok = get_runner().cancel(job_id, tenant_id=p.tenant_id)
+    st.log_audit(p.user_id, "cancel_async_job", job_id, f"ok={ok}")
+    return {"job_id": job_id, "cancelled": ok}
+
+
+@shared_router.post("/jobs/worker/drain", tags=["async-jobs"])
+def drain_jobs(request: Request, max_jobs: int = Query(default=10, ge=1, le=100)):
+    """管理员受控触发内嵌异步任务消费（便于运维巡检、批处理与无守护进程环境）。"""
+    p = _principal(request)
+    if not p.has_role(ROLE_ADMIN):
+        raise HTTPException(403, "驱动工作队列需要 admin")
+    processed = get_runner().drain(max_jobs=max_jobs)
+    return {
+        "processed_count": len(processed),
+        "job_ids": [j["job_id"] for j in processed],
+    }
+
+
+app.include_router(shared_router, prefix="/api/v1")
+app.include_router(shared_router, prefix="/api")
+
+__all__ = [
+    "CompareReq",
+    "ErrorEnvelope",
+    "FeedbackIn",
+    "FormatStandardApproveIn",
+    "FormatStandardIn",
+    "HealthResponse",
+    "PaginatedResponse",
+    "ReadinessResponse",
+    "ReviewTaskIn",
+    "RuleIn",
+    "SearchReq",
+    "app",
+    "get_runner",
+    "get_storage",
+]

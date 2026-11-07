@@ -525,18 +525,71 @@ def archives_of(ctx, a):
 
 # ======================================================================= 旧 OA
 
+def _save_oa_safe(cache_dir, oa):
+    """使用 JSON 安全落盘 OA 缓存（避免不安全反序列化风险）。"""
+    json_path = os.path.join(cache_dir, "oa.json")
+    payload = {
+        "form": {f"{k[0]}:{k[1]}": list(v) for k, v in oa.get("form", {}).items()},
+        "reqs": {str(k): v for k, v in oa.get("reqs", {}).items()},
+        "logs": {str(k): v for k, v in oa.get("logs", {}).items()},
+        "images": {str(k): v for k, v in oa.get("images", {}).items()},
+        "names": {str(k): v for k, v in oa.get("names", {}).items()},
+        "nodes": {str(k): v for k, v in oa.get("nodes", {}).items()},
+        "wfs": {str(k): v for k, v in oa.get("wfs", {}).items()},
+        "covered_reqs": sorted(oa.get("covered_reqs", set())),
+        "covered_files": sorted(oa.get("covered_files", set())),
+        "covered_approvals": sorted(oa.get("covered_approvals", set())),
+    }
+    tmp_path = json_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, default=str)
+    os.replace(tmp_path, json_path)
+
+
+def _load_oa_safe(cache_dir, prog):
+    """优先加载安全 JSON 缓存；仅当显式设置 ALLOW_UNSAFE_PICKLE_CACHE=1 时才兼容旧 oa.pkl。"""
+    json_path = os.path.join(cache_dir, "oa.json")
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, encoding="utf-8") as f:
+                raw_json = json.load(f)
+            form = {}
+            for k, v in raw_json.get("form", {}).items():
+                bf_s, bid_s = k.split(":", 1)
+                form[(int(bf_s), int(bid_s))] = [int(x) for x in v]
+            oa = {
+                "form": form,
+                "reqs": {int(k): v for k, v in raw_json.get("reqs", {}).items()},
+                "logs": {int(k): v for k, v in raw_json.get("logs", {}).items()},
+                "images": {int(k): v for k, v in raw_json.get("images", {}).items()},
+                "names": {int(k): v for k, v in raw_json.get("names", {}).items()},
+                "nodes": {int(k): v for k, v in raw_json.get("nodes", {}).items()},
+                "wfs": {int(k): v for k, v in raw_json.get("wfs", {}).items()},
+                "covered_reqs": {int(x) for x in raw_json.get("covered_reqs", [])},
+                "covered_files": {int(x) for x in raw_json.get("covered_files", [])},
+                "covered_approvals": {int(x) for x in raw_json.get("covered_approvals", [])},
+            }
+            prog.detail(1, "使用安全缓存 oa.json（--refresh-oa 可重拉）")
+            return oa
+        except Exception:
+            pass
+
+    legacy_pkl = os.path.join(cache_dir, "oa.pkl")
+    if os.path.exists(legacy_pkl) and os.environ.get("ALLOW_UNSAFE_PICKLE_CACHE", "0") == "1":
+        try:
+            with open(legacy_pkl, "rb") as f:
+                oa = pickle.load(f)
+            prog.detail(1, "使用兼容缓存 oa.pkl（已由 ALLOW_UNSAFE_PICKLE_CACHE=1 显式放行）")
+            return oa
+        except Exception:
+            return None
+    return None
+
+
 def load_oa(env, ctx, prog, refresh):
     """旧 E9 回链：workflow_form 映射、requestbase、requestLog、imagefile、旧导出索引（结果缓存）。"""
     os.makedirs(CACHE_DIR, exist_ok=True)
-    cache = os.path.join(CACHE_DIR, "oa.pkl")
-    oa = None
-    if os.path.exists(cache) and not refresh:
-        try:
-            with open(cache, "rb") as f:
-                oa = pickle.load(f)
-            prog.detail(1, "使用缓存 %s（--refresh-oa 可重拉）" % os.path.basename(cache))
-        except Exception:
-            oa = None
+    oa = None if refresh else _load_oa_safe(CACHE_DIR, prog)
 
     req_ids, e9_files = set(), set()
     for a in ctx.applies:
@@ -611,9 +664,7 @@ def load_oa(env, ctx, prog, refresh):
             oa["covered_files"].update(chunk)
             prog.detail(1, "旧 imagefile 元数据 %d/%d" % (min(i + 1000, len(todo)), len(todo)))
         conn.close()
-        with open(cache + ".tmp", "wb") as f:
-            pickle.dump(oa, f)
-        os.replace(cache + ".tmp", cache)
+        _save_oa_safe(CACHE_DIR, oa)
 
     # 旧缓存独立增量升级，不能因 requestLog 已覆盖而漏读 approvelog。
     oa['form'] = {key: list(dict.fromkeys(values)) for key, values in oa['form'].items()}
@@ -644,9 +695,7 @@ def load_oa(env, ctx, prog, refresh):
                     oa['logs'].setdefault(int(r['requestid']), []).append(r)
                 approval_covered.update(chunk)
                 prog.detail(1, '补齐旧审批意见 %d/%d' % (min(i + 1000, len(todo_approvals)), len(todo_approvals)))
-        with open(cache + '.tmp', 'wb') as f:
-            pickle.dump(oa, f)
-        os.replace(cache + '.tmp', cache)
+        _save_oa_safe(CACHE_DIR, oa)
     oa['logs'] = {rid: merge_oa_logs(logs) for rid, logs in oa['logs'].items()}
 
     # 旧导出索引与旧附件落盘索引

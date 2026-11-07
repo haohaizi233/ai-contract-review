@@ -19,6 +19,14 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+from ...domain.models.canonical_contract import (
+    CanonicalContract,
+    ContractAmountSummary,
+    ContractLifecycleStatus,
+    ContractNumber,
+    ContractParty,
+    SourceSystemType,
+)
 from ...domain.models.review import (
     CheckStatus,
     EvidenceReference,
@@ -1064,3 +1072,39 @@ class FinalizeReportStage(ReviewStage):
                 created_by=ctx.created_by,
             )
         self.storage.save_issues(ctx.task_id, issue_dicts)
+        upsert_cc = getattr(self.storage, "upsert_canonical_contract", None)
+        if upsert_cc is not None:
+            upsert_cc(self._build_canonical_dict(ctx))
+
+    @staticmethod
+    def _build_canonical_dict(ctx: PipelineContext) -> dict[str, Any]:
+        fields = ctx.extracted_fields
+        parties = [
+            ContractParty(role=role, name=str(fields[key]))
+            for role, key in (("PARTY_A", "party_a"), ("PARTY_B", "party_b"))
+            if fields.get(key)
+        ]
+        raw_amts = fields.get("detected_amounts_raw") or []
+        first_amt = str(raw_amts[0]).replace(",", "") if raw_amts else None
+        status = (
+            ContractLifecycleStatus.APPROVED.value
+            if ctx.review_gate == "PASS"
+            else ContractLifecycleStatus.PENDING_MODIFICATION.value
+        )
+        cid_hash = hashlib.sha256(
+            f"{ctx.effective_tenant}:{ctx.parsed_record.sha256}".encode("utf-8")
+        ).hexdigest()[:14]
+        return CanonicalContract(
+            contract_id=f"cc_{cid_hash}",
+            tenant_id=ctx.effective_tenant,
+            contract_number=ContractNumber.parse(fields.get("contract_number")),
+            title=str(ctx.parsed_record.source_file or ""),
+            business_category=ctx.category,
+            contract_subtype=ctx.subtype,
+            lifecycle_status=status,
+            source_system=SourceSystemType.UPLOAD.value,
+            source_document_id=str(ctx.parsed_record.template_id or ""),
+            source_hash=str(ctx.parsed_record.sha256 or ""),
+            parties=parties,
+            amounts=ContractAmountSummary.from_values(total=first_amt),
+        ).to_dict()
