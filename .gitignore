@@ -36,8 +36,14 @@ data/contract-kb/upload/
 # 本地企业配置（真实主体/编码映射/密钥，不入库）
 config/company_profile.local.json
 .env*
+!.env.example
 *.key
 *.pem
+
+# 微盘探针下载与临时测试文件
+tools/wecom_wedrive_probe/downloads/
+tools/wecom_wedrive_probe/tmp_downloads/
+tools/wecom_wedrive_probe/reports/downloads/
 
 # 系统文件
 Thumbs.db

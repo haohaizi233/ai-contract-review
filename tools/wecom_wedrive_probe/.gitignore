@@ -1,0 +1,16 @@
+# 本地真实凭证与测试下载目录
+.env
+.env.*
+!.env.example
+downloads/
+tmp_downloads/
+*.tmp
+*.docx
+*.pdf
+*.xlsx
+*.bin
+
+# 真实测试结果与企业内部数据防泄密忽略（保留 reports/ 目录骨架）
+reports/probe_result.json
+reports/probe_report.md
+reports/downloads/
