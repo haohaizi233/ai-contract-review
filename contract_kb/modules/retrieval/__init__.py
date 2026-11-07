@@ -2,6 +2,11 @@
 """受控知识检索模块公共契约导出。"""
 
 from .citation import CitationVerificationSummary, CitationVerifier
+from .comparison import (
+    ClauseComparison,
+    ClauseComparisonEngine,
+    NumericDifference,
+)
 from .governance import (
     TRUST_MATRIX,
     KnowledgeGovernancePolicy,
@@ -37,6 +42,8 @@ __all__ = [
     "ChunkGranularity",
     "CitationVerificationSummary",
     "CitationVerifier",
+    "ClauseComparison",
+    "ClauseComparisonEngine",
     "ClauseNode",
     "ContractAwareQueryPlanner",
     "EvidenceBundle",
@@ -53,6 +60,7 @@ __all__ = [
     "LegalRelationType",
     "LexicalCoverageReranker",
     "NumericConstraint",
+    "NumericDifference",
     "QueryPlanningBudget",
     "RerankerPort",
     "RetrievalIntent",
