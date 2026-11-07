@@ -64,10 +64,12 @@ class ReviewPipeline:
         llm_status_fn: Any = None,
         registry: RuleRegistry | None = None,
         stages: list[ReviewStage] | None = None,
+        budget_service: Any = None,
     ):
         self.storage = storage
         self.registry = registry or RuleRegistry(include_defaults=True)
         self.checkpoint_store = CheckpointStore(self.storage)
+        self.budget_service = budget_service
         self.stages: list[ReviewStage] = stages or [
             ReceiveStage(llm_status_fn=llm_status_fn),
             ValidateStage(),
@@ -79,7 +81,9 @@ class ReviewPipeline:
             DeterministicValidationStage(storage, registry=self.registry),
             RetrieveEvidenceStage(storage),
             LLMSemanticReviewStage(
-                llm_provider=llm_provider, llm_reviewer=llm_reviewer
+                llm_provider=llm_provider,
+                llm_reviewer=llm_reviewer,
+                budget_service=budget_service,
             ),
             VerifyEvidenceStage(),
             ResolveFindingsStage(),
@@ -399,6 +403,7 @@ class ReviewPipeline:
             cancel_requested=bool(cancel_requested),
             deadline=deadline,
             cancel_token=cancel_token,
+            budget_service=self.budget_service,
             resume_completed_stages=completed_stages,
             stage_checkpoints=stage_checkpoints,
         )

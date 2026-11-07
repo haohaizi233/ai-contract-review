@@ -275,6 +275,7 @@ class PipelineContext:
     stage_checkpoints: dict[str, Any] = field(default_factory=dict)
     deadline: Any = None
     cancel_token: Any = None
+    budget_service: Any = None
 
     def get_deadline(self) -> Any:
         if self.deadline is None:

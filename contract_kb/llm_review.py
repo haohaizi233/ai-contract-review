@@ -132,7 +132,13 @@ class LLMProvider(ABC):
     name = "abstract"
 
     @abstractmethod
-    def complete(self, system: str, user: str, timeout: float = 60.0) -> dict:
+    def complete(
+        self,
+        system: str,
+        user: str,
+        timeout: float = 60.0,
+        max_tokens: int | None = None,
+    ) -> dict:
         """返回 {"text": str, "model": str, "usage": dict}；失败抛 Timeout/Parse 类异常。"""
 
 
@@ -145,8 +151,21 @@ class MockLLMProvider(LLMProvider):
         self.canned = canned or {}
         self.calls: list[dict] = []
 
-    def complete(self, system: str, user: str, timeout: float = 60.0) -> dict:
-        self.calls.append({"system_len": len(system), "user_len": len(user)})
+    def complete(
+        self,
+        system: str,
+        user: str,
+        timeout: float = 60.0,
+        max_tokens: int | None = None,
+    ) -> dict:
+        if timeout <= 0:
+            raise TimeoutError(f"LLM 调用截止时间已过期 (timeout={timeout}s)")
+        self.calls.append({
+            "system_len": len(system),
+            "user_len": len(user),
+            "timeout": timeout,
+            "max_tokens": max_tokens,
+        })
         if self.canned.get("mode") == "refuse":
             return {"text": "我不能处理该请求。", "model": "mock", "usage": {}}
         if self.canned.get("mode") == "bad_json":
@@ -159,7 +178,10 @@ class MockLLMProvider(LLMProvider):
         return {
             "text": json.dumps(result, ensure_ascii=False),
             "model": "mock",
-            "usage": {"tokens": 0},
+            "usage": self.canned.get(
+                "usage",
+                {"tokens": 100, "prompt_tokens": 50, "completion_tokens": 50},
+            ),
         }
 
 
@@ -178,22 +200,34 @@ class OpenAICompatProvider(LLMProvider):
         self.api_key = api_key
         self.model = model
 
-    def complete(self, system: str, user: str, timeout: float = 60.0) -> dict:
+    def complete(
+        self,
+        system: str,
+        user: str,
+        timeout: float = 60.0,
+        max_tokens: int | None = None,
+    ) -> dict:
+        if timeout <= 0:
+            raise TimeoutError(f"LLM 调用截止时间已过期 (timeout={timeout}s)")
+        import socket
+        import urllib.error
         import urllib.request
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
 
         req = urllib.request.Request(
             f"{self.base_url}/chat/completions",
-            data=json.dumps(
-                {
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    "temperature": 0,
-                    "response_format": {"type": "json_object"},
-                }
-            ).encode(),
+            data=json.dumps(payload).encode(),
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.api_key}",
@@ -204,6 +238,14 @@ class OpenAICompatProvider(LLMProvider):
                 body = json.loads(resp.read())
         except TimeoutError as e:
             raise TimeoutError("LLM 调用超时") from e
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, socket.timeout) or "timed out" in str(e.reason).lower():
+                raise TimeoutError("LLM 调用超时") from e
+            raise
+        except Exception as e:
+            if "timed out" in str(e).lower():
+                raise TimeoutError("LLM 调用超时") from e
+            raise
         text = body["choices"][0]["message"]["content"]
         return {
             "text": text,
@@ -221,15 +263,31 @@ class LLMSemanticReviewer:
         self.provider = provider
         self.max_prompt_chars = max_prompt_chars
 
+    def _record_metric(self, outcome: str) -> None:
+        try:
+            from .infrastructure.observability import GLOBAL_METRICS
+
+            GLOBAL_METRICS.record_llm_call(outcome=outcome)
+        except Exception:
+            pass
+
     def review(
         self,
         contract_text: str,
         standard_context: list[dict],
         custom_requirements: list[str],
+        *,
+        timeout: float | None = None,
+        max_tokens: int | None = None,
     ) -> LLMReviewResult:
         if self.provider is None:
             return LLMReviewResult(
                 status="NOT_CHECKED", failure=LLMFailure.NOT_CONFIGURED.value, model=""
+            )
+        if timeout is not None and timeout <= 0:
+            self._record_metric("timeout")
+            return LLMReviewResult(
+                status="FAILED", failure=LLMFailure.TIMEOUT.value
             )
         if len(contract_text) > self.max_prompt_chars * 2:
             return LLMReviewResult(
@@ -238,11 +296,28 @@ class LLMSemanticReviewer:
         prompt = build_prompt(
             contract_text, standard_context, custom_requirements, self.max_prompt_chars
         )
+        call_kwargs: dict[str, Any] = {}
+        if timeout is not None:
+            call_kwargs["timeout"] = timeout
+        if max_tokens is not None:
+            call_kwargs["max_tokens"] = max_tokens
+
         try:
-            out = self.provider.complete(PROMPT_SYSTEM, prompt)
+            out = self.provider.complete(PROMPT_SYSTEM, prompt, **call_kwargs)
+        except TypeError:
+            try:
+                out = self.provider.complete(PROMPT_SYSTEM, prompt)
+            except TimeoutError:
+                self._record_metric("timeout")
+                return LLMReviewResult(status="FAILED", failure=LLMFailure.TIMEOUT.value)
+            except Exception:
+                self._record_metric("error")
+                return LLMReviewResult(status="FAILED", failure=LLMFailure.UNKNOWN.value)
         except TimeoutError:
+            self._record_metric("timeout")
             return LLMReviewResult(status="FAILED", failure=LLMFailure.TIMEOUT.value)
         except Exception:
+            self._record_metric("error")
             return LLMReviewResult(status="FAILED", failure=LLMFailure.UNKNOWN.value)
 
         text = out.get("text", "")
@@ -250,6 +325,7 @@ class LLMSemanticReviewer:
             re.search(r"不能|无法|拒绝|cannot|unable", text[:60], re.I)
             and "{" not in text
         ):
+            self._record_metric("refused")
             return LLMReviewResult(
                 status="FAILED",
                 failure=LLMFailure.REFUSED.value,
@@ -258,6 +334,7 @@ class LLMSemanticReviewer:
         try:
             data = json.loads(_extract_json(text))
         except (json.JSONDecodeError, ValueError):
+            self._record_metric("parse_error")
             return LLMReviewResult(
                 status="FAILED",
                 failure=LLMFailure.PARSE_ERROR.value,
@@ -273,7 +350,9 @@ class LLMSemanticReviewer:
                     "raw_usage": out.get("usage", {}),
                 }
             )
+            self._record_metric("ok")
         except ValidationError:
+            self._record_metric("parse_error")
             return LLMReviewResult(
                 status="FAILED",
                 failure=LLMFailure.PARSE_ERROR.value,

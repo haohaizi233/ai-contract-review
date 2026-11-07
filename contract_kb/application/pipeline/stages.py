@@ -799,12 +799,18 @@ class LLMSemanticReviewStage(ReviewStage):
     input_contract = ("clauses", "rag_context")
     output_contract = ("llm_result", "findings")
 
-    def __init__(self, llm_provider: Any = None, llm_reviewer: Any = None):
+    def __init__(
+        self,
+        llm_provider: Any = None,
+        llm_reviewer: Any = None,
+        budget_service: Any = None,
+    ):
         self._llm_provider = llm_provider
         self._llm_reviewer = llm_reviewer
+        self._budget_service = budget_service
 
     def execute(self, ctx: PipelineContext) -> dict[str, Any]:
-        from ...llm_review import LLMSemanticReviewer
+        from ...llm_review import LLMFailure, LLMReviewResult, LLMSemanticReviewer
 
         llm = self._llm_reviewer or LLMSemanticReviewer(provider=self._llm_provider)
         contract_text = "\n".join(c.get("original_text", "") for c in ctx.clauses)
@@ -832,8 +838,132 @@ class LLMSemanticReviewStage(ReviewStage):
                 )
             )
 
-        llm_result = llm.review(contract_text, ctx.rag_context, sanitized_reqs)
+        # 检查 ExecutionDeadline 剩余时间
+        remaining_timeout: float | None = None
+        if hasattr(ctx, "get_deadline"):
+            deadline = ctx.get_deadline()
+            if deadline is not None:
+                remaining_timeout = deadline.remaining_seconds()
+                if remaining_timeout <= 0:
+                    ctx.findings.append(
+                        Finding(
+                            issue_id="",
+                            rule_id="LLM_SEMANTIC_REVIEW",
+                            severity="INFO",
+                            category="NOT_CHECKED",
+                            title="LLM 语义审核超时未执行",
+                            description=f"流水线截止时间已耗尽 (剩余 {remaining_timeout:.3f}s)，未发起网络调用",
+                            execution_mode="LLM_SEMANTIC",
+                            finding_source=FindingSource.LLM_SEMANTIC.value,
+                            requires_human_review=True,
+                            check_status=CheckStatus.NOT_CHECKED.value,
+                        )
+                    )
+                    ctx.llm_result = LLMReviewResult(
+                        status="FAILED", failure=LLMFailure.TIMEOUT.value
+                    )
+                    return {
+                        "llm_status": "FAILED",
+                        "semantic_findings": 0,
+                        "failure": LLMFailure.TIMEOUT.value,
+                        "findings": [f.to_dict() for f in ctx.findings],
+                    }
+
+        # 调用前预算预留检查 (Pre-invocation Budget Reservation)
+        budget_svc = self._budget_service or getattr(ctx, "budget_service", None)
+        reservation = None
+        max_output_tokens = 4000
+        if budget_svc is not None:
+            from ...application.workflow.budget import (
+                BudgetLimitExceededError,
+                TokenUsage,
+            )
+
+            est_input_tokens = max(100, len(contract_text) // 2 + 500)
+            try:
+                reservation = budget_svc.reserve_budget(
+                    input_tokens=est_input_tokens,
+                    max_output_tokens=max_output_tokens,
+                )
+            except BudgetLimitExceededError as exc:
+                try:
+                    from ...infrastructure.observability import GLOBAL_METRICS
+
+                    GLOBAL_METRICS._counters["budget_exhaustions"] += 1
+                except Exception:
+                    pass
+                ctx.findings.append(
+                    Finding(
+                        issue_id="",
+                        rule_id="LLM_BUDGET_EXCEEDED",
+                        severity="INFO",
+                        category="BUDGET_EXCEEDED",
+                        title="LLM 预算不足，未执行语义审核",
+                        description=f"预算账本拦截：{exc}",
+                        execution_mode="LLM_SEMANTIC",
+                        finding_source=FindingSource.LLM_SEMANTIC.value,
+                        requires_human_review=True,
+                        check_status=CheckStatus.NOT_CHECKED.value,
+                    )
+                )
+                ctx.llm_result = LLMReviewResult(
+                    status="NOT_CHECKED",
+                    failure="BUDGET_EXCEEDED",
+                )
+                return {
+                    "llm_status": "NOT_CHECKED",
+                    "semantic_findings": 0,
+                    "failure": "BUDGET_EXCEEDED",
+                    "findings": [f.to_dict() for f in ctx.findings],
+                }
+
+        try:
+            llm_result = llm.review(
+                contract_text,
+                ctx.rag_context,
+                sanitized_reqs,
+                timeout=remaining_timeout,
+                max_tokens=max_output_tokens,
+            )
+        except TypeError:
+            llm_result = llm.review(contract_text, ctx.rag_context, sanitized_reqs)
+        except TimeoutError:
+            llm_result = LLMReviewResult(
+                status="FAILED", failure=LLMFailure.TIMEOUT.value
+            )
+        except Exception:
+            llm_result = LLMReviewResult(
+                status="FAILED", failure=LLMFailure.UNKNOWN.value
+            )
         ctx.llm_result = llm_result
+
+        # 核销或处理预算
+        if reservation is not None and budget_svc is not None:
+            from ...application.workflow.budget import TokenUsage
+
+            if llm_result.status == "CHECKED":
+                raw_usage = getattr(llm_result, "raw_usage", {}) or {}
+                inp = (
+                    raw_usage.get("prompt_tokens")
+                    or raw_usage.get("input_tokens")
+                    or reservation.input_tokens
+                )
+                out = (
+                    raw_usage.get("completion_tokens")
+                    or raw_usage.get("output_tokens")
+                    or 100
+                )
+                try:
+                    budget_svc.settle_budget(
+                        reservation.reservation_id,
+                        TokenUsage(input_tokens=int(inp), output_tokens=int(out)),
+                    )
+                except Exception:
+                    budget_svc.mark_uncertain(reservation.reservation_id)
+            elif llm_result.failure == LLMFailure.TIMEOUT.value:
+                budget_svc.mark_uncertain(reservation.reservation_id)
+            else:
+                budget_svc.release_budget(reservation.reservation_id)
 
         if llm_result.status == "NOT_CHECKED":
             ctx.findings.append(
@@ -885,7 +1015,12 @@ class LLMSemanticReviewStage(ReviewStage):
                     description=f.description,
                     source_reference=(
                         EvidenceReference(
-                            ctx.parsed_record.template_id, [], None, f.original_text
+                            ctx.parsed_record.template_id
+                            if ctx.parsed_record
+                            else "",
+                            [],
+                            None,
+                            f.original_text,
                         )
                         if f.original_text
                         else None
