@@ -5,7 +5,7 @@
 - 微平均 Precision：1.0，Recall：1.0，F1：1.0
 - 误报率（FPR）：0.0，漏报率（FNR）：0.0
 - 原文依据度（AnswerGroundedness）：1.0
-- 审核延迟：Mean=4086.45ms, P50=4007.2ms, P95=4767.24ms, P99=4966.05ms
+- 审核延迟：Mean=104585.42ms, P50=107630.84ms, P95=109599.14ms, P99=110185.59ms
 - Token 与单份成本：Tokens=0, CostPerContract=$0.000000
 
 ## 逐标签指标
