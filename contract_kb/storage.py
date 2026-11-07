@@ -583,7 +583,7 @@ class Storage:
             if row:
                 return row["document_id"], False
 
-            base_did = doc["template_id"]
+            base_did = doc.get("template_id") or doc.get("document_id") or "doc_unknown"
             existing_id = self.conn.execute(
                 "SELECT tenant_id FROM documents WHERE document_id=?",
                 (base_did,),
@@ -1761,11 +1761,11 @@ class Storage:
     # ---------- 审核任务与问题（含人工反馈、阶段持久化、幂等与取消） ----------
     def save_task(
         self,
-        task_id: str,
-        document_id: str,
-        mode: str,
-        status: str,
-        meta: dict,
+        task_id: str | dict,
+        document_id: str = "",
+        mode: str = "review",
+        status: str = "PENDING",
+        meta: dict | None = None,
         tenant_id: str = "default",
         created_by: str = "system",
         idempotency_key: str | None = None,
@@ -1773,6 +1773,21 @@ class Storage:
         model_version: str | None = None,
         reproducibility_hash: str | None = None,
     ) -> None:
+        if isinstance(task_id, dict):
+            d = task_id
+            task_id = str(d.get("task_id") or "")
+            document_id = str(d.get("document_id") or "")
+            mode = str(d.get("mode") or "review")
+            status = str(d.get("status") or "PENDING")
+            meta = d.get("meta") or {}
+            tenant_id = str(d.get("tenant_id") or "default")
+            created_by = str(d.get("created_by") or "system")
+            idempotency_key = d.get("idempotency_key")
+            rule_set_version = d.get("rule_set_version")
+            model_version = d.get("model_version")
+            reproducibility_hash = d.get("reproducibility_hash")
+        if meta is None:
+            meta = {}
         now = time.time()
         with self._lock:
             existing = self.conn.execute(

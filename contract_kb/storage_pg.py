@@ -31,7 +31,7 @@ from .application.security.idempotency import IdempotencyOutcome, RequestIdentit
 from .domain.models.execution import JobLease, JobOutcome
 from .embeddings import EmbeddingProvider, get_embedding_provider
 from .infrastructure.observability.redaction import redact_sensitive_text
-from .storage_errors import EmbeddingConfigMismatch
+from .storage_errors import EmbeddingConfigMismatch, OptimisticLockConflictError
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 MIGRATION_FILE = MIGRATIONS_DIR / "001_init_pgvector.sql"
@@ -71,7 +71,13 @@ class PgVectorStorage:
 
         self.emb = emb or get_embedding_provider()
         if migrate:
-            self.migrate()
+            try:
+                self.migrate()
+            except Exception as e:
+                if "vector" in str(e).lower() or "extension" in str(e).lower():
+                    self.migrate_relational()
+                else:
+                    raise
         try:
             self._check_embedding_compat()
         except EmbeddingConfigMismatch:
@@ -320,7 +326,7 @@ class PgVectorStorage:
                         self._commit()
                         return row[0], False
 
-                    base_did = doc["template_id"]
+                    base_did = doc.get("template_id") or doc.get("document_id") or "doc_unknown"
                     cur.execute(
                         "SELECT tenant_id FROM documents WHERE document_id=%s",
                         (base_did,),
@@ -697,9 +703,8 @@ class PgVectorStorage:
                         ensure_ascii=False,
                     )
                     cur.execute(
-                        "INSERT INTO audit_log (at, actor, action, target, detail) VALUES (%s,%s,%s,%s,%s)",
+                        "INSERT INTO audit_log (actor, action, target, detail) VALUES (%s,%s,%s,%s)",
                         (
-                            now_ts,
                             approver_id,
                             "approve_knowledge_version",
                             document_id,
@@ -817,9 +822,8 @@ class PgVectorStorage:
                         ensure_ascii=False,
                     )
                     cur.execute(
-                        "INSERT INTO audit_log (at, actor, action, target, detail) VALUES (%s,%s,%s,%s,%s)",
+                        "INSERT INTO audit_log (actor, action, target, detail) VALUES (%s,%s,%s,%s)",
                         (
-                            now_ts,
                             revoker_id,
                             "revoke_knowledge_version",
                             document_id,
@@ -1304,16 +1308,17 @@ class PgVectorStorage:
             if approved_only:
                 d_where += " AND c.approval_status='APPROVED'"
             with self.conn.cursor() as cur:
+                like_words = [f"%{w}%" for w in words]
                 cur.execute(
                     "SELECT c.clause_id, c.document_id, c.original_text, c.clause_number,"
                     " c.clause_category, c.clause_id, d.business_category, d.contract_subtype,"
                     " c.knowledge_type, c.approval_status, d.status, d.tenant_id FROM clauses c "
                     "JOIN documents d ON d.document_id=c.document_id "
-                    "WHERE to_tsvector('simple', coalesce(c.original_text,'')) @@ to_tsquery('simple', %s)"
+                    "WHERE (to_tsvector('simple', coalesce(c.original_text,'')) @@ to_tsquery('simple', %s) OR c.original_text ILIKE ANY(%s))"
                     + d_where
                     + extra
                     + " LIMIT %s",
-                    [match] + d_params + eparams + [limit],
+                    [match, like_words] + d_params + eparams + [limit],
                 )
                 rows = cur.fetchall()
         else:
@@ -1325,17 +1330,18 @@ class PgVectorStorage:
                 tenant_id,
             )
             with self.conn.cursor() as cur:
+                like_words = [f"%{w}%" for w in words]
                 cur.execute(
                     "SELECT c.clause_id, c.document_id, c.original_text, c.clause_number,"
                     " c.clause_category, e.chunk_id, e.business_category, e.contract_subtype,"
                     " e.knowledge_type, e.approved_status, d.status, d.tenant_id FROM clauses c "
                     "JOIN embeddings e ON e.clause_id=c.clause_id "
                     "JOIN documents d ON d.document_id=c.document_id "
-                    "WHERE to_tsvector('simple', coalesce(c.original_text,'')) @@ to_tsquery('simple', %s)"
+                    "WHERE (to_tsvector('simple', coalesce(c.original_text,'')) @@ to_tsquery('simple', %s) OR c.original_text ILIKE ANY(%s))"
                     + where
                     + extra
                     + " LIMIT %s",
-                    [match] + params + eparams + [limit],
+                    [match, like_words] + params + eparams + [limit],
                 )
                 rows = cur.fetchall()
         channel_name = "fts" if use_embeddings_table else "fts_fallback"
@@ -1644,11 +1650,11 @@ class PgVectorStorage:
 
     def save_task(
         self,
-        task_id: str,
-        document_id: str,
-        mode: str,
-        status: str,
-        meta: dict,
+        task_id: str | dict,
+        document_id: str = "",
+        mode: str = "review",
+        status: str = "PENDING",
+        meta: dict | None = None,
         tenant_id: str = "default",
         created_by: str = "system",
         idempotency_key: str | None = None,
@@ -1656,6 +1662,21 @@ class PgVectorStorage:
         model_version: str | None = None,
         reproducibility_hash: str | None = None,
     ) -> None:
+        if isinstance(task_id, dict):
+            d = task_id
+            task_id = str(d.get("task_id") or "")
+            document_id = str(d.get("document_id") or "")
+            mode = str(d.get("mode") or "review")
+            status = str(d.get("status") or "PENDING")
+            meta = d.get("meta") or {}
+            tenant_id = str(d.get("tenant_id") or "default")
+            created_by = str(d.get("created_by") or "system")
+            idempotency_key = d.get("idempotency_key")
+            rule_set_version = d.get("rule_set_version")
+            model_version = d.get("model_version")
+            reproducibility_hash = d.get("reproducibility_hash")
+        if meta is None:
+            meta = {}
         task_cols = self._table_cols("review_tasks")
         with self._lock:
             try:
