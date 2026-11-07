@@ -27,13 +27,17 @@ def test_extract_obligation_and_exception():
     assert LegalRelationType.OBLIGATION.value in types
     assert LegalRelationType.DEADLINE.value in types
 
-    oblig = [r for r in relations if r.relation_type == LegalRelationType.OBLIGATION.value][0]
+    oblig = [
+        r for r in relations if r.relation_type == LegalRelationType.OBLIGATION.value
+    ][0]
     assert oblig.subject == "乙方"
     assert "交付初稿" in oblig.action_or_content
     assert oblig.trigger_condition == "收到全部资料后"
     assert oblig.exception_term == "因甲方补充资料造成的延误除外"
 
-    dl = [r for r in relations if r.relation_type == LegalRelationType.DEADLINE.value][0]
+    dl = [r for r in relations if r.relation_type == LegalRelationType.DEADLINE.value][
+        0
+    ]
     assert "5个工作日" in dl.deadline
 
 
@@ -45,7 +49,9 @@ def test_extract_prohibition_negation():
         "original_text": "甲方不得向第三方披露技术秘密及相关源程序代码。",
     }
     relations = extractor.extract_relations(clause)
-    prohibs = [r for r in relations if r.relation_type == LegalRelationType.PROHIBITION.value]
+    prohibs = [
+        r for r in relations if r.relation_type == LegalRelationType.PROHIBITION.value
+    ]
     assert len(prohibs) == 1
     assert prohibs[0].subject == "甲方"
     assert "不得" in prohibs[0].action_or_content
@@ -62,7 +68,11 @@ def test_extract_cross_reference_and_termination():
         "original_text": "合同解除相关流程依照第十二条执行。",
     }
     rel8 = extractor.extract_relations(c8)
-    assert any(r.relation_type == LegalRelationType.CROSS_REFERENCE.value and r.target_reference == "第十二条" for r in rel8)
+    assert any(
+        r.relation_type == LegalRelationType.CROSS_REFERENCE.value
+        and r.target_reference == "第十二条"
+        for r in rel8
+    )
 
     c12 = {
         "clause_id": "c_12",

@@ -22,63 +22,69 @@ def test_stale_and_unapproved_evidence_blocking(tmp_path: Path):
     st = Storage(db_path)
 
     # 1. 录入一份已废止（REVOKED）的旧标准模板
-    st.upsert_document({
-        "template_id": "doc_revoked_2020",
-        "source_file": "旧版2020技术开发标准.docx",
-        "sha256": "hash_revoked_2020",
-        "category": "TECH_DEVELOPMENT",
-        "status": "REVOKED",  # 文档被废止
-        "approval_status": "APPROVED",
-        "clauses": [
-            {
-                "clause_id": "c_revoked_old_rate",
-                "clause_category": "LIABILITY",
-                "original_text": "旧标准：违约金按每日百分之一计算。",
-                "approval_status": "APPROVED",
-            }
-        ],
-    })
+    st.upsert_document(
+        {
+            "template_id": "doc_revoked_2020",
+            "source_file": "旧版2020技术开发标准.docx",
+            "sha256": "hash_revoked_2020",
+            "category": "TECH_DEVELOPMENT",
+            "status": "REVOKED",  # 文档被废止
+            "approval_status": "APPROVED",
+            "clauses": [
+                {
+                    "clause_id": "c_revoked_old_rate",
+                    "clause_category": "LIABILITY",
+                    "original_text": "旧标准：违约金按每日百分之一计算。",
+                    "approval_status": "APPROVED",
+                }
+            ],
+        }
+    )
 
     # 2. 录入一份草稿（DRAFT）未审批的标准模板
-    st.upsert_document({
-        "template_id": "doc_draft_2026",
-        "source_file": "草拟2026新规.docx",
-        "sha256": "hash_draft_2026",
-        "category": "TECH_DEVELOPMENT",
-        "document_type": "contract_template",
-        "status": "ACTIVE",
-        "approval_status": "PENDING_REVIEW",  # 法务未审批
-        "clauses": [
-            {
-                "clause_id": "c_draft_unapproved",
-                "clause_category": "LIABILITY",
-                "original_text": "法务未审批草拟条款：单方违约赔偿两倍金额。",
-                "approval_status": "PENDING_REVIEW",
-                "knowledge_type": "TEMPLATE",
-            }
-        ],
-    })
+    st.upsert_document(
+        {
+            "template_id": "doc_draft_2026",
+            "source_file": "草拟2026新规.docx",
+            "sha256": "hash_draft_2026",
+            "category": "TECH_DEVELOPMENT",
+            "document_type": "contract_template",
+            "status": "ACTIVE",
+            "approval_status": "PENDING_REVIEW",  # 法务未审批
+            "clauses": [
+                {
+                    "clause_id": "c_draft_unapproved",
+                    "clause_category": "LIABILITY",
+                    "original_text": "法务未审批草拟条款：单方违约赔偿两倍金额。",
+                    "approval_status": "PENDING_REVIEW",
+                    "knowledge_type": "TEMPLATE",
+                }
+            ],
+        }
+    )
 
     # 3. 录入一份正式生效的现行标准
-    st.upsert_document({
-        "template_id": "doc_active_approved",
-        "source_file": "现行正式技术标准.docx",
-        "sha256": "hash_active_2025",
-        "category": "TECH_DEVELOPMENT",
-        "document_type": "contract_template",
-        "status": "ACTIVE",
-        "approval_status": "APPROVED",
-        "clauses": [
-            {
-                "clause_id": "c_active_approved",
-                "clause_category": "LIABILITY",
-                "original_text": "现行有效标准：违约金按每日千分之三计算。",
-                "approval_status": "APPROVED",
-                "knowledge_type": "TEMPLATE",
-                "is_company_standard": True,
-            }
-        ],
-    })
+    st.upsert_document(
+        {
+            "template_id": "doc_active_approved",
+            "source_file": "现行正式技术标准.docx",
+            "sha256": "hash_active_2025",
+            "category": "TECH_DEVELOPMENT",
+            "document_type": "contract_template",
+            "status": "ACTIVE",
+            "approval_status": "APPROVED",
+            "clauses": [
+                {
+                    "clause_id": "c_active_approved",
+                    "clause_category": "LIABILITY",
+                    "original_text": "现行有效标准：违约金按每日千分之三计算。",
+                    "approval_status": "APPROVED",
+                    "knowledge_type": "TEMPLATE",
+                    "is_company_standard": True,
+                }
+            ],
+        }
+    )
 
     svc = GovernedRetrievalService(st)
 
@@ -101,7 +107,9 @@ def test_stale_and_unapproved_evidence_blocking(tmp_path: Path):
         "approved_status": "APPROVED",
         "knowledge_type": "TEMPLATE",
     }
-    assert not KnowledgeGovernancePolicy.is_chunk_admissible(revoked_hit, allow_historical_cases=False)
+    assert not KnowledgeGovernancePolicy.is_chunk_admissible(
+        revoked_hit, allow_historical_cases=False
+    )
 
     draft_hit = {
         "clause_id": "c_draft_unapproved",
@@ -109,15 +117,32 @@ def test_stale_and_unapproved_evidence_blocking(tmp_path: Path):
         "approved_status": "PENDING_REVIEW",
         "knowledge_type": "TEMPLATE",
     }
-    assert not KnowledgeGovernancePolicy.is_chunk_admissible(draft_hit, allow_historical_cases=False)
+    assert not KnowledgeGovernancePolicy.is_chunk_admissible(
+        draft_hit, allow_historical_cases=False
+    )
 
     # 6. 引文核验器对未审批与已废止条款拒绝通过
     verifier = CitationVerifier()
-    summary = verifier.verify_retrieval_hits(st, [
-        {"clause_id": "c_revoked_old_rate", "text": "旧标准：违约金按每日百分之一计算。", "knowledge_type": "TEMPLATE"},
-        {"clause_id": "c_draft_unapproved", "text": "法务未审批草拟条款：单方违约赔偿两倍金额。", "knowledge_type": "TEMPLATE"},
-        {"clause_id": "c_active_approved", "text": "现行有效标准：违约金按每日千分之三计算。", "knowledge_type": "TEMPLATE"},
-    ])
+    summary = verifier.verify_retrieval_hits(
+        st,
+        [
+            {
+                "clause_id": "c_revoked_old_rate",
+                "text": "旧标准：违约金按每日百分之一计算。",
+                "knowledge_type": "TEMPLATE",
+            },
+            {
+                "clause_id": "c_draft_unapproved",
+                "text": "法务未审批草拟条款：单方违约赔偿两倍金额。",
+                "knowledge_type": "TEMPLATE",
+            },
+            {
+                "clause_id": "c_active_approved",
+                "text": "现行有效标准：违约金按每日千分之三计算。",
+                "knowledge_type": "TEMPLATE",
+            },
+        ],
+    )
 
     assert summary.total_checked == 3
     assert summary.verified_count == 1

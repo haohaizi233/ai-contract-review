@@ -45,8 +45,14 @@ class EvidenceBundle:
         """为下游大模型与差异对比引擎生成可验证的提示词证据片段。"""
         parts: list[str] = []
         if self.parent_clause:
-            p_text = self.parent_clause.get("text") or self.parent_clause.get("original_text") or ""
-            parts.append(f"【所属章条背景】{self.parent_clause.get('title', '')}：{p_text[:120]}")
+            p_text = (
+                self.parent_clause.get("text")
+                or self.parent_clause.get("original_text")
+                or ""
+            )
+            parts.append(
+                f"【所属章条背景】{self.parent_clause.get('title', '')}：{p_text[:120]}"
+            )
         if self.related_conditions:
             parts.append(f"【通用前置条件】{'；'.join(self.related_conditions)}")
         for ac in self.authoritative_clauses:
@@ -56,7 +62,9 @@ class EvidenceBundle:
             text = ac.get("text") or ac.get("original_text") or ""
             parts.append(f"{badge} {cnum} (ID:{cid})：{text}")
         for rc in self.cross_referenced_clauses:
-            parts.append(f"[援引外部标准条款] {rc.get('clause_number', '')}：{rc.get('text', '')[:100]}")
+            parts.append(
+                f"[援引外部标准条款] {rc.get('clause_number', '')}：{rc.get('text', '')[:100]}"
+            )
         for hc in self.historical_cases:
             badge = hc.get("prompt_badge") or "[历史合同先例-仅供参考]"
             parts.append(f"{badge}：{hc.get('text', '')[:100]}")
@@ -66,7 +74,8 @@ class EvidenceBundle:
         return {
             "target_clause_id": self.target_clause_id,
             "intents": [
-                (i.model_dump() if hasattr(i, "model_dump") else i) for i in self.intents
+                (i.model_dump() if hasattr(i, "model_dump") else i)
+                for i in self.intents
             ],
             "authoritative_clauses": list(self.authoritative_clauses),
             "parent_clause": dict(self.parent_clause) if self.parent_clause else None,
@@ -277,7 +286,11 @@ class GovernedRetrievalService:
             primary_q = (
                 intent.semantic_queries[0]
                 if intent.semantic_queries
-                else (intent.lexical_queries[0] if intent.lexical_queries else intent.intent_type)
+                else (
+                    intent.lexical_queries[0]
+                    if intent.lexical_queries
+                    else intent.intent_type
+                )
             )
             hits = self.storage.search(
                 primary_q,
@@ -348,14 +361,16 @@ class GovernedRetrievalService:
         parent_node_dict: dict[str, Any] | None = None
         inherited_conds: list[str] = list(clause.get("conditions") or [])
         inherited_excs: list[str] = list(clause.get("exceptions") or [])
-        if knowledge_tree is not None and hasattr(knowledge_tree, "expand_parent_child_context"):
+        if knowledge_tree is not None and hasattr(
+            knowledge_tree, "expand_parent_child_context"
+        ):
             expanded = knowledge_tree.expand_parent_child_context(cid)
             if expanded.get("parent_article"):
                 parent_node_dict = expanded["parent_article"].to_dict()
-            for c_item in (expanded.get("inherited_conditions") or []):
+            for c_item in expanded.get("inherited_conditions") or []:
                 if c_item not in inherited_conds:
                     inherited_conds.append(c_item)
-            for e_item in (expanded.get("inherited_exceptions") or []):
+            for e_item in expanded.get("inherited_exceptions") or []:
                 if e_item not in inherited_excs:
                     inherited_excs.append(e_item)
 

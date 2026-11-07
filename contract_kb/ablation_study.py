@@ -52,25 +52,29 @@ def setup_ablation_storage(tmp_path: Path) -> Storage:
 
     # 注入困难负样本
     for hn in HARD_NEGATIVES:
-        st.upsert_document({
-            "template_id": hn.doc_id,
-            "source_file": f"{hn.doc_id}.docx",
-            "sha256": hn.doc_id.ljust(64, "0")[:64],
-            "category": hn.category,
-            "subtype": hn.subtype,
-            "document_type": "hard_negative",
-            "status": hn.status,
-            "approval_status": "APPROVED" if hn.status == "ACTIVE" else "DRAFT",
-            "clauses": [
-                {
-                    "clause_id": f"{hn.doc_id}-c1",
-                    "clause_category": hn.clause_category,
-                    "original_text": hn.text,
-                    "normalized_summary": hn.hard_negative_type,
-                    "approval_status": "APPROVED" if hn.status == "ACTIVE" else "DRAFT",
-                }
-            ],
-        })
+        st.upsert_document(
+            {
+                "template_id": hn.doc_id,
+                "source_file": f"{hn.doc_id}.docx",
+                "sha256": hn.doc_id.ljust(64, "0")[:64],
+                "category": hn.category,
+                "subtype": hn.subtype,
+                "document_type": "hard_negative",
+                "status": hn.status,
+                "approval_status": "APPROVED" if hn.status == "ACTIVE" else "DRAFT",
+                "clauses": [
+                    {
+                        "clause_id": f"{hn.doc_id}-c1",
+                        "clause_category": hn.clause_category,
+                        "original_text": hn.text,
+                        "normalized_summary": hn.hard_negative_type,
+                        "approval_status": "APPROVED"
+                        if hn.status == "ACTIVE"
+                        else "DRAFT",
+                    }
+                ],
+            }
+        )
     return st
 
 
@@ -102,7 +106,11 @@ def evaluate_configuration(
                 "original_text": q.query,
             }
             intents = planner.plan_clause_intents_deterministic(simulated_clause)
-            q_text = intents[0].semantic_queries[0] if (intents and intents[0].semantic_queries) else q.query
+            q_text = (
+                intents[0].semantic_queries[0]
+                if (intents and intents[0].semantic_queries)
+                else q.query
+            )
         else:
             q_text = q.query
 
@@ -116,22 +124,32 @@ def evaluate_configuration(
         latencies.append(elapsed_ms)
 
         j = judge_hits(q, hits)
-        rows.append({
-            "qid": q.qid,
-            "first_relevant": j["first_relevant"],
-            "ndcg": j["ndcg"],
-            "avoided_hard_negatives": j["avoided_hard_negatives"],
-            "hits": hits,
-        })
+        rows.append(
+            {
+                "qid": q.qid,
+                "first_relevant": j["first_relevant"],
+                "ndcg": j["ndcg"],
+                "avoided_hard_negatives": j["avoided_hard_negatives"],
+                "hits": hits,
+            }
+        )
 
     # 指标计算
     metrics: dict[str, float] = {}
     for k in (1, 3, 5, 8):
-        metrics[f"Hit@{k}"] = round(sum(1 for r in rows if r["first_relevant"] and r["first_relevant"] <= k) / n, 4)
+        metrics[f"Hit@{k}"] = round(
+            sum(1 for r in rows if r["first_relevant"] and r["first_relevant"] <= k)
+            / n,
+            4,
+        )
 
-    metrics["MRR"] = round(sum((1.0 / r["first_relevant"]) for r in rows if r["first_relevant"]) / n, 4)
+    metrics["MRR"] = round(
+        sum((1.0 / r["first_relevant"]) for r in rows if r["first_relevant"]) / n, 4
+    )
     metrics["NDCG@8"] = round(sum(r["ndcg"] for r in rows) / n, 4)
-    metrics["HardNegAvoidance@8"] = round(sum(1 for r in rows if r["avoided_hard_negatives"]) / n, 4)
+    metrics["HardNegAvoidance@8"] = round(
+        sum(1 for r in rows if r["avoided_hard_negatives"]) / n, 4
+    )
 
     all_hits = [h for r in rows for h in r["hits"][:3]]
     cit_sum = verifier.verify_retrieval_hits(st, all_hits)
@@ -154,12 +172,42 @@ def evaluate_configuration(
 def run_full_ablation_study(tmp_path: Path) -> dict[str, Any]:
     st = setup_ablation_storage(tmp_path)
     configs = [
-        ("Config A (Baseline: Fixed 4 Keywords + LocalHash + Hybrid RRF)", False, False, False, False),
-        ("Config B (Fixed 4 Keywords + Dense Vector + Hybrid RRF)", False, False, False, False),
+        (
+            "Config A (Baseline: Fixed 4 Keywords + LocalHash + Hybrid RRF)",
+            False,
+            False,
+            False,
+            False,
+        ),
+        (
+            "Config B (Fixed 4 Keywords + Dense Vector + Hybrid RRF)",
+            False,
+            False,
+            False,
+            False,
+        ),
         ("Config C (Dynamic Query Planning + Hybrid RRF)", True, False, False, False),
-        ("Config D (Dynamic Query Planning + Parent-Child Hierarchy)", True, True, False, False),
-        ("Config E (Dynamic Query Planning + Hybrid + Cross-Encoder)", True, True, True, False),
-        ("Config F (Full Phase 12 Target: DQP + Hierarchy + Cross-Encoder + Structural Comparison)", True, True, True, True),
+        (
+            "Config D (Dynamic Query Planning + Parent-Child Hierarchy)",
+            True,
+            True,
+            False,
+            False,
+        ),
+        (
+            "Config E (Dynamic Query Planning + Hybrid + Cross-Encoder)",
+            True,
+            True,
+            True,
+            False,
+        ),
+        (
+            "Config F (Full Phase 12 Target: DQP + Hierarchy + Cross-Encoder + Structural Comparison)",
+            True,
+            True,
+            True,
+            True,
+        ),
     ]
 
     ablation_results = []
@@ -180,6 +228,7 @@ def run_full_ablation_study(tmp_path: Path) -> dict[str, Any]:
 
 if __name__ == "__main__":
     import tempfile
+
     tmp = Path(tempfile.mkdtemp(prefix="phase12_ablation"))
     res = run_full_ablation_study(tmp)
     print(json.dumps(res, indent=2, ensure_ascii=False))

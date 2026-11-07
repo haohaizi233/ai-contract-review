@@ -190,3 +190,47 @@ jobs:
           CONTRACT_KB_TEMPLATE_DIR: ${{ secrets.REAL_TEMPLATE_DIR }}
         run: |
           python -m pytest tests -m real_corpus -q --tb=no -x
+
+  pr-ci-gate:
+    name: pr-ci-gate-enforce
+    runs-on: ubuntu-latest
+    needs: [lint-and-type, security-gate, test-synthetic, test-pg]
+    if: always()
+    steps:
+      - name: Enforce CI Passing Gate for Pull Requests
+        run: |
+          set -euo pipefail
+          echo "Checking status of all upstream CI gate jobs..."
+          FAILED_JOBS=()
+          
+          if [ "${{ needs.lint-and-type.result }}" != "success" ]; then
+            FAILED_JOBS+=("lint-and-type (status: ${{ needs.lint-and-type.result }})")
+          fi
+          
+          if [ "${{ needs.security-gate.result }}" != "success" ]; then
+            FAILED_JOBS+=("security-gate (status: ${{ needs.security-gate.result }})")
+          fi
+          
+          if [ "${{ needs.test-synthetic.result }}" != "success" ]; then
+            FAILED_JOBS+=("test-synthetic (status: ${{ needs.test-synthetic.result }})")
+          fi
+          
+          if [ "${{ needs.test-pg.result }}" != "success" ]; then
+            FAILED_JOBS+=("test-pg (status: ${{ needs.test-pg.result }})")
+          fi
+          
+          if [ ${#FAILED_JOBS[@]} -gt 0 ]; then
+            echo "::error::========================================================"
+            echo "::error::[CI GATE BLOCKED] 以下前置必要 CI Job 未能通过："
+            for f in "${FAILED_JOBS[@]}"; do
+              echo "::error::  - $f"
+            done
+            echo "::error::依据企业研发红线门禁规范：CI 不过，严禁支持或合入 PR！"
+            echo "::error::========================================================"
+            exit 1
+          fi
+          
+          echo "========================================================"
+          echo "[CI GATE APPROVED] 全部前置 CI 检查（代码格式、类型校验、安全扫描、单元/集成/PG测试）100% 通过！"
+          echo "准入条件满足，允许合入 PR。"
+          echo "========================================================"

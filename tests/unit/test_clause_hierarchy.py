@@ -39,9 +39,7 @@ def test_build_hierarchical_knowledge_tree():
             "source_node_ids": ["n1201"],
         },
     ]
-    tables = [
-        {"headers": ["费用项目", "金额", "结算方式"], "row_count": 3}
-    ]
+    tables = [{"headers": ["费用项目", "金额", "结算方式"], "row_count": 3}]
 
     tree = HierarchicalKnowledgeTree.build_from_clauses(
         document_id="doc_test_123",
@@ -72,7 +70,9 @@ def test_build_hierarchical_knowledge_tree():
     assert sub52.previous_id == "c_5_1"
 
     # 4. 验证 Table 节点挂载在根节点下
-    table_nodes = [n for n in tree.nodes.values() if n.granularity == ChunkGranularity.TABLE.value]
+    table_nodes = [
+        n for n in tree.nodes.values() if n.granularity == ChunkGranularity.TABLE.value
+    ]
     assert len(table_nodes) == 1
     assert "费用项目" in table_nodes[0].text
 

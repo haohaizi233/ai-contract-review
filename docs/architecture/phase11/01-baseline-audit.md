@@ -30,8 +30,7 @@ is_std_template = bool(
 )
 default_appr = "APPROVED" if is_std_template else "PENDING_REVIEW"
 if is_std_template and (
-    not c.get("approval_status")
-    or c.get("approval_status") == "PENDING_REVIEW"
+    not c.get("approval_status") or c.get("approval_status") == "PENDING_REVIEW"
 ):
     clause_appr = "APPROVED"  # 致命：未经审批自动被提升为企业正式依据！
 ```
@@ -40,7 +39,7 @@ if is_std_template and (
 
 ```python
 # 错误逻辑：contract_kb/storage_pg.py (L908)
-" 'TEMPLATE', 'APPROVED' FROM clauses c "  # 伪造元数据！未审批或历史合同被虚构为 APPROVED TEMPLATE
+"'TEMPLATE', 'APPROVED' FROM clauses c"  # 伪造元数据！未审批或历史合同被虚构为 APPROVED TEMPLATE
 ```
 
 ---

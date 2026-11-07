@@ -24,13 +24,21 @@ CROSS_REF_RE = re.compile(
 )
 
 # 法律主体识别正则
-LEGAL_SUBJECT_RE = re.compile(r"(甲方|乙方|双方|第三方|独家代理人|受托人|委托人|许可方|被许可方)")
+LEGAL_SUBJECT_RE = re.compile(
+    r"(甲方|乙方|双方|第三方|独家代理人|受托人|委托人|许可方|被许可方)"
+)
 
 # 行为动词识别映射
 ACTION_PATTERNS = [
-    ("单方解除合同", [r"单方解除", r"解除本合同", r"终止合同", r"有权解除", r"解除协议"]),
+    (
+        "单方解除合同",
+        [r"单方解除", r"解除本合同", r"终止合同", r"有权解除", r"解除协议"],
+    ),
     ("交付工作成果", [r"交付初稿", r"完成交付", r"提交成果", r"送交申请", r"交付"]),
-    ("支付费用及款项", [r"支付上述", r"付清全部", r"支付合同款", r"支付服务费", r"付款"]),
+    (
+        "支付费用及款项",
+        [r"支付上述", r"付清全部", r"支付合同款", r"支付服务费", r"付款"],
+    ),
     ("支付违约金", [r"支付违约金", r"承担违约责任", r"赔偿损失", r"滞纳金"]),
     ("提供发票", [r"开具发票", r"提供增值税", r"官方收据"]),
     ("履行保密义务", [r"承担保密义务", r"不得泄露", r"采取保密措施", r"披露技术秘密"]),
@@ -141,7 +149,9 @@ class ContractAwareQueryPlanner:
             base_p = min(base_p, 1)
 
         # 出现高危法律后果词降级为更高优先级 (P1)
-        if any(w in text for w in ("单方解除", "赔偿损失", "双倍返还", "仲裁", "连带责任")):
+        if any(
+            w in text for w in ("单方解除", "赔偿损失", "双倍返还", "仲裁", "连带责任")
+        ):
             base_p = min(base_p, 1)
 
         # 存在具体金额或违约比例的优先审查
@@ -154,7 +164,9 @@ class ContractAwareQueryPlanner:
         """提取金额、天数、比率等强约束。"""
         constraints: list[NumericConstraint] = []
         # 金额
-        for m in re.finditer(r"(?:人民币|RMB|¥)\s*([\d,]+(?:\.\d+)?)\s*(?:圆整|元)?", text):
+        for m in re.finditer(
+            r"(?:人民币|RMB|¥)\s*([\d,]+(?:\.\d+)?)\s*(?:圆整|元)?", text
+        ):
             raw_v = m.group(1).replace(",", "")
             try:
                 constraints.append(
@@ -180,7 +192,9 @@ class ContractAwareQueryPlanner:
             )
 
         # 自然日
-        for m in re.finditer(r"(\d+|[一二三四五六七八九十]+)\s*(?:日|天)(?!工作日)", text):
+        for m in re.finditer(
+            r"(\d+|[一二三四五六七八九十]+)\s*(?:日|天)(?!工作日)", text
+        ):
             constraints.append(
                 NumericConstraint(
                     type="CALENDAR_DAYS",
@@ -259,7 +273,9 @@ class ContractAwareQueryPlanner:
         # 确定意图类型
         intent_type = "STANDARD_COMPLIANCE_CHECK"
         for itype, kws in INTENT_TYPE_MAPPING:
-            if any(k in text for k in kws) or (article_title and any(k in article_title for k in kws)):
+            if any(k in text for k in kws) or (
+                article_title and any(k in article_title for k in kws)
+            ):
                 intent_type = itype
                 break
 
@@ -366,9 +382,8 @@ class ContractAwareQueryPlanner:
         llm_provider: Any | None = None,
     ) -> list[RetrievalIntent]:
         """Level 2: LLM-Assisted Query Expansion（受控拓展，严格校验事实锚定）。"""
-        allow_ext = (
-            config.ALLOW_EXTERNAL_LLM
-            or getattr(config, "CONTRACT_KB_ALLOW_EXTERNAL_LLM", False)
+        allow_ext = config.ALLOW_EXTERNAL_LLM or getattr(
+            config, "CONTRACT_KB_ALLOW_EXTERNAL_LLM", False
         )
         if not allow_ext or llm_provider is None:
             return base_intents
@@ -402,9 +417,7 @@ class ContractAwareQueryPlanner:
             return []
 
         # 1. 条款按风险优先级排序
-        scored_clauses = [
-            (self.calculate_clause_risk_priority(c), c) for c in clauses
-        ]
+        scored_clauses = [(self.calculate_clause_risk_priority(c), c) for c in clauses]
         # 按优先级升序（1 排在前），同时过滤掉低于 cutoff 的纯样板
         filtered_clauses = [
             c

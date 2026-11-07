@@ -8,6 +8,7 @@
 @dataclass
 class EvidenceReference:
     """原文证据与知识来源引用强类型定位对象。"""
+
     document_id: str
     node_ids: list[str] = field(default_factory=list)
     clause_number: str | None = None
@@ -16,7 +17,7 @@ class EvidenceReference:
     clause_id: str = ""
     exact_quote: str = ""
     char_offset_or_locator: str | None = None
-    
+
     # 证据链与治理扩展字段
     tenant_id: str = ""
     knowledge_source_type: str = "TEMPLATE"

@@ -57,7 +57,9 @@ def test_workdays_vs_calendar_days_consistency():
     }
     res = engine.compare_clauses(c_rev, c_ref)
     assert res.conclusion == "NUMERIC_DIFFERENCE"
-    work_diff = [d for d in res.numeric_differences if d.constraint_type == "WORKDAYS"][0]
+    work_diff = [d for d in res.numeric_differences if d.constraint_type == "WORKDAYS"][
+        0
+    ]
     assert work_diff.difference_magnitude == 5.0
 
     # 2. 10 个工作日 vs 10 日（自然日）
@@ -66,7 +68,10 @@ def test_workdays_vs_calendar_days_consistency():
         "original_text": "乙方应于收到材料后10日内交付初稿。",
     }
     res_mismatch = engine.compare_clauses(c_rev, c_cal)
-    assert any(d.constraint_type == "DAY_UNIT_MISMATCH" for d in res_mismatch.numeric_differences)
+    assert any(
+        d.constraint_type == "DAY_UNIT_MISMATCH"
+        for d in res_mismatch.numeric_differences
+    )
 
 
 def test_polarity_inversion_detection():
@@ -129,4 +134,6 @@ def test_condition_and_exception_differences():
     res = engine.compare_clauses(c_rev, c_ref)
     assert res.conclusion == "EXCEPTION_DIFFERENCE"
     assert len(res.exception_differences) == 1
-    assert "不可抗力及甲方原因除外" in str(res.exception_differences[0]["reference_exceptions"])
+    assert "不可抗力及甲方原因除外" in str(
+        res.exception_differences[0]["reference_exceptions"]
+    )

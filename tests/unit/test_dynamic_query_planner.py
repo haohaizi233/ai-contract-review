@@ -72,7 +72,9 @@ def test_cross_clause_reference_planning():
     }
     intents = planner.plan_clause_intents_deterministic(clause)
     assert len(intents) == 2  # 包含基础合规意图 + 跨条款引用意图
-    ref_intent = [i for i in intents if i.intent_type == "CROSS_CLAUSE_REFERENCE_CHECK"][0]
+    ref_intent = [
+        i for i in intents if i.intent_type == "CROSS_CLAUSE_REFERENCE_CHECK"
+    ][0]
     assert "第十二条" in ref_intent.referenced_clauses
     assert "第十二条" in ref_intent.lexical_queries
 
@@ -146,7 +148,13 @@ def test_query_planner_scalability_performance(clause_count: int):
 
     # 构造大量合成条款
     synthetic_clauses = []
-    categories = ["LIABILITY", "FEE_AND_PAYMENT", "SERVICE_SCOPE", "CONFIDENTIALITY", "CONTRACT_SUBJECT"]
+    categories = [
+        "LIABILITY",
+        "FEE_AND_PAYMENT",
+        "SERVICE_SCOPE",
+        "CONFIDENTIALITY",
+        "CONTRACT_SUBJECT",
+    ]
     for i in range(clause_count):
         cat = categories[i % len(categories)]
         synthetic_clauses.append(
@@ -167,4 +175,6 @@ def test_query_planner_scalability_performance(clause_count: int):
     # 核心硬约束：无论条款数如何增加，最终生成的检索意图数量必须受预算控制，绝不爆炸
     assert len(intents) <= budget.max_total_queries
     # 300 条款合同的规划执行时间必须小于 200ms
-    assert elapsed_ms < 200.0, f"Query planning exceeded SLA: {elapsed_ms:.2f} ms for {clause_count} clauses"
+    assert elapsed_ms < 200.0, (
+        f"Query planning exceeded SLA: {elapsed_ms:.2f} ms for {clause_count} clauses"
+    )

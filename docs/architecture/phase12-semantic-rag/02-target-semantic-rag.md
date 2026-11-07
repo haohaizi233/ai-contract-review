@@ -79,22 +79,26 @@ flowchart TD
 ### 1. 检索意图模型 (`RetrievalIntent`)
 ```python
 class RetrievalIntent(BaseModel):
-    intent_id: str                      # 确定性 SHA-1 ID
-    source_clause_id: str               # 关联的待审条款 ID
-    source_node_ids: list[str]          # 物理 AST 节点 ID
-    intent_type: str                    # 如 TERMINATION_CHECK, PAYMENT_DEADLINE_CHECK
+    intent_id: str  # 确定性 SHA-1 ID
+    source_clause_id: str  # 关联的待审条款 ID
+    source_node_ids: list[str]  # 物理 AST 节点 ID
+    intent_type: str  # 如 TERMINATION_CHECK, PAYMENT_DEADLINE_CHECK
     contract_category: str | None
     contract_subtype: str | None
-    legal_subject: str | None           # 义务/权利主体（甲方/乙方）
-    action: str | None                  # 法律行为（如：单方解除、支付款项）
-    conditions: list[str]               # 触发前提（如：逾期超过30日）
-    exceptions: list[str]               # 免责或例外（如：不可抗力除外）
-    numeric_constraints: list[dict]     # 数值限制（如：{"type": "DAYS", "value": 30, "unit": "DAY"}）
-    referenced_clauses: list[str]       # 跨条款引用编号（如：["第十二条"]）
-    lexical_queries: list[str]          # 供 FTS 使用的精确关键词
-    semantic_queries: list[str]         # 供 Dense 向量使用的语义语句
-    target_knowledge_types: list[str]   # 目标知识层级 (默认 ['TEMPLATE', 'APPROVED_RULE'])
-    priority: int = 100                 # 检索优先级 (数值越小越优先)
+    legal_subject: str | None  # 义务/权利主体（甲方/乙方）
+    action: str | None  # 法律行为（如：单方解除、支付款项）
+    conditions: list[str]  # 触发前提（如：逾期超过30日）
+    exceptions: list[str]  # 免责或例外（如：不可抗力除外）
+    numeric_constraints: list[
+        dict
+    ]  # 数值限制（如：{"type": "DAYS", "value": 30, "unit": "DAY"}）
+    referenced_clauses: list[str]  # 跨条款引用编号（如：["第十二条"]）
+    lexical_queries: list[str]  # 供 FTS 使用的精确关键词
+    semantic_queries: list[str]  # 供 Dense 向量使用的语义语句
+    target_knowledge_types: list[
+        str
+    ]  # 目标知识层级 (默认 ['TEMPLATE', 'APPROVED_RULE'])
+    priority: int = 100  # 检索优先级 (数值越小越优先)
 ```
 
 ### 2. 条款级证据包模型 (`EvidenceBundle`)
@@ -102,13 +106,13 @@ class RetrievalIntent(BaseModel):
 class EvidenceBundle(BaseModel):
     target_clause_id: str
     intents: list[RetrievalIntent]
-    authoritative_clauses: list[dict[str, Any]]     # 经审批的标准模板条款
-    parent_clause: dict[str, Any] | None            # 父级章节或大条款上下文
-    related_conditions: list[str]                   # 补充的前置条件或生效要求
-    related_exceptions: list[str]                   # 补充的免责例外
+    authoritative_clauses: list[dict[str, Any]]  # 经审批的标准模板条款
+    parent_clause: dict[str, Any] | None  # 父级章节或大条款上下文
+    related_conditions: list[str]  # 补充的前置条件或生效要求
+    related_exceptions: list[str]  # 补充的免责例外
     cross_referenced_clauses: list[dict[str, Any]]  # 跨条款引用的目标条款实体
-    historical_cases: list[dict[str, Any]]          # 历史案卷先例 (仅供参考，不可违规裁决)
-    citation_summary: Any                           # 引文核验报告 (包含 correctness 指标)
+    historical_cases: list[dict[str, Any]]  # 历史案卷先例 (仅供参考，不可违规裁决)
+    citation_summary: Any  # 引文核验报告 (包含 correctness 指标)
 ```
 
 ### 3. 条款差异结构化比对模型 (`ClauseComparison`)
@@ -117,10 +121,10 @@ class ClauseComparison(BaseModel):
     reviewed_clause_id: str
     reference_clause_ids: list[str]
     similarity_score: float | None
-    conclusion: str                     # MATCH / NUMERIC_DIFF / POLARITY_INVERSION / CONDITION_DIFF / EXCEPTION_DIFF 等
+    conclusion: str  # MATCH / NUMERIC_DIFF / POLARITY_INVERSION / CONDITION_DIFF / EXCEPTION_DIFF 等
     subjects_changed: list[dict]
-    numeric_differences: list[dict]     # Decimal 精确比对结果
-    polarity_inverted: bool             # 是否存在“应当/不得/可以”否定反转
+    numeric_differences: list[dict]  # Decimal 精确比对结果
+    polarity_inverted: bool  # 是否存在“应当/不得/可以”否定反转
     condition_differences: list[dict]
     exception_differences: list[dict]
     requires_human_review: bool

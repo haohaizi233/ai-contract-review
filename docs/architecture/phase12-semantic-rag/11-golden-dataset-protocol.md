@@ -37,7 +37,7 @@ class GoldenQuery:
     query: str
     expected_category: str
     expected_keywords: list[str]  # 命中预期条款必备特征词
-    avoid_keywords: list[str]     # 困难负样本特征词（命中则扣分）
+    avoid_keywords: list[str]  # 困难负样本特征词（命中则扣分）
     note: str = ""
 ```
 

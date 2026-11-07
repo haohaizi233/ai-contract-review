@@ -35,15 +35,19 @@ flowchart TD
 ```python
 @dataclass
 class EvidenceBundle:
-    target_clause_id: str                          # 绑定的待审条款唯一 ID
-    intents: list[RetrievalIntent]                 # 驱动产生的检索意图
-    authoritative_clauses: list[dict[str, Any]]    # 经审批通过的现行标准条款 (can_drive_mandatory_finding=True)
-    parent_clause: dict[str, Any] | None           # 所属父级章条 (宏观上下文)
-    related_conditions: list[str]                  # 继承的前提条件
-    related_exceptions: list[str]                  # 继承的免责例外
-    cross_referenced_clauses: list[dict[str, Any]] # 跨条款引用的目标标准条目
-    historical_cases: list[dict[str, Any]]         # 历史参考先例 (降级仅供参考)
-    citation_summary: CitationVerificationSummary  # 引文核验报告 (含 correctness 与 groundedness)
+    target_clause_id: str  # 绑定的待审条款唯一 ID
+    intents: list[RetrievalIntent]  # 驱动产生的检索意图
+    authoritative_clauses: list[
+        dict[str, Any]
+    ]  # 经审批通过的现行标准条款 (can_drive_mandatory_finding=True)
+    parent_clause: dict[str, Any] | None  # 所属父级章条 (宏观上下文)
+    related_conditions: list[str]  # 继承的前提条件
+    related_exceptions: list[str]  # 继承的免责例外
+    cross_referenced_clauses: list[dict[str, Any]]  # 跨条款引用的目标标准条目
+    historical_cases: list[dict[str, Any]]  # 历史参考先例 (降级仅供参考)
+    citation_summary: (
+        CitationVerificationSummary  # 引文核验报告 (含 correctness 与 groundedness)
+    )
 ```
 
 ## 4. 性能与安全保障

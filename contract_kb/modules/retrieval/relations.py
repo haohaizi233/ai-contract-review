@@ -111,7 +111,9 @@ class LegalRelationExtractor:
         # 1. 跨条款引用 (CROSS_REFERENCE)
         for m in _CROSS_REF_RE.finditer(text):
             target = m.group(1).strip()
-            rid = hashlib.sha1(f"{cid}:REF:{target}:{m.start()}".encode()).hexdigest()[:12]
+            rid = hashlib.sha1(f"{cid}:REF:{target}:{m.start()}".encode()).hexdigest()[
+                :12
+            ]
             relations.append(
                 LegalRelation(
                     relation_id=f"rel_{rid}",
@@ -128,7 +130,9 @@ class LegalRelationExtractor:
         for m in _TERMINATION_RE.finditer(text):
             subj = m.group(1)
             act = m.group(2) + m.group(3)
-            rid = hashlib.sha1(f"{cid}:TERM:{subj}:{m.start()}".encode()).hexdigest()[:12]
+            rid = hashlib.sha1(f"{cid}:TERM:{subj}:{m.start()}".encode()).hexdigest()[
+                :12
+            ]
             relations.append(
                 LegalRelation(
                     relation_id=f"rel_{rid}",
@@ -147,7 +151,9 @@ class LegalRelationExtractor:
         for m in _PROHIBITION_RE.finditer(text):
             subj = m.group(1)
             act = m.group(3).strip()
-            rid = hashlib.sha1(f"{cid}:PROHIB:{subj}:{m.start()}".encode()).hexdigest()[:12]
+            rid = hashlib.sha1(f"{cid}:PROHIB:{subj}:{m.start()}".encode()).hexdigest()[
+                :12
+            ]
             relations.append(
                 LegalRelation(
                     relation_id=f"rel_{rid}",
@@ -167,9 +173,13 @@ class LegalRelationExtractor:
             subj = m.group(1)
             act = m.group(3).strip()
             # 排除已被识别为解除的重复项
-            if "解除" in act and any(r.relation_type == "TERMINATION" for r in relations):
+            if "解除" in act and any(
+                r.relation_type == "TERMINATION" for r in relations
+            ):
                 continue
-            rid = hashlib.sha1(f"{cid}:OBLIG:{subj}:{m.start()}".encode()).hexdigest()[:12]
+            rid = hashlib.sha1(f"{cid}:OBLIG:{subj}:{m.start()}".encode()).hexdigest()[
+                :12
+            ]
             relations.append(
                 LegalRelation(
                     relation_id=f"rel_{rid}",
@@ -190,7 +200,9 @@ class LegalRelationExtractor:
             act = m.group(3).strip()
             if "解除" in act:
                 continue
-            rid = hashlib.sha1(f"{cid}:RIGHT:{subj}:{m.start()}".encode()).hexdigest()[:12]
+            rid = hashlib.sha1(f"{cid}:RIGHT:{subj}:{m.start()}".encode()).hexdigest()[
+                :12
+            ]
             relations.append(
                 LegalRelation(
                     relation_id=f"rel_{rid}",
@@ -209,7 +221,9 @@ class LegalRelationExtractor:
         for m in _LIABILITY_RE.finditer(text):
             subj = m.group(1)
             act = m.group(2) + m.group(3)
-            rid = hashlib.sha1(f"{cid}:LIAB:{subj}:{m.start()}".encode()).hexdigest()[:12]
+            rid = hashlib.sha1(f"{cid}:LIAB:{subj}:{m.start()}".encode()).hexdigest()[
+                :12
+            ]
             relations.append(
                 LegalRelation(
                     relation_id=f"rel_{rid}",
@@ -229,7 +243,9 @@ class LegalRelationExtractor:
             start_event = (m.group(1) or "").strip()
             num = m.group(2)
             unit = m.group(3)
-            rid = hashlib.sha1(f"{cid}:DL:{num}:{unit}:{m.start()}".encode()).hexdigest()[:12]
+            rid = hashlib.sha1(
+                f"{cid}:DL:{num}:{unit}:{m.start()}".encode()
+            ).hexdigest()[:12]
             relations.append(
                 LegalRelation(
                     relation_id=f"rel_{rid}",

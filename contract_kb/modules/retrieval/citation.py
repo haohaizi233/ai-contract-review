@@ -167,7 +167,9 @@ class CitationVerifier:
 
         for item in substantive:
             ref = item.get("source_reference") or {}
-            quote = _compact(str(ref.get("original_text") or ref.get("exact_quote") or ""))
+            quote = _compact(
+                str(ref.get("original_text") or ref.get("exact_quote") or "")
+            )
             node_ids = set(ref.get("node_ids") or [])
             node_ok = bool(node_ids and (node_ids & valid_nodes))
             quote_ok = bool(quote and quote in corpus_compact)

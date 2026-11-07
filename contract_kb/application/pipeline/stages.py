@@ -745,7 +745,9 @@ class RetrieveEvidenceStage(ReviewStage):
         from ...modules.retrieval.query_planner import ContractAwareQueryPlanner
 
         # 1. 构建结构感知条款层级树
-        doc_id = ctx.parsed_record.template_id if ctx.parsed_record else "target_contract"
+        doc_id = (
+            ctx.parsed_record.template_id if ctx.parsed_record else "target_contract"
+        )
         if ctx.clauses:
             tree = HierarchicalKnowledgeTree.build_from_clauses(
                 document_id=doc_id,
@@ -825,8 +827,13 @@ class RetrieveEvidenceStage(ReviewStage):
                     tenant_id=ctx.scope_tenant,
                     include_historical_cases=False,
                 )
-                if legacy_bundle.citation_summary is not None and legacy_bundle.citation_summary.total_checked > 0:
-                    verified_ratios.append(legacy_bundle.citation_summary.citation_correctness)
+                if (
+                    legacy_bundle.citation_summary is not None
+                    and legacy_bundle.citation_summary.total_checked > 0
+                ):
+                    verified_ratios.append(
+                        legacy_bundle.citation_summary.citation_correctness
+                    )
                 for h in legacy_bundle.authoritative_hits[:2]:
                     cid = h["clause_id"]
                     if cid in seen_clauses:
@@ -1026,7 +1033,9 @@ class LLMSemanticReviewStage(ReviewStage):
                     "document_id": top_ref.get("document_id"),
                     "clause_id": top_ref.get("clause_id"),
                     "clause_number": top_ref.get("clause_number"),
-                    "text": (top_ref.get("original_text") or top_ref.get("text") or "")[:120],
+                    "text": (top_ref.get("original_text") or top_ref.get("text") or "")[
+                        :120
+                    ],
                     "source_type": top_ref.get("knowledge_type") or "TEMPLATE",
                     "tenant_id": top_ref.get("tenant_id") or ctx.scope_tenant,
                     "approved_status": top_ref.get("approved_status") or "APPROVED",
@@ -1034,7 +1043,9 @@ class LLMSemanticReviewStage(ReviewStage):
                 node_ids = list(c.get("source_node_ids") or [])
                 ref_evidence = (
                     EvidenceReference(
-                        document_id=ctx.parsed_record.template_id if ctx.parsed_record else "",
+                        document_id=ctx.parsed_record.template_id
+                        if ctx.parsed_record
+                        else "",
                         node_ids=node_ids,
                         clause_number=c.get("clause_number"),
                         original_text=str(c.get("original_text") or "")[:120],
@@ -1043,7 +1054,11 @@ class LLMSemanticReviewStage(ReviewStage):
                     if node_ids
                     else None
                 )
-                desc = "；".join(comp.summary_findings) if comp.summary_findings else f"条款与企业标准存在结构性差异：{comp.conclusion}"
+                desc = (
+                    "；".join(comp.summary_findings)
+                    if comp.summary_findings
+                    else f"条款与企业标准存在结构性差异：{comp.conclusion}"
+                )
                 comparison_findings.append(
                     Finding(
                         issue_id="",
@@ -1294,7 +1309,11 @@ class VerifyEvidenceStage(ReviewStage):
             if f.knowledge_references:
                 for kref in f.knowledge_references:
                     ref_tenant = kref.get("tenant_id")
-                    if ref_tenant and ctx.scope_tenant and ref_tenant != ctx.scope_tenant:
+                    if (
+                        ref_tenant
+                        and ctx.scope_tenant
+                        and ref_tenant != ctx.scope_tenant
+                    ):
                         f.check_status = CheckStatus.INSUFFICIENT_EVIDENCE.value
                         f.requires_human_review = True
                         f.citation_status = "CITATION_UNVERIFIED"

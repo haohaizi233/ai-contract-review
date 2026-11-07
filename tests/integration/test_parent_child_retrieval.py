@@ -48,7 +48,7 @@ def test_parent_child_retrieval_integration(storage):
                 "original_text": "乙方逾期交付成果超过10个工作日的，每日按未付金额0.05%支付违约金。",
                 "conditions": ["乙方逾期交付成果超过10个工作日"],
                 "source_node_ids": ["node_8_2"],
-            }
+            },
         ],
     )
 

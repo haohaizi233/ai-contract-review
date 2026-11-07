@@ -85,8 +85,12 @@ class ClauseComparisonEngine:
         rev_rate_m = re.search(r"(\d+(?:\.\d+)?)\s*(‰|%)", reviewed_text)
         ref_rate_m = re.search(r"(\d+(?:\.\d+)?)\s*(‰|%)", reference_text)
         if rev_rate_m and ref_rate_m:
-            v_rev = Decimal(rev_rate_m.group(1)) * (Decimal("0.001") if rev_rate_m.group(2) == "‰" else Decimal("0.01"))
-            v_ref = Decimal(ref_rate_m.group(1)) * (Decimal("0.001") if ref_rate_m.group(2) == "‰" else Decimal("0.01"))
+            v_rev = Decimal(rev_rate_m.group(1)) * (
+                Decimal("0.001") if rev_rate_m.group(2) == "‰" else Decimal("0.01")
+            )
+            v_ref = Decimal(ref_rate_m.group(1)) * (
+                Decimal("0.001") if ref_rate_m.group(2) == "‰" else Decimal("0.01")
+            )
             if v_rev != v_ref:
                 diffs.append(
                     NumericDifference(
@@ -102,10 +106,18 @@ class ClauseComparisonEngine:
                 )
 
         # 2. 提取期限天数（严格区分工作日与自然日）
-        rev_work_m = re.search(r"(\d+|[一二三四五六七八九十]+)\s*个?工作日", reviewed_text)
-        ref_work_m = re.search(r"(\d+|[一二三四五六七八九十]+)\s*个?工作日", reference_text)
-        rev_cal_m = re.search(r"(\d+|[一二三四五六七八九十]+)\s*(?:日|天)(?!工作日)", reviewed_text)
-        ref_cal_m = re.search(r"(\d+|[一二三四五六七八九十]+)\s*(?:日|天)(?!工作日)", reference_text)
+        rev_work_m = re.search(
+            r"(\d+|[一二三四五六七八九十]+)\s*个?工作日", reviewed_text
+        )
+        ref_work_m = re.search(
+            r"(\d+|[一二三四五六七八九十]+)\s*个?工作日", reference_text
+        )
+        rev_cal_m = re.search(
+            r"(\d+|[一二三四五六七八九十]+)\s*(?:日|天)(?!工作日)", reviewed_text
+        )
+        ref_cal_m = re.search(
+            r"(\d+|[一二三四五六七八九十]+)\s*(?:日|天)(?!工作日)", reference_text
+        )
 
         # 检查单位错位（工作日 vs 自然日）
         if (rev_work_m and ref_cal_m) or (rev_cal_m and ref_work_m):
@@ -168,8 +180,16 @@ class ClauseComparisonEngine:
         similarity_score: float | None = None,
     ) -> ClauseComparison:
         """执行全套结构化差异比对。"""
-        rev_dict = reviewed_clause if isinstance(reviewed_clause, dict) else reviewed_clause.to_dict()
-        ref_dict = reference_clause if isinstance(reference_clause, dict) else reference_clause.to_dict()
+        rev_dict = (
+            reviewed_clause
+            if isinstance(reviewed_clause, dict)
+            else reviewed_clause.to_dict()
+        )
+        ref_dict = (
+            reference_clause
+            if isinstance(reference_clause, dict)
+            else reference_clause.to_dict()
+        )
 
         rev_id = str(rev_dict.get("clause_id") or "reviewed")
         ref_id = str(ref_dict.get("clause_id") or "reference")
@@ -183,7 +203,9 @@ class ClauseComparisonEngine:
         polarity_inv = self.check_polarity_inversion(rev_text, ref_text)
         if polarity_inv:
             conclusions.append("POLARITY_INVERSION")
-            findings.append("【法律极性反转】待审条款与企业标准条款存在正负向禁止/许可倒错！")
+            findings.append(
+                "【法律极性反转】待审条款与企业标准条款存在正负向禁止/许可倒错！"
+            )
 
         # 2. 数值精度检查 (Numeric Differences)
         num_diffs = self.compare_numerics(rev_text, ref_text)
@@ -197,42 +219,58 @@ class ClauseComparisonEngine:
         ref_rels = self.extractor.extract_relations(ref_dict, clause_id=ref_id)
 
         subjects_changed = []
-        rev_obligations = [r for r in rev_rels if r.relation_type == LegalRelationType.OBLIGATION.value]
-        ref_obligations = [r for r in ref_rels if r.relation_type == LegalRelationType.OBLIGATION.value]
+        rev_obligations = [
+            r for r in rev_rels if r.relation_type == LegalRelationType.OBLIGATION.value
+        ]
+        ref_obligations = [
+            r for r in ref_rels if r.relation_type == LegalRelationType.OBLIGATION.value
+        ]
         if rev_obligations and ref_obligations:
             s_rev = rev_obligations[0].subject
             s_ref = ref_obligations[0].subject
             if s_rev and s_ref and s_rev != s_ref:
-                subjects_changed.append({
-                    "reviewed_subject": s_rev,
-                    "reference_subject": s_ref,
-                    "action": rev_obligations[0].action_or_content,
-                })
+                subjects_changed.append(
+                    {
+                        "reviewed_subject": s_rev,
+                        "reference_subject": s_ref,
+                        "action": rev_obligations[0].action_or_content,
+                    }
+                )
                 conclusions.append("SUBJECT_DIFFERENCE")
-                findings.append(f"【义务主体错位】待审合同由【{s_rev}】履行，企业标准模板由【{s_ref}】履行！")
+                findings.append(
+                    f"【义务主体错位】待审合同由【{s_rev}】履行，企业标准模板由【{s_ref}】履行！"
+                )
 
         # 4. 生效条件与例外比对
         cond_diffs = []
         rev_conds = list(rev_dict.get("conditions") or [])
         ref_conds = list(ref_dict.get("conditions") or [])
         if rev_conds != ref_conds and (rev_conds or ref_conds):
-            cond_diffs.append({
-                "reviewed_conditions": rev_conds,
-                "reference_conditions": ref_conds,
-            })
+            cond_diffs.append(
+                {
+                    "reviewed_conditions": rev_conds,
+                    "reference_conditions": ref_conds,
+                }
+            )
             conclusions.append("CONDITION_DIFFERENCE")
-            findings.append(f"【生效前提差异】待审条件: {rev_conds or '无'} vs 标准条件: {ref_conds or '无'}")
+            findings.append(
+                f"【生效前提差异】待审条件: {rev_conds or '无'} vs 标准条件: {ref_conds or '无'}"
+            )
 
         exc_diffs = []
         rev_excs = list(rev_dict.get("exceptions") or [])
         ref_excs = list(ref_dict.get("exceptions") or [])
         if rev_excs != ref_excs and (rev_excs or ref_excs):
-            exc_diffs.append({
-                "reviewed_exceptions": rev_excs,
-                "reference_exceptions": ref_excs,
-            })
+            exc_diffs.append(
+                {
+                    "reviewed_exceptions": rev_excs,
+                    "reference_exceptions": ref_excs,
+                }
+            )
             conclusions.append("EXCEPTION_DIFFERENCE")
-            findings.append(f"【免责范围差异】待审例外: {rev_excs or '无'} vs 标准例外: {ref_excs or '无'}")
+            findings.append(
+                f"【免责范围差异】待审例外: {rev_excs or '无'} vs 标准例外: {ref_excs or '无'}"
+            )
 
         # 确定主结论
         if "POLARITY_INVERSION" in conclusions:
@@ -246,7 +284,11 @@ class ClauseComparisonEngine:
         elif "EXCEPTION_DIFFERENCE" in conclusions:
             final_conclusion = "EXCEPTION_DIFFERENCE"
         else:
-            final_conclusion = "MATCH" if _normalize_text(rev_text) == _normalize_text(ref_text) else "STRUCTURAL_DIFFERENCE"
+            final_conclusion = (
+                "MATCH"
+                if _normalize_text(rev_text) == _normalize_text(ref_text)
+                else "STRUCTURAL_DIFFERENCE"
+            )
 
         requires_review = final_conclusion != "MATCH"
 
@@ -261,7 +303,11 @@ class ClauseComparisonEngine:
             condition_differences=cond_diffs,
             exception_differences=exc_diffs,
             obligations_changed=[r.to_dict() for r in rev_obligations],
-            rights_changed=[r.to_dict() for r in rev_rels if r.relation_type == LegalRelationType.RIGHT.value],
+            rights_changed=[
+                r.to_dict()
+                for r in rev_rels
+                if r.relation_type == LegalRelationType.RIGHT.value
+            ],
             evidence_references=[{"clause_id": ref_id, "text": ref_text[:80]}],
             requires_human_review=requires_review,
             confidence=1.0 if (num_diffs or polarity_inv or subjects_changed) else 0.85,

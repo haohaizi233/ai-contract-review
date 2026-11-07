@@ -137,7 +137,9 @@ class HierarchicalKnowledgeTree:
             thash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
             # 抽取法律关系
-            relations = [r.to_dict() for r in extractor.extract_relations(c_dict, clause_id=cid)]
+            relations = [
+                r.to_dict() for r in extractor.extract_relations(c_dict, clause_id=cid)
+            ]
 
             # 确保父级 Article 节点存在
             art_key = art_title.split()[0] if art_title else "首部"
@@ -291,7 +293,9 @@ class HierarchicalKnowledgeTree:
         if inherited_exceptions:
             parts.append(f"【通则免责例外】{'；'.join(inherited_exceptions)}")
         if referenced_nodes:
-            ref_texts = [f"{rn.title or rn.node_id}: {rn.text[:60]}…" for rn in referenced_nodes]
+            ref_texts = [
+                f"{rn.title or rn.node_id}: {rn.text[:60]}…" for rn in referenced_nodes
+            ]
             parts.append(f"【援引外部条款】{' | '.join(ref_texts)}")
 
         return {

@@ -21,7 +21,9 @@
 ```python
 # 防御伪造定界符逃逸
 cleaned = text.replace("<<<END_CONTRACT_DATA>>>", "[定界符已转义]")
-envelope = f'<UNTRUSTED_CONTRACT_BODY nonce="{nonce}">{cleaned}</UNTRUSTED_CONTRACT_BODY>'
+envelope = (
+    f'<UNTRUSTED_CONTRACT_BODY nonce="{nonce}">{cleaned}</UNTRUSTED_CONTRACT_BODY>'
+)
 ```
 模型系统提示词（`PROMPT_SYSTEM`）被赋予最高控制权，合同正文仅作为不可信被动客体。
 
