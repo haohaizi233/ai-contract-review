@@ -20,23 +20,18 @@
 
 from __future__ import annotations
 
-import io
 import os
-import shutil
 import time
 from pathlib import Path
 import threading
 from unittest.mock import patch
 
 import docx
-import pypdf
 import pytest
 
-from contract_kb.storage import Storage
 from tools.sync_wecom_wedrive import (
     WeDriveSyncManager,
     FileSyncState,
-    SyncMetrics,
 )
 
 
@@ -240,7 +235,7 @@ def test_e05_file_unstable_or_syncing(test_env):
     create_sample_docx(f, "未就绪合同", [("第一条", "数据未就绪")])
 
     # 模拟正在下载写入：不断改变大小或初次检测
-    tracker = mgr.trackers.get(f.name)
+    mgr.trackers.get(f.name)
     res = mgr.sync_from_directory(watch)
     assert res["metrics"]["pending_tasks"] == 1
     assert res["metrics"]["files_changed"] == 0  # 尚未入库
@@ -370,7 +365,7 @@ def test_e11_path_traversal_defense(test_env):
 
     # 在 watch 目录下创建相对路径穿越或非法访问测试
     # 确认直接越界无法被 scanner 处理
-    res = mgr.sync_from_directory(watch)
+    mgr.sync_from_directory(watch)
     assert outside_file.name not in mgr.trackers
 
 

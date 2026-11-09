@@ -10,8 +10,8 @@ space_id = "s.1970324998235347.648114738G1H"
 local_root = Path(r"D:\Users\Administrator\Documents\WXWork\1688855905806482\WeDrive\恒程创新\法律事务部（含商务合同等文件）")
 
 cur.execute("""
-    SELECT file_id, name, size, file_type, relativePath 
-    FROM File 
+    SELECT file_id, name, size, file_type, relativePath
+    FROM File
     WHERE space_id=?
     ORDER BY file_type, relativePath
 """, (space_id,))
@@ -42,7 +42,7 @@ for fid, name, size, ftype, rel_path in rows:
         else:
             local_missing.append(item_info)
 
-print(f"=== 云端索引统计 (来自 WXDrive 本地SQLite缓存) ===")
+print("=== 云端索引统计 (来自 WXDrive 本地SQLite缓存) ===")
 print(f"云端目录数: {len(cloud_dirs)}")
 print(f"云端文件/在线文档数: {len(cloud_files)}")
 print(f"本地实际存在的文件: {len(local_found)}")

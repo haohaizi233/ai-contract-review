@@ -17,12 +17,11 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from enum import Enum
 import hashlib
 import json
 import logging
-import os
 import re
 from pathlib import Path
 import sys
@@ -433,7 +432,7 @@ class WeDriveSyncManager:
             t_idx_0 = time.perf_counter()
             doc_dict = rec.to_dict()
             doc_dict["source_file"] = rel_path
-            doc_dict["status"] = "ACTIVE" 
+            doc_dict["status"] = "ACTIVE"
 
             try:
                 doc_id, is_new = self.storage.upsert_document(doc_dict)

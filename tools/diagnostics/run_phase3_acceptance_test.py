@@ -18,14 +18,12 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 import docx
-import pypdf
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from contract_kb.storage import Storage
-from tools.sync_wecom_wedrive import WeDriveSyncManager, FileSyncState
+from tools.sync_wecom_wedrive import WeDriveSyncManager, FileSyncState  # noqa: E402
 VERIFY_DIR = ROOT_DIR / "tools" / "test_assets" / "verification_run"
 STAGING_DIR = ROOT_DIR / "reports" / "sync_staging"
 ACCEPT_DB = ROOT_DIR / "reports" / "phase3_acceptance_rag.db"
@@ -115,7 +113,7 @@ def run_acceptance():
 
     t0 = time.perf_counter()
     res = mgr.sync_from_directory(VERIFY_DIR)
-    dur = round((time.perf_counter() - t0) * 1000, 2)
+    round((time.perf_counter() - t0) * 1000, 2)
 
     print("\n--- 1. 同步执行结果 ---")
     print(json.dumps(res, ensure_ascii=False, indent=2))
@@ -170,7 +168,7 @@ def run_acceptance():
     # 验证健康检查报告落盘
     health_file = STAGING_DIR / "sync_health.json"
     assert health_file.exists(), "Health file not written"
-    print(f"\n--- 5. 健康检查文件写入 ---")
+    print("\n--- 5. 健康检查文件写入 ---")
     print(health_file.read_text(encoding="utf-8"))
 
     print("\n🎉 Phase 3 真实全链路 RAG 管道完整验收全部通过！")
