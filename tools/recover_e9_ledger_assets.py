@@ -316,56 +316,6 @@ def load_context(urls, missing):
     return context
 
 
-def refresh_cdp_cookie():
-    import websocket
-
-    profile = (
-        Path(os.environ["LOCALAPPDATA"]) / "Google/Chrome/User Data/DevToolsActivePort"
-    )
-    endpoints = []
-    saved = ROOT / "tmp/image_recovery_20261109/working_cdp_endpoint.txt"
-    if saved.exists():
-        endpoints.append(saved.read_text(encoding="utf8").strip())
-    if profile.exists():
-        parts = profile.read_text().splitlines()
-        if len(parts) >= 2:
-            endpoints.append("ws://127.0.0.1:" + parts[0] + parts[1])
-        endpoints.append("ws://127.0.0.1:" + parts[0] + "/devtools/browser")
-    for port in [9333]:
-        try:
-            endpoints.append(
-                json.load(
-                    urllib.request.urlopen(
-                        "http://127.0.0.1:" + str(port) + "/json/version", timeout=2
-                    )
-                )["webSocketDebuggerUrl"]
-            )
-        except Exception:
-            pass
-    for endpoint in endpoints:
-        try:
-            with websocket.create_connection(
-                endpoint, timeout=3, suppress_origin=True, http_proxy_host=None
-            ) as ws:
-                ws.send(json.dumps({"id": 1, "method": "Storage.getCookies"}))
-                while True:
-                    result = json.loads(ws.recv())
-                    if result.get("id") == 1:
-                        break
-                cookies = [
-                    c
-                    for c in result.get("result", {}).get("cookies", [])
-                    if c["domain"].lstrip(".") == "hc.hcipi.com"
-                ]
-                if cookies:
-                    (ROOT / "data/.e9_cookie").write_text(
-                        "; ".join(c["name"] + "=" + c["value"] for c in cookies),
-                        encoding="utf8",
-                    )
-        except Exception:
-            continue
-
-
 def watch_session():
     import subprocess
 

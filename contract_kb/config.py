@@ -51,10 +51,17 @@ EMBEDDING_PROVIDER = os.environ.get(
 EMBEDDING_DIM = int(os.environ.get("CONTRACT_KB_EMBEDDING_DIM", "256"))
 
 # LLM 与外部模型出境控制：未显式配置时审核引擎降级为确定性审查并标 NOT_CHECKED
-LLM_PROVIDER = os.environ.get("CONTRACT_KB_LLM", "none")
+LLM_PROVIDER = os.environ.get(
+    "CONTRACT_KB_LLM_PROVIDER", os.environ.get("CONTRACT_KB_LLM", "none")
+)
 ALLOW_EXTERNAL_LLM = os.environ.get(
     "CONTRACT_KB_ALLOW_EXTERNAL_LLM", "false"
 ).strip().lower() in ("1", "true", "yes")
+LLM_BASE_URL = os.environ.get("CONTRACT_KB_LLM_BASE_URL", "")
+LLM_API_KEY = os.environ.get("CONTRACT_KB_LLM_API_KEY", "")
+LLM_MODEL = os.environ.get("CONTRACT_KB_LLM_MODEL", "Qwen3.6-35B-A3B-oQ4-fp16-mtp")
+LLM_TIMEOUT = int(os.environ.get("CONTRACT_KB_LLM_TIMEOUT", "60"))
+LLM_MAX_TOKENS = int(os.environ.get("CONTRACT_KB_LLM_MAX_TOKENS", "3500"))
 
 # 认证与重放窗口配置
 TENANT_ID = os.environ.get("CONTRACT_KB_TENANT", "default")

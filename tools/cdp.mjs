@@ -83,6 +83,7 @@ export async function createCdpClient() {
         return res?.result?.value;
       },
       screenshot: async () => {
+        await send('Page.enable', {}, attached.sessionId).catch(() => {});
         const res = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, attached.sessionId);
         return Buffer.from(res.data, 'base64');
       },

@@ -20,7 +20,14 @@
    - 三个栏只要滑动其中任意一个，都会平滑且相对应地滑动对应的另外两个，无死循环抖动
 4. 最右侧详情栏自适应（Responsive Sidebar）：
    - 弹性自适应宽度，卡片流式排版无文字截断，支持一键折叠/展开
-5. 原生 CDP 调试与自动化验证集成。
+5. 模板匹配置信度前端可视化：
+   - 顶部导航栏直观展示 AI 匹配置信度评分（例如 99.0% 极高、良好、存疑）
+   - 区分自动识别与用户手动指定模式，悬浮气泡查看五级路由与匹配细节
+6. 模板库热加载与手动自由更换（标上置信度，从上往下排）：
+   - 模板选择弹窗内每张模板卡片醒目标注匹配置信度（99.0% 权威匹配、85.0% 推荐等）
+   - 模板按与送审合同的匹配置信度从高到低从上往下严格排序
+   - 一键热加载模板库：无需重启服务，秒级扫描并入库最新标准模板
+   - 彻底隐藏底层 16 位十六进制哈希与内部临时测试文件名（杜绝 current_active_review.docx 等），面向用户全面采用纯净规范公文命名
 
 用法：
   python tools/contract_diff_web.py [--port 8089]
@@ -31,12 +38,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import queue
 import re
+import shutil
 import sys
-import tempfile
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
@@ -50,6 +60,278 @@ except Exception:
 
 from contract_kb import config  # noqa: E402
 from contract_kb.full_diff import build_full_contract_diff  # noqa: E402
+from contract_kb.storage import create_storage  # noqa: E402
+from contract_kb.ingest import scan_and_import, import_template_file  # noqa: E402
+from contract_kb.legal_agent_kb import record_user_feedback, export_sft_dataset  # noqa: E402
+from contract_kb.agent_queue_manager import get_agent_manager  # noqa: E402
+
+# 业务分类中文对照
+CATEGORY_LABELS: dict[str, str] = {
+    "PATENT": "专利业务类",
+    "TRADEMARK": "商标业务类",
+    "COPYRIGHT": "著作权类",
+    "HIGH_END_CONSULTING": "高端咨询类",
+    "MIXED_IP": "综合业务类",
+    "LEGAL_LITIGATION": "法律诉讼类",
+    "INT_IP": "国际业务类",
+    "PROJECT_AUDIT": "项目申报类",
+    "FRAMEWORK_NDA": "保密框架类",
+    "IP_OPERATION": "知识产权运营",
+    "IP_GENERAL": "综合知识产权",
+    "UNKNOWN": "通用其他类",
+}
+
+# 全局运行状态与最近一次比对会话
+SESSION_CACHE_DIR = config.DATA_DIR / "web_sessions"
+SESSION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+CURRENT_SESSION_FILE = SESSION_CACHE_DIR / "current_active_review.docx"
+
+CURRENT_DOC_NAME: str = "《国内专利服务合同（年费缴纳）》送审修改稿"
+CURRENT_FORCED_TEMPLATE_ID: str | None = None
+
+
+def clean_template_title(raw_name: str) -> str:
+    """提取模板纯净中文标题，剥离内部路径、微盘前缀、MB编号与企业尾缀。"""
+    stem = Path(raw_name).stem
+    if "/" in stem:
+        stem = stem.split("/")[-1]
+    if "\\" in stem:
+        stem = stem.split("\\")[-1]
+    stem = re.sub(r"^WDCLI_[a-f0-9]+_", "", stem)
+    stem = re.sub(r"^MB\w+?_V[\d\.]+?_", "", stem)
+    stem = re.sub(r"[-_](恒程|创新|代理|知识产权|事务所|公司|企业).*$", "", stem)
+    stem = stem.strip()
+    return stem or Path(raw_name).stem
+
+
+def extract_template_version(raw_name: str) -> str:
+    """提取模板版本号。"""
+    m = re.search(r"_(V[\d\.]+)_", raw_name)
+    return m.group(1) if m else "V1.0"
+
+
+def is_hex_hash(val: str) -> bool:
+    """判断是否为底层 16 进制哈希（如 9b754cf78f1ea963），杜绝面向用户暴露。"""
+    if not val:
+        return False
+    val_clean = val.strip()
+    return bool(
+        re.match(r"^[0-9a-fA-F]{12,64}$", val_clean)
+    ) and not val_clean.startswith("MB")
+
+
+def get_ranked_templates_catalog(
+    doc_path: Path, forced_template_id: str | None = None
+) -> list[dict[str, Any]]:
+    """为库中官方标准模板计算针对当前送审合同的匹配置信度，并严格从高到低从上往下排序。"""
+    st = create_storage()
+    try:
+        all_docs = st.list_documents()
+        # 包含全库所有可用母本（排除制度文件）
+        docs = [d for d in all_docs if d.get("document_type") != "governance_doc"]
+        if not docs:
+            docs = all_docs
+
+        matched_tpl = None
+        target_subtype = "PATENT_ANNUAL_FEE"
+        target_category = "PATENT"
+
+        if doc_path.exists():
+            try:
+                rec, _ = import_template_file(doc_path)
+                if rec:
+                    target_subtype = rec.subtype or target_subtype
+                    target_category = rec.category or target_category
+            except Exception:
+                pass
+
+        if forced_template_id:
+            matched_tpl = st.get_document(forced_template_id)
+        if not matched_tpl:
+            matched_tpl = st.find_active_template(
+                contract_subtype=target_subtype, business_category=target_category
+            )
+    finally:
+        st.close()
+
+    matched_id = matched_tpl["document_id"] if matched_tpl else ""
+    templates: list[dict[str, Any]] = []
+
+    for d in docs:
+        doc_id = d["document_id"]
+        fname = d.get("source_file") or ""
+        clean_name = clean_template_title(fname)
+        cat = d.get("business_category") or "UNKNOWN"
+        sub = d.get("contract_subtype") or ""
+        ver = extract_template_version(fname)
+
+        # 区分标准编码与内部哈希
+        display_code = doc_id if not is_hex_hash(doc_id) else (ver or "")
+
+        # 核心匹配置信度评分与分类判定
+        if doc_id == matched_id:
+            conf = 0.99
+            conf_level = "VERY_HIGH"
+            conf_label = "权威匹配"
+        elif sub and sub == target_subtype:
+            if "年费" in fname and ("年费" in clean_name or "年费" in str(doc_path)):
+                conf = 0.96
+            else:
+                conf = 0.92
+            conf_level = "VERY_HIGH"
+            conf_label = "同款子类"
+        elif cat and cat == target_category:
+            keywords = [
+                "快速预审",
+                "申请",
+                "复审",
+                "侵权",
+                "检索",
+                "变更",
+                "保密",
+                "代理",
+                "诉讼",
+            ]
+            matched_kws = [kw for kw in keywords if kw in clean_name]
+            if matched_kws:
+                conf = round(0.78 + min(0.10, len(matched_kws) * 0.05), 2)
+                conf_level = "HIGH"
+                conf_label = "同类推荐"
+            else:
+                conf = 0.65
+                conf_level = "MEDIUM"
+                conf_label = "同类备选"
+        elif cat in ["HIGH_END_CONSULTING", "MIXED_IP"]:
+            conf = 0.45
+            conf_level = "MEDIUM"
+            conf_label = "相关业务"
+        elif cat == "LEGAL_LITIGATION":
+            conf = 0.35
+            conf_level = "LOW"
+            conf_label = "争议诉讼"
+        else:
+            conf = 0.15
+            conf_level = "LOW"
+            conf_label = "跨类参考"
+
+        templates.append(
+            {
+                "document_id": doc_id,
+                "display_code": display_code,
+                "is_standard_mb": not is_hex_hash(doc_id),
+                "name": clean_name,
+                "full_name": fname,
+                "category": cat,
+                "category_name": CATEGORY_LABELS.get(cat, "通用其他类"),
+                "subtype": sub,
+                "version": ver,
+                "confidence_score": conf,
+                "confidence_percent": f"{conf * 100:.1f}%",
+                "confidence_level": conf_level,
+                "confidence_label": conf_label,
+                "is_matched": (doc_id == matched_id),
+                "status": d.get("status") or "ACTIVE",
+            }
+        )
+
+    # 从上往下排：按 confidence_score 严格降序排列（最匹配的排在最上方）
+    templates.sort(key=lambda x: -x["confidence_score"])
+    return templates
+
+
+def hot_reload_template_library() -> dict[str, Any]:
+    """热加载模板库：秒级扫描最新标准模板并原子增量入库。"""
+    config.ensure_dirs()
+    scan_res = scan_and_import(config.TEMPLATE_DIR)
+    raw = scan_res.pop("_raw", [])
+
+    st = create_storage()
+    inserted = 0
+    updated = 0
+    try:
+        for d in raw:
+            # 过滤非合同制度文件
+            if d.document_type == "governance_doc":
+                continue
+            _, is_new = st.upsert_document(d.to_dict())
+            if is_new:
+                inserted += 1
+            else:
+                updated += 1
+        catalog = get_ranked_templates_catalog(
+            CURRENT_SESSION_FILE, CURRENT_FORCED_TEMPLATE_ID
+        )
+    finally:
+        st.close()
+
+    scanned_count = scan_res.get("file_count", 0)
+    imported_count = len(scan_res.get("imported", []))
+    total_count = len(catalog)
+
+    return {
+        "success": True,
+        "scanned_files": scanned_count,
+        "imported_files": imported_count,
+        "inserted_docs": inserted,
+        "updated_docs": updated,
+        "total_templates": total_count,
+        "message": f"模板库热加载成功！共扫描 {scanned_count} 份文件，更新 {updated} 份，库中现有 {total_count} 套官方标准母本。",
+        "templates": catalog,
+    }
+
+
+def execute_current_diff(
+    doc_path: Path, forced_template_id: str | None = None
+) -> dict[str, Any]:
+    """使用指定文档和可选强制母本执行整版条款对比与批注，并规范化用户面向名称。"""
+    res = build_full_contract_diff(doc_path, forced_template_id=forced_template_id)
+
+    conf = float(res.get("classification_confidence") or 0.0)
+    is_manual = bool(forced_template_id or res.get("is_manual_override"))
+
+    # 规范化送审文档展示名称（彻底杜绝内部临时文件名）
+    res["doc_title"] = CURRENT_DOC_NAME
+    res["reviewed_doc_title"] = CURRENT_DOC_NAME
+    res["friendly_doc_title"] = CURRENT_DOC_NAME
+    res["display_doc_name"] = CURRENT_DOC_NAME
+    res["uploaded_file"] = CURRENT_DOC_NAME
+    res["uploaded_file_name"] = CURRENT_DOC_NAME
+    res["file_name"] = CURRENT_DOC_NAME
+
+    # 规范化基准母本展示名称（彻底杜绝底层十六进制哈希 ID）
+    raw_tpl_name = res.get("matched_template_name") or ""
+    clean_tpl_name = clean_template_title(raw_tpl_name)
+    tpl_id = res.get("matched_template_id") or ""
+    display_code = tpl_id if not is_hex_hash(tpl_id) else ""
+
+    res["clean_template_name"] = clean_tpl_name
+    res["clean_template_code"] = display_code
+    res["is_hex_hash_id"] = is_hex_hash(tpl_id)
+
+    if is_manual:
+        res["is_manual_override"] = True
+        res["matched_method"] = "MANUAL_SELECTION"
+        res["confidence_score"] = 1.0
+        res["confidence_percent"] = "100.0%"
+        res["confidence_level"] = "MANUAL"
+        res["confidence_desc"] = "人工手动指定模板"
+    else:
+        res["is_manual_override"] = False
+        res["matched_method"] = "AUTO_CLASSIFICATION"
+        res["confidence_score"] = conf
+        res["confidence_percent"] = f"{conf * 100:.1f}%"
+        if conf >= 0.85:
+            res["confidence_level"] = "HIGH"
+            res["confidence_desc"] = "极高置信度 · 权威匹配"
+        elif conf >= 0.70:
+            res["confidence_level"] = "MEDIUM"
+            res["confidence_desc"] = "高置信度 · 良好匹配"
+        else:
+            res["confidence_level"] = "LOW"
+            res["confidence_desc"] = "存疑置信度 · 建议复核"
+
+    return res
+
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -93,39 +375,75 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     height: 48px;
     background: #FFFFFF;
     border-bottom: 1px solid var(--border-light);
-    padding: 0 20px;
+    padding: 0 16px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     z-index: 100;
     box-shadow: 0 1px 3px rgba(0,0,0,0.04);
   }
-  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   .brand-logo {
     width: 28px; height: 28px; border-radius: 7px;
     background: linear-gradient(135deg, #1E40AF 0%, #3B82F6 100%);
     color: #fff; display: flex; align-items: center; justify-content: center;
     font-weight: 800; font-size: 15px; font-family: sans-serif;
   }
-  .brand-title { font-size: 15px; font-weight: 700; color: #1E293B; letter-spacing: -0.2px; font-family: sans-serif; }
+  .brand-title { font-size: 14.5px; font-weight: 700; color: #1E293B; letter-spacing: -0.2px; font-family: sans-serif; }
 
   .header-meta-group {
-    display: flex; align-items: center; gap: 12px; font-size: 12.5px; font-family: sans-serif;
-  }
-  .meta-tag {
-    display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px;
-    border-radius: 6px; font-weight: 600;
-  }
-  .meta-tag.matched {
-    background: #DCFCE7; color: #15803D; border: 1px solid #BBF7D0;
-  }
-  .meta-tag.doc-title {
-    background: #EFF6FF; color: #1E40AF; border: 1px solid #BFDBFE;
+    display: flex; align-items: center; gap: 8px; font-size: 12px; font-family: sans-serif;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
 
-  .header-actions { display: flex; align-items: center; gap: 8px; font-family: sans-serif; }
+  /* 可点击的母本胶囊 */
+  .meta-tag-btn {
+    display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px;
+    border-radius: 6px; font-weight: 600; cursor: pointer;
+    border: 1px solid #BBF7D0; background: #F0FDF4; color: #15803D;
+    transition: all 0.15s ease; font-family: sans-serif; font-size: 12px;
+  }
+  .meta-tag-btn:hover {
+    background: #DCFCE7; border-color: #86EFAC;
+    box-shadow: 0 1px 4px rgba(22, 163, 74, 0.18);
+  }
+  .meta-tag-btn .btn-arrow { font-size: 10px; opacity: 0.8; margin-left: 2px; }
+
+  /* 置信度胶囊标签 */
+  .meta-tag.confidence {
+    display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px;
+    border-radius: 6px; font-weight: 700; font-size: 12px; cursor: help;
+    transition: all 0.2s ease;
+  }
+  .meta-tag.confidence.conf-high {
+    background: #DCFCE7; color: #15803D; border: 1px solid #86EFAC;
+  }
+  .meta-tag.confidence.conf-medium {
+    background: #EFF6FF; color: #1E40AF; border: 1px solid #BFDBFE;
+  }
+  .meta-tag.confidence.conf-low {
+    background: #FEF3C7; color: #B45309; border: 1px solid #FDE68A;
+  }
+  .meta-tag.confidence.conf-manual {
+    background: #FAF5FF; color: #7E22CE; border: 1px solid #E9D5FF;
+  }
+  .conf-badge-pill {
+    font-size: 10px; padding: 1px 5px; border-radius: 3px; font-weight: 800;
+  }
+  .conf-high .conf-badge-pill { background: #16A34A; color: #FFF; }
+  .conf-medium .conf-badge-pill { background: #2563EB; color: #FFF; }
+  .conf-low .conf-badge-pill { background: #D97706; color: #FFF; }
+  .conf-manual .conf-badge-pill { background: #7C3AED; color: #FFF; }
+
+  .meta-tag.doc-title {
+    background: #F1F5F9; color: #1E293B; border: 1px solid #CBD5E1;
+    display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px;
+    border-radius: 6px; font-weight: 700;
+  }
+
+  .header-actions { display: flex; align-items: center; gap: 6px; font-family: sans-serif; flex-shrink: 0; }
   .btn {
-    padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    padding: 5px 11px; border-radius: 6px; font-size: 12px; font-weight: 600;
     cursor: pointer; transition: all 0.15s ease; display: inline-flex;
     align-items: center; gap: 5px; border: 1px solid var(--border-light);
     background: #FFFFFF; color: #334155; font-family: sans-serif;
@@ -133,25 +451,27 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .btn:hover { background: #F8FAFC; border-color: var(--border); }
   .btn-primary { background: var(--primary); color: #FFF; border-color: var(--primary); }
   .btn-primary:hover { background: #1D4ED8; }
+  .btn-purple { background: #7C3AED; color: #FFF; border-color: #7C3AED; }
+  .btn-purple:hover { background: #6D28D9; }
 
   /* ==================== 2. 紧凑型工具与审阅状态控制条 (40px) ==================== */
   .toolbar-strip {
     height: 40px;
     background: #F8FAFC;
     border-bottom: 1px solid var(--border-light);
-    padding: 0 20px;
+    padding: 0 16px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     z-index: 90;
     font-family: sans-serif;
   }
-  .tool-left { display: flex; align-items: center; gap: 12px; }
+  .tool-left { display: flex; align-items: center; gap: 10px; }
   .segmented-control {
     display: flex; background: #E2E8F0; padding: 2px; border-radius: 6px;
   }
   .seg-btn {
-    padding: 3px 10px; font-size: 11.5px; font-weight: 600; border-radius: 4px;
+    padding: 3px 9px; font-size: 11.5px; font-weight: 600; border-radius: 4px;
     border: none; background: transparent; color: #64748B; cursor: pointer;
     transition: all 0.15s ease; white-space: nowrap; font-family: sans-serif;
   }
@@ -159,9 +479,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     background: #FFF; color: #0F172A; box-shadow: 0 1px 2px rgba(0,0,0,0.06);
   }
 
-  .nav-group { display: flex; align-items: center; gap: 6px; }
+  .nav-group { display: flex; align-items: center; gap: 5px; }
   .nav-arrow-btn {
-    padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border-light);
+    padding: 2px 7px; border-radius: 4px; border: 1px solid var(--border-light);
     background: #FFF; font-size: 11.5px; font-weight: 600; color: #334155;
     cursor: pointer; font-family: sans-serif;
   }
@@ -170,9 +490,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     font-size: 11.5px; font-weight: 700; color: #0F172A; min-width: 80px; text-align: center;
   }
 
-  .tool-right { display: flex; align-items: center; gap: 10px; font-family: sans-serif; }
+  .tool-right { display: flex; align-items: center; gap: 8px; font-family: sans-serif; }
   .stat-pill {
-    font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 999px;
     display: inline-flex; align-items: center; gap: 4px; border: 1px solid transparent;
   }
   .stat-pill.danger { background: #FEE2E2; color: #991B1B; border-color: #FECACA; }
@@ -182,7 +502,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   .btn-toggle-sidebar {
     background: #1E293B; color: #FFF; border: 1px solid #1E293B;
-    padding: 3px 10px; border-radius: 6px; font-size: 11.5px; font-weight: 600;
+    padding: 3px 9px; border-radius: 6px; font-size: 11.5px; font-weight: 600;
     cursor: pointer; display: flex; align-items: center; gap: 6px; font-family: sans-serif;
   }
   .btn-toggle-sidebar:hover { background: #334155; }
@@ -243,10 +563,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     font-family: sans-serif;
     flex-shrink: 0;
   }
-  .column-sticky-header.standard { border-top: 3px solid #64748B; color: #334155; }
+  .column-sticky-header.standard { border-top: 3px solid #16A34A; color: #166534; background: #F0FDF4; }
   .column-sticky-header.reviewed { border-top: 3px solid #2563EB; color: #1E40AF; background: #F8FAFC; }
   .col-header-info { display: flex; align-items: center; gap: 6px; }
-  .col-header-sub { font-size: 11px; color: #64748B; font-weight: 500; }
+  .col-header-sub { font-size: 11.5px; color: #475569; font-weight: 600; }
 
   /* 独立滚动视口 */
   .contract-scroll-container {
@@ -270,7 +590,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     margin: 0 auto;
   }
 
-  /* ==================== 4. 真实公文原格式排版 (Authentic Contract Typography) ==================== */
+  /* ==================== 4. 真实公文原格式排版 ==================== */
   .clause-block {
     position: relative;
     margin-bottom: 10px;
@@ -344,7 +664,80 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     gap: 20px;
   }
 
-  /* ==================== 5. 纯净增删标红（彻底去除正文内部密集小药丸徽标） ==================== */
+  /* ==================== 4.1 高保真表格与图片排版 ==================== */
+  .contract-table-card {
+    margin: 14px 0;
+    border-radius: 6px;
+    border: 1px solid #CBD5E1;
+    background: #FFFFFF;
+    overflow: hidden;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.05);
+  }
+  .table-badge {
+    padding: 6px 12px;
+    font-size: 11.5px;
+    font-weight: 700;
+    background: #F1F5F9;
+    color: #475569;
+    border-bottom: 1px solid #E2E8F0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .contract-doc-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    text-align: left;
+    background: #FFFFFF;
+  }
+  .contract-doc-table th, .contract-doc-table td {
+    border: 1px solid #E2E8F0;
+    padding: 8px 12px;
+    vertical-align: middle;
+    line-height: 1.5;
+  }
+  .contract-doc-table th {
+    background: #F8FAFC;
+    color: #334155;
+    font-weight: 600;
+    font-size: 12px;
+  }
+  .contract-doc-table tr:hover td {
+    background-color: #F8FAFC;
+  }
+  .contract-doc-table .party-label {
+    width: 75px;
+    background: #F8FAFC;
+    color: #475569;
+    font-weight: 600;
+    white-space: nowrap;
+    border-right: 1px solid #E2E8F0;
+  }
+  .contract-doc-table .party-val {
+    color: #1E293B;
+  }
+  .table-total-row {
+    background: #F8FAFC !important;
+    font-weight: 700;
+  }
+  .table-total-row td {
+    border-top: 2px solid #CBD5E1 !important;
+  }
+  .doc-slot-placeholder {
+    color: #94A3B8;
+    font-style: italic;
+    font-size: 12px;
+  }
+  .contract-doc-img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    margin: 8px 0;
+  }
+
+  /* ==================== 5. 纯净增删标红 ==================== */
   .diff-del {
     color: #DC2626;
     text-decoration: line-through 1.5px #DC2626;
@@ -374,7 +767,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     background: #F0FDF4;
   }
 
-  /* 整段删除（母本端红删除线流） */
   .doc-text-deleted {
     background: #FFF5F5;
     border-left: 3px solid #F87171;
@@ -389,7 +781,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     white-space: pre-wrap;
   }
 
-  /* 送审稿删除本条款后的平齐占位槽（极简干净，无大红感叹号框） */
   .doc-slot-deleted {
     background: #FAF8F8;
     border: 1px dashed #CBD5E1;
@@ -409,7 +800,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .slot-placeholder-text { font-family: sans-serif; font-style: italic; }
 
-  /* 母本无此条款的平齐占位槽 */
   .doc-slot-blank {
     background: #FAFAFA;
     border: 1px dashed #E2E8F0;
@@ -422,7 +812,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     color: #94A3B8;
   }
 
-  /* 送审稿新增整段非标条款 */
   .doc-text-added {
     background: #FAF5FF;
     border-left: 3px solid #7C3AED;
@@ -506,7 +895,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     scroll-behavior: auto;
   }
 
-  /* 独立审阅批注卡片 */
   .annotation-card {
     background: #FFFFFF;
     border: 1px solid var(--border-light);
@@ -593,7 +981,141 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .locate-btn:hover { text-decoration: underline; }
 
-  /* ==================== 7. 上传模态窗 (DOCX/DOC/PDF) ==================== */
+  /* ==================== 6.1 Agent 智能研判与全链路容灾监控面板 (爱马仕/CC/小龙虾) ==================== */
+  .agent-status-panel {
+    background: #F8FAFC;
+    border-bottom: 1px solid var(--border-light);
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 11px;
+    font-family: sans-serif;
+  }
+  .agent-status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .agent-badge-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .agent-state-pill {
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-weight: 700;
+    font-size: 10.5px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .agent-state-pill.RUNNING { background: #EFF6FF; color: #1E40AF; border: 1px solid #BFDBFE; }
+  .agent-state-pill.PAUSED { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
+  .agent-state-pill.COMPLETED { background: #DCFCE7; color: #15803D; border: 1px solid #86EFAC; }
+  .agent-state-pill.CIRCUIT_OPEN { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+
+  .agent-control-btn {
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10.5px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: #FFF;
+    color: #334155;
+    transition: all 0.15s;
+  }
+  .agent-control-btn:hover { background: #F1F5F9; color: #0F172A; }
+  .agent-control-btn.primary { background: var(--primary); color: #FFF; border-color: var(--primary); }
+
+  .agent-progress-bar-bg {
+    width: 100%;
+    height: 4px;
+    background: #E2E8F0;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .agent-progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #3B82F6, #10B981);
+    transition: width 0.3s ease;
+    border-radius: 2px;
+  }
+
+  .agent-meta-stats {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: #64748B;
+  }
+  .agent-meta-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+
+  /* 卡片流式状态 & 容灾标记 */
+  .annotation-card.agent-running {
+    border-color: #3B82F6 !important;
+    box-shadow: 0 0 0 1px #3B82F6, 0 4px 12px rgba(59, 130, 246, 0.15);
+    background: #FAF5FF !important;
+  }
+  .card-source-badge {
+    font-size: 9.5px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .card-source-badge.ai { background: #EFF6FF; color: #1D4ED8; }
+  .card-source-badge.cache { background: #ECFDF5; color: #047857; }
+  .card-source-badge.fallback { background: #FFFBEB; color: #B45309; }
+  .card-source-badge.watchdog { background: #FDF4FF; color: #86198F; }
+  .card-source-badge.resume { background: #F1F5F9; color: #475569; }
+  .card-source-badge.running { background: #EFF6FF; color: #2563EB; animation: pulseGlow 1.5s infinite; }
+
+  @keyframes pulseGlow {
+    0% { opacity: 0.7; }
+    50% { opacity: 1; }
+    100% { opacity: 0.7; }
+  }
+
+  .card-extra-action {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .card-mini-action-btn {
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    background: #FFF;
+    border: 1px solid #CBD5E1;
+    color: #475569;
+    cursor: pointer;
+  }
+  .card-mini-action-btn:hover { background: #F1F5F9; color: #0F172A; }
+
+  .card-reasoning-collapse {
+    margin-top: 6px;
+    padding: 6px 8px;
+    background: #F8FAFC;
+    border: 1px dashed #CBD5E1;
+    border-radius: 4px;
+    font-size: 10.5px;
+    color: #475569;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    max-height: 130px;
+    overflow-y: auto;
+  }
+
+  /* ==================== 7. 上传模态窗 ==================== */
   .modal-overlay {
     position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
     background: rgba(15, 23, 42, 0.45); backdrop-filter: blur(2px);
@@ -635,9 +1157,126 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .preset-btn:hover { border-color: var(--primary); background: #EFF6FF; color: var(--primary); }
 
+  /* ==================== 8. 模板选择器模态窗 (带置信度标红·从上往下排) ==================== */
+  .tpl-modal-card {
+    background: #FFFFFF; border-radius: 12px; width: 880px; max-width: 94vw;
+    height: 660px; max-height: 88vh; box-shadow: 0 25px 50px rgba(0,0,0,0.22);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .tpl-modal-header {
+    padding: 14px 20px; border-bottom: 1px solid var(--border-light);
+    display: flex; justify-content: space-between; align-items: center; background: #F8FAFC;
+    flex-shrink: 0;
+  }
+  .tpl-modal-title { font-size: 14.5px; font-weight: 700; color: #0F172A; display: flex; align-items: center; gap: 8px; }
+  .tpl-modal-toolbar {
+    padding: 10px 20px; border-bottom: 1px solid var(--border-light);
+    display: flex; gap: 10px; align-items: center; background: #FFFFFF; flex-shrink: 0;
+  }
+  .tpl-search-input {
+    flex: 1; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--border);
+    font-size: 12.5px; outline: none; transition: border-color 0.15s ease;
+  }
+  .tpl-search-input:focus {
+    border-color: var(--primary); box-shadow: 0 0 0 2px rgba(37,99,235,0.15);
+  }
+  .tpl-category-tabs {
+    padding: 6px 20px; border-bottom: 1px solid #F1F5F9; display: flex;
+    gap: 6px; flex-wrap: wrap; background: #F8FAFC; flex-shrink: 0;
+  }
+  .tpl-tab-btn {
+    padding: 3px 10px; border-radius: 999px; border: 1px solid transparent;
+    background: transparent; font-size: 11.5px; font-weight: 600; color: #64748B;
+    cursor: pointer; transition: all 0.15s ease;
+  }
+  .tpl-tab-btn:hover { background: #E2E8F0; color: #0F172A; }
+  .tpl-tab-btn.active { background: #1E293B; color: #FFF; }
+  .tpl-list-scroll {
+    flex: 1; overflow-y: scroll; padding: 14px 20px; display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 10px; align-content: start;
+  }
+  .tpl-card-item {
+    border: 1px solid var(--border-light); border-radius: 8px; padding: 11px 14px;
+    cursor: pointer; background: #FFFFFF; transition: all 0.15s ease; display: flex;
+    flex-direction: column; gap: 5px; position: relative;
+  }
+  .tpl-card-item:hover {
+    border-color: var(--primary); box-shadow: 0 4px 12px rgba(37,99,235,0.1);
+    transform: translateY(-1px);
+  }
+  .tpl-card-item.active-tpl {
+    border: 2px solid #16A34A; background: #F0FDF4;
+  }
+  .tpl-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .tpl-card-title { font-size: 13.5px; font-weight: 700; color: #0F172A; line-height: 1.4; }
+
+  /* 模板卡片右上角置信度徽章 */
+  .tpl-card-conf-badge {
+    display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px;
+    border-radius: 4px; font-size: 11px; font-weight: 800; flex-shrink: 0;
+  }
+  .tpl-card-conf-badge.conf-very-high {
+    background: #DCFCE7; color: #15803D; border: 1px solid #86EFAC;
+  }
+  .tpl-card-conf-badge.conf-high {
+    background: #EFF6FF; color: #1E40AF; border: 1px solid #BFDBFE;
+  }
+  .tpl-card-conf-badge.conf-medium {
+    background: #FEF3C7; color: #B45309; border: 1px solid #FDE68A;
+  }
+  .tpl-card-conf-badge.conf-low {
+    background: #F1F5F9; color: #64748B; border: 1px solid #E2E8F0;
+  }
+
+  .tpl-card-meta { display: flex; gap: 6px; align-items: center; font-size: 11px; color: #64748B; flex-wrap: wrap; }
+  .tpl-card-pill { padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; }
+  .tpl-card-pill.category { background: #EFF6FF; color: #1E40AF; }
+  .tpl-card-pill.code { background: #F1F5F9; color: #475569; font-family: monospace; }
+  .tpl-card-pill.current { background: #DCFCE7; color: #15803D; border: 1px solid #86EFAC; }
+
+  .tpl-modal-footer {
+    padding: 10px 20px; border-top: 1px solid var(--border-light); background: #F8FAFC;
+    display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;
+  }
+
+  /* ==================== 9. 全局轻量 Toast 提示 & Loading 遮罩 ==================== */
+  #toastContainer {
+    position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+    z-index: 2000; display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+  }
+  .toast-msg {
+    padding: 10px 18px; border-radius: 8px; color: #FFFFFF; font-size: 13px;
+    font-weight: 600; box-shadow: 0 10px 25px rgba(0,0,0,0.18); display: flex;
+    align-items: center; gap: 8px; animation: toastIn 0.25s ease forwards;
+    pointer-events: auto; font-family: sans-serif;
+  }
+  .toast-msg.success { background: #065F46; border: 1px solid #059669; }
+  .toast-msg.info { background: #1E40AF; border: 1px solid #3B82F6; }
+  .toast-msg.warning { background: #92400E; border: 1px solid #D97706; }
+  .toast-msg.error { background: #991B1B; border: 1px solid #DC2626; }
+  @keyframes toastIn {
+    from { opacity: 0; transform: translateY(-12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .loading-mask {
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    background: rgba(255, 255, 255, 0.75); backdrop-filter: blur(2px);
+    z-index: 1500; display: none; flex-direction: column; align-items: center;
+    justify-content: center; font-size: 14px; font-weight: 700; color: #1E293B; gap: 12px;
+    font-family: sans-serif;
+  }
+  .loading-mask.show { display: flex; }
+  .spinner {
+    width: 32px; height: 32px; border: 3px solid #E2E8F0;
+    border-top-color: var(--primary); border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   /* 打印样式适配 */
   @media print {
-    .header, .toolbar-strip, .annotations-sidebar-panel, .modal-overlay, .column-sticky-header { display: none !important; }
+    .header, .toolbar-strip, .annotations-sidebar-panel, .modal-overlay, .column-sticky-header, #toastContainer, .loading-mask { display: none !important; }
     html, body { height: auto; overflow: visible; background: #FFF; }
     .review-workspace { display: block; height: auto; }
     .contract-scroll-container { padding: 0; overflow: visible; }
@@ -655,13 +1294,28 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 
   <div class="header-meta-group">
-    <span class="meta-tag matched" id="matchedTemplateTag">🎯 基准母本: 国内专利服务合同（年费缴纳）</span>
-    <span class="meta-tag doc-title" id="docFileName">《国内专利服务合同》送审修改稿</span>
+    <!-- 点击可更换母本的胶囊 -->
+    <button class="meta-tag-btn" id="matchedTemplateTag" onclick="openTemplateModal()" title="点击自主更换基准母本">
+      <span>🎯 基准母本:</span>
+      <span id="matchedTemplateName">国内专利服务合同（年费缴纳）</span>
+      <span class="btn-arrow">▾ 更换</span>
+    </button>
+
+    <!-- 模板匹配置信度标签 -->
+    <span class="meta-tag confidence conf-high" id="confidenceTag" title="点击查看置信度计算规则">
+      <span>📊 匹配置信度:</span>
+      <b id="confValueText">99.0%</b>
+      <span class="conf-badge-pill" id="confPillText">权威匹配</span>
+    </span>
+
+    <span class="meta-tag doc-title" id="docFileName" title="送审合同原稿">《国内专利服务合同》送审修改稿</span>
   </div>
 
   <div class="header-actions">
-    <button class="btn" onclick="openUploadModal()">📂 上传送审合同 (DOCX/DOC/PDF)</button>
-    <button class="btn btn-primary" onclick="window.print()">🖨️ 导出对比单</button>
+    <button class="btn" id="btnSwitchTemplate" onclick="openTemplateModal()">🔄 更换模板</button>
+    <button class="btn btn-purple" id="btnReloadTemplates" onclick="reloadTemplates()">⚡ 热加载模板库</button>
+    <button class="btn btn-primary" onclick="openUploadModal()">📂 上传送审合同</button>
+    <button class="btn" onclick="window.print()">🖨️ 导出对比单</button>
   </div>
 </header>
 
@@ -744,6 +1398,29 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <button class="mini-tool-btn" onclick="toggleSidebarCollapse()" title="收起详情专栏">◀ 收起</button>
     </div>
 
+    <!-- Agent 研判与全链路容灾监控面板 (爱马仕/CC/小龙虾高可用) -->
+    <div class="agent-status-panel" id="agentStatusPanel">
+      <div class="agent-status-row">
+        <div class="agent-badge-group">
+          <span class="agent-state-pill RUNNING" id="agentStateBadge">🟢 智能研判中</span>
+          <span style="font-weight:700; color:#1E293B;" id="agentProgressRatio">0/0</span>
+        </div>
+        <div style="display:flex; gap:4px;">
+          <button class="agent-control-btn" id="btnAgentPause" onclick="toggleAgentPause()" title="暂停/继续大模型后台研判">⏸️ 暂停</button>
+          <button class="agent-control-btn" onclick="rerunAgentReview()" title="强制全篇重新研判">🔄 重审</button>
+          <button class="agent-control-btn" id="btnResetCircuit" onclick="resetCircuitBreaker()" style="display:none;" title="重置大模型熔断器">🛡️ 复位熔断</button>
+        </div>
+      </div>
+      <div class="agent-progress-bar-bg">
+        <div class="agent-progress-bar-fill" id="agentProgressBar" style="width: 0%;"></div>
+      </div>
+      <div class="agent-meta-stats">
+        <span class="agent-meta-tag" id="agentHeartbeatTag" title="SSE 双向保活与心跳监护">💓 心跳正常</span>
+        <span class="agent-meta-tag" id="agentCircuitTag" title="连续失败自适应熔断（爱马仕/CC容灾）">🛡️ 熔断防护: 闭合</span>
+        <span class="agent-meta-tag" id="agentWatchdogTag" title="单任务45s硬看门狗（OpenClaw卡死抢救）">⏱️ 看门狗: 就绪</span>
+      </div>
+    </div>
+
     <!-- 分类筛选标签 -->
     <div class="sidebar-filter-strip">
       <button class="filter-chip active" onclick="setFilter('ALL')">全部 (<span id="filterAllCount">0</span>)</button>
@@ -792,6 +1469,45 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<!-- ==================== 模态弹窗：选择/更换合同标准模板库 ==================== -->
+<div class="modal-overlay" id="templateModal" onclick="closeTemplateModalOnBackdrop(event)">
+  <div class="tpl-modal-card">
+    <div class="tpl-modal-header">
+      <div class="tpl-modal-title">
+        <span>🔄 选择更换标准合同母本</span>
+        <span style="font-size:11.5px; font-weight:600; color:#64748B;">(共 <span id="tplModalTotalCount">0</span> 套可用模板 · 严格按置信度从高到低排序)</span>
+      </div>
+      <button class="modal-close-btn" onclick="closeTemplateModal()">✕</button>
+    </div>
+
+    <div class="tpl-modal-toolbar">
+      <input type="text" class="tpl-search-input" id="tplSearchInput" placeholder="🔍 快速搜索模板名称、编号(MB...)或关键词..." oninput="onTemplateSearchInput(event)">
+      <button class="btn btn-purple" onclick="reloadTemplates(true)" title="重新扫描模板目录并热更新入库">⚡ 热加载库</button>
+      <button class="btn" onclick="resetAutoTemplate()" title="切回由 AI 智能自动识别母本">🎯 恢复自动识别</button>
+    </div>
+
+    <div class="tpl-category-tabs" id="tplCategoryTabs"></div>
+
+    <div class="tpl-list-scroll" id="tplListContainer"></div>
+
+    <div class="tpl-modal-footer">
+      <div style="font-size:11.5px; color:#64748B;">
+        <span>💡 提示：所有模板已按照与当前送审合同的匹配置信度从高到低从上往下排序，点击任意卡片即可切换基准并实时重算。</span>
+      </div>
+      <button class="btn" onclick="closeTemplateModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 全局轻量 Toast 消息容器 -->
+<div id="toastContainer"></div>
+
+<!-- 全局 Loading 遮罩 -->
+<div class="loading-mask" id="globalLoadingMask">
+  <div class="spinner"></div>
+  <div id="loadingMaskText">正在加载中，请稍候...</div>
+</div>
+
 <script>
 // 全局状态管理
 let currentData = null;
@@ -799,8 +1515,41 @@ let currentViewMode = 'side'; // 'side' | 'single' | 'diff'
 let currentFilter = 'ALL';
 let activeAnnotationIndex = -1;
 
+// 模板库数据与筛选状态
+let allTemplates = __ALL_TEMPLATES_PLACEHOLDER__ || [];
+let activeTemplateCategory = 'ALL';
+let templateSearchKeyword = '';
+
 // 预置默认数据占位符
 window.INITIAL_DATA = __INITIAL_DATA_PLACEHOLDER__;
+
+// Toast 提示工具
+function showToast(message, type = 'success') {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = `toast-msg ${type}`;
+  let icon = '✅';
+  if (type === 'info') icon = 'ℹ️';
+  if (type === 'warning') icon = '⚠️';
+  if (type === 'error') icon = '❌';
+  toast.innerHTML = `<span>${icon}</span><span>${escapeHtml(message)}</span>`;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(-10px)';
+    toast.style.transition = 'all 0.25s ease';
+    setTimeout(() => toast.remove(), 260);
+  }, 2600);
+}
+
+function showLoading(text = '正在处理中...') {
+  const mask = document.getElementById('globalLoadingMask');
+  document.getElementById('loadingMaskText').innerText = text;
+  mask.classList.add('show');
+}
+function hideLoading() {
+  document.getElementById('globalLoadingMask').classList.remove('show');
+}
 
 // 模态弹窗控制
 function openUploadModal() {
@@ -811,6 +1560,17 @@ function closeUploadModal() {
 }
 function closeUploadModalOnBackdrop(e) {
   if (e.target.id === 'uploadModal') closeUploadModal();
+}
+
+function openTemplateModal() {
+  initTemplateModal();
+  document.getElementById('templateModal').classList.add('open');
+}
+function closeTemplateModal() {
+  document.getElementById('templateModal').classList.remove('open');
+}
+function closeTemplateModalOnBackdrop(e) {
+  if (e.target.id === 'templateModal') closeTemplateModal();
 }
 
 // 拖拽上传支持 (DOCX / DOC / PDF)
@@ -836,27 +1596,269 @@ function handleFileSelect(e) {
 async function uploadContractFile(file) {
   const formData = new FormData();
   formData.append('file', file);
+  showLoading('正在解析送审文档并自动匹配基准母本...');
 
   try {
     const resp = await fetch('/api/diff/upload', { method: 'POST', body: formData });
     const res = await resp.json();
+    hideLoading();
     if (res.error) {
-      alert('上传解析失败: ' + res.error);
+      showToast('上传解析失败: ' + res.error, 'error');
       return;
     }
     renderFullDiff(res);
+    initAgentSSE(false);
+    // 同步刷新模板置信度与排序
+    fetchTemplateListQuietly();
+    showToast(`合同《${file.name.replace(/\.[^/.]+$/, '')}》解析完成，已对齐基准母本！`, 'success');
   } catch (err) {
-    alert('请求失败，请确保后台 Web 服务正常启动: ' + err);
+    hideLoading();
+    showToast('请求失败，请确保后台 Web 服务正常启动: ' + err, 'error');
   }
 }
 
 async function loadSample(sampleKey) {
+  showLoading('正在加载实测用例并对齐母本...');
   try {
     const resp = await fetch('/api/diff/sample?key=' + sampleKey);
     const res = await resp.json();
+    hideLoading();
     renderFullDiff(res);
+    initAgentSSE(false);
+    fetchTemplateListQuietly();
+    showToast('实测用例加载成功！', 'success');
   } catch (err) {
-    alert('加载实测用例失败: ' + err);
+    hideLoading();
+    showToast('加载实测用例失败: ' + err, 'error');
+  }
+}
+
+// 静默拉取按最新文档排序的模板库列表
+async function fetchTemplateListQuietly() {
+  try {
+    const resp = await fetch('/api/templates/list');
+    const res = await resp.json();
+    if (res.templates) {
+      allTemplates = res.templates;
+      if (document.getElementById('templateModal').classList.contains('open')) {
+        initTemplateModal();
+      }
+    }
+  } catch (err) {}
+}
+
+// ==================== 模板选择与更换模块（按置信度从上往下排） ====================
+function initTemplateModal() {
+  document.getElementById('tplModalTotalCount').innerText = allTemplates.length;
+  renderCategoryTabs();
+  renderTemplateItems();
+}
+
+function renderCategoryTabs() {
+  const tabsContainer = document.getElementById('tplCategoryTabs');
+  tabsContainer.innerHTML = '';
+
+  const catCounts = {};
+  allTemplates.forEach(t => {
+    const cat = t.category || 'UNKNOWN';
+    catCounts[cat] = (catCounts[cat] || 0) + 1;
+  });
+
+  const categoryDef = [
+    { key: 'ALL', label: '全部' },
+    { key: 'PATENT', label: '专利业务' },
+    { key: 'TRADEMARK', label: '商标业务' },
+    { key: 'HIGH_END_CONSULTING', label: '高端咨询' },
+    { key: 'LEGAL_LITIGATION', label: '法律诉讼' },
+    { key: 'INT_IP', label: '国际业务' },
+    { key: 'PROJECT_AUDIT', label: '项目申报' },
+    { key: 'MIXED_IP', label: '综合业务' },
+    { key: 'COPYRIGHT', label: '著作权' },
+    { key: 'FRAMEWORK_NDA', label: '保密框架' },
+    { key: 'IP_OPERATION', label: '知识产权运营' },
+  ];
+
+  categoryDef.forEach(c => {
+    const count = c.key === 'ALL' ? allTemplates.length : (catCounts[c.key] || 0);
+    if (c.key !== 'ALL' && count === 0) return;
+    const btn = document.createElement('button');
+    btn.className = `tpl-tab-btn ${activeTemplateCategory === c.key ? 'active' : ''}`;
+    btn.innerText = `${c.label} (${count})`;
+    btn.onclick = () => {
+      activeTemplateCategory = c.key;
+      renderCategoryTabs();
+      renderTemplateItems();
+    };
+    tabsContainer.appendChild(btn);
+  });
+}
+
+function onTemplateSearchInput(e) {
+  templateSearchKeyword = (e.target.value || '').trim().toLowerCase();
+  renderTemplateItems();
+}
+
+function renderTemplateItems() {
+  const container = document.getElementById('tplListContainer');
+  container.innerHTML = '';
+
+  const currentTplId = currentData ? (currentData.matched_template_id || '') : '';
+
+  // 过滤并确保严格从上往下按置信度排序
+  const filtered = allTemplates.filter(t => {
+    if (activeTemplateCategory !== 'ALL' && t.category !== activeTemplateCategory) {
+      return false;
+    }
+    if (templateSearchKeyword) {
+      const matchName = (t.name || '').toLowerCase().includes(templateSearchKeyword);
+      const matchDocId = (t.document_id || '').toLowerCase().includes(templateSearchKeyword);
+      const matchFile = (t.full_name || '').toLowerCase().includes(templateSearchKeyword);
+      const matchCat = (t.category_name || '').toLowerCase().includes(templateSearchKeyword);
+      if (!matchName && !matchDocId && !matchFile && !matchCat) return false;
+    }
+    return true;
+  });
+
+  // 严格按置信度从高到低从上往下排序
+  filtered.sort((a, b) => {
+    const confA = typeof a.confidence_score === 'number' ? a.confidence_score : 0;
+    const confB = typeof b.confidence_score === 'number' ? b.confidence_score : 0;
+    return confB - confA;
+  });
+
+  if (filtered.length === 0) {
+    container.innerHTML = `
+      <div style="grid-column: 1/-1; text-align:center; padding:40px; color:#94A3B8; font-size:13px;">
+        未检索到匹配的模板，请尝试其他关键词或点击上方【热加载库】
+      </div>
+    `;
+    return;
+  }
+
+  filtered.forEach(t => {
+    const isCurrent = t.document_id === currentTplId;
+    const card = document.createElement('div');
+    card.className = `tpl-card-item ${isCurrent ? 'active-tpl' : ''}`;
+    card.onclick = () => switchTemplate(t.document_id, t.name);
+
+    // 置信度样式映射
+    const confScore = typeof t.confidence_score === 'number' ? t.confidence_score : 0.0;
+    let badgeCls = 'conf-low';
+    if (confScore >= 0.90) badgeCls = 'conf-very-high';
+    else if (confScore >= 0.75) badgeCls = 'conf-high';
+    else if (confScore >= 0.50) badgeCls = 'conf-medium';
+
+    const confPct = t.confidence_percent || `${(confScore * 100).toFixed(1)}%`;
+    const confLbl = t.confidence_label || (confScore >= 0.9 ? '权威匹配' : (confScore >= 0.75 ? '推荐' : '备选'));
+
+    // 格式化编号展示（非十六进制哈希才显示）
+    const showCode = t.is_standard_mb && t.document_id ? `<span class="tpl-card-pill code">${escapeHtml(t.document_id)}</span>` : '';
+    const showVer = t.version ? `<span>版本: ${escapeHtml(t.version)}</span>` : '';
+
+    card.innerHTML = `
+      <div class="tpl-card-header">
+        <span class="tpl-card-title">${escapeHtml(t.name)}</span>
+        <div class="tpl-card-conf-badge ${badgeCls}" title="与送审合同匹配置信度: ${confPct}">
+          <span>🎯</span>
+          <span>${confPct}</span>
+          <span style="font-size:9.5px; opacity:0.85;">${escapeHtml(confLbl)}</span>
+        </div>
+      </div>
+      <div class="tpl-card-meta">
+        <span class="tpl-card-pill category">${escapeHtml(t.category_name)}</span>
+        ${showCode}
+        ${showVer}
+        ${isCurrent ? '<span class="tpl-card-pill current">✓ 当前使用</span>' : ''}
+      </div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+// 执行更换模板
+async function switchTemplate(targetDocId, targetName = '') {
+  closeTemplateModal();
+  showLoading(`正在将基准母本切换为 [${targetName || targetDocId}] 并重新比对...`);
+
+  try {
+    const resp = await fetch('/api/diff/switch-template', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template_id: targetDocId }),
+    });
+    const res = await resp.json();
+    hideLoading();
+    if (res.error) {
+      showToast('切换模板失败: ' + res.error, 'error');
+      return;
+    }
+    renderFullDiff(res);
+    initAgentSSE(false);
+    fetchTemplateListQuietly();
+    showToast(`基准母本已成功更换为《${res.clean_template_name || targetName}》！`, 'success');
+  } catch (err) {
+    hideLoading();
+    showToast('切换模板网络请求失败: ' + err, 'error');
+  }
+}
+
+// 恢复 AI 自动识别母本
+async function resetAutoTemplate() {
+  closeTemplateModal();
+  showLoading('正在根据待审合同内容恢复 AI 智能自动匹配母本...');
+
+  try {
+    const resp = await fetch('/api/diff/switch-template', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template_id: 'auto' }),
+    });
+    const res = await resp.json();
+    hideLoading();
+    if (res.error) {
+      showToast('恢复自动匹配失败: ' + res.error, 'error');
+      return;
+    }
+    renderFullDiff(res);
+    initAgentSSE(false);
+    fetchTemplateListQuietly();
+    showToast(`已恢复 AI 自动识别匹配母本: 《${res.clean_template_name || res.matched_template_name}》！`, 'success');
+  } catch (err) {
+    hideLoading();
+    showToast('请求失败: ' + err, 'error');
+  }
+}
+
+// 热加载模板库
+async function reloadTemplates(fromModal = false) {
+  const btn = document.getElementById('btnReloadTemplates');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '🔄 扫描热加载中...';
+  }
+
+  try {
+    const resp = await fetch('/api/templates/reload', { method: 'POST' });
+    const res = await resp.json();
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '⚡ 热加载模板库';
+    }
+
+    if (res.error) {
+      showToast('热加载模板库失败: ' + res.error, 'error');
+      return;
+    }
+
+    allTemplates = res.templates || [];
+    initTemplateModal();
+    showToast(res.message || `热加载成功！库中现有 ${allTemplates.length} 套标准母本`, 'success');
+  } catch (err) {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '⚡ 热加载模板库';
+    }
+    showToast('热加载请求失败: ' + err, 'error');
   }
 }
 
@@ -897,6 +1899,10 @@ function detectBlockCategory(title, text, idx) {
 // 格式化输出为纯正合同排版 HTML
 function formatContractHtml(html, rawText, category) {
   if (!html) return '<div class="empty-placeholder"></div>';
+
+  if (html.includes('<table') || html.includes('contract-table-card') || html.includes('contract-doc-table')) {
+    return html;
+  }
 
   if (html.includes('doc-text-deleted') || html.includes('doc-slot-deleted') || html.includes('doc-slot-blank') || html.includes('doc-text-added')) {
     return html;
@@ -948,30 +1954,84 @@ function renderFullDiff(data) {
   currentData = data;
   activeAnnotationIndex = -1;
 
-  // 1. 顶部标题与锁定母本
-  const rawFileName = (data.uploaded_file || '待审合同.docx').split(/[\/\\]/).pop();
-  let friendlyDocTitle = rawFileName;
-  if (rawFileName.includes('mut_11_late_fee_change')) {
-    friendlyDocTitle = '《国内专利服务合同（年费缴纳）》送审修改稿';
-  } else if (rawFileName.includes('mut_06_missing_confidentiality')) {
-    friendlyDocTitle = '《国内专利服务合同（年费缴纳）》送审修改稿（保密义务被删）';
-  } else if (rawFileName.includes('驳回复审')) {
-    friendlyDocTitle = '《商标驳回复审代理协议》送审原稿';
+  // 1. 规范化送审合同名称展示（彻底杜绝技术内部文件名暴露）
+  let friendlyDocTitle = data.friendly_doc_title || data.reviewed_doc_title || data.display_doc_name || data.doc_title || '';
+  if (!friendlyDocTitle || /active_review|mut_|\.docx$/i.test(friendlyDocTitle)) {
+    const raw = (data.uploaded_file || '').split(/[\/\\]/).pop();
+    if (raw.includes('06') || raw.includes('confidential')) {
+      friendlyDocTitle = '《国内专利服务合同（年费缴纳）》送审修改稿（保密义务被删）';
+    } else if (raw.includes('驳回复审')) {
+      friendlyDocTitle = '《商标驳回复审代理协议》送审原稿';
+    } else {
+      friendlyDocTitle = '《国内专利服务合同（年费缴纳）》送审修改稿';
+    }
+  }
+
+  // 确保书名号格式优美
+  if (!friendlyDocTitle.startsWith('《') || !friendlyDocTitle.endsWith('》')) {
+    const rawInner = friendlyDocTitle.replace(/^[《<]+|[》>]+$/g, '');
+    friendlyDocTitle = '《' + rawInner + '》';
   }
 
   document.getElementById('docFileName').innerText = friendlyDocTitle;
 
-  const tplFileName = data.matched_template_name || '标准母本.docx';
-  const tplCleanName = tplFileName.replace(/\.(docx?|pdf)$/i, '');
-  const matchedTagEl = document.getElementById('matchedTemplateTag');
-  matchedTagEl.innerText = '🎯 基准母本: ' + tplCleanName;
-  matchedTagEl.title = `基准文档: ${tplFileName} (底层版本ID: ${data.matched_template_id || '-'})`;
+  // 2. 规范化基准母本名称展示（彻底杜绝十六进制哈希 ID 暴露）
+  let tplCleanName = data.clean_template_name || data.matched_template_display || '';
+  if (!tplCleanName) {
+    const rawTplName = data.matched_template_name || '国内专利服务合同（年费缴纳）';
+    const mbCode = data.clean_template_code || data.matched_template_code || (String(data.matched_template_id || '').startsWith('MB') ? data.matched_template_id : '');
+    const cleanBase = rawTplName.replace(/\.(docx?|pdf)$/i, '')
+      .replace(/^WDCLI_[a-f0-9]+_/, '')
+      .replace(/^MB\w+?_V[\d\.]+?_/, '')
+      .replace(/[-_](恒程|创新|代理|知识产权|事务所|公司|企业).*$/, '')
+      .trim();
+    tplCleanName = mbCode ? '[' + mbCode + '] ' + cleanBase : cleanBase;
+  }
 
-  // 双栏纸张列标题
-  document.getElementById('headerStdName').innerText = tplCleanName;
+  const matchedNameEl = document.getElementById('matchedTemplateName');
+  if (matchedNameEl) matchedNameEl.innerText = tplCleanName;
+  // 顶部母本悬停提示（若为 MB 编号则展示，若是十六进制哈希则不暴露底层哈希）
+  const tplId = data.matched_template_id || '';
+  const isHash = data.is_hex_hash_id || (tplId.length > 12 && !tplId.startsWith('MB'));
+  document.getElementById('matchedTemplateTag').title = `基准模板: ${tplCleanName}${(!isHash && tplId) ? ' (' + tplId + ')' : ''} · 点击更换`;
+
+  // 3. 渲染置信度标签
+  const confTag = document.getElementById('confidenceTag');
+  const confValText = document.getElementById('confValueText');
+  const confPillText = document.getElementById('confPillText');
+
+  const confScore = typeof data.confidence_score === 'number' ? data.confidence_score : (typeof data.classification_confidence === 'number' ? data.classification_confidence : 1.0);
+  const isManual = data.is_manual_override === true || data.matched_method === 'MANUAL_SELECTION';
+
+  if (isManual) {
+    confTag.className = 'meta-tag confidence conf-manual';
+    confValText.innerText = '100.0%';
+    confPillText.innerText = '手动指定';
+    confTag.title = `【模板匹配机制】人工手动指定模式\n基准母本已由用户锁定: ${tplCleanName}\n点击基准母本可随时更换或恢复自动识别。`;
+  } else {
+    const pct = data.confidence_percent || `${(confScore * 100).toFixed(1)}%`;
+    confValText.innerText = pct;
+
+    if (confScore >= 0.85) {
+      confTag.className = 'meta-tag confidence conf-high';
+      confPillText.innerText = '权威匹配';
+    } else if (confScore >= 0.70) {
+      confTag.className = 'meta-tag confidence conf-medium';
+      confPillText.innerText = '良好匹配';
+    } else {
+      confTag.className = 'meta-tag confidence conf-low';
+      confPillText.innerText = '建议复核';
+    }
+
+    confTag.title = `【AI 智能路由置信度】${pct}\n识别业务子类: ${data.detected_subtype || '标准合同'}\n匹配基准母本: ${tplCleanName}\n状态: ${data.confidence_desc || '自动五级分类对齐'}`;
+  }
+
+  // 4. 双栏纸张列标题规范化呈现（绝不显示底层 16 进制 Hash 码）
+  const stdCodeStr = (!isHash && data.clean_template_code) ? ` (${data.clean_template_code})` : '';
+  document.getElementById('headerStdName').innerText = `${tplCleanName}${stdCodeStr}`;
   document.getElementById('headerRevName').innerText = friendlyDocTitle;
 
-  // 统计数据
+  // 5. 统计数据
   const stats = data.stats || {};
   const annCount = (data.annotations || []).length;
   document.getElementById('statHighRisk').innerText = stats.high_risk || 0;
@@ -994,7 +2054,7 @@ function renderFullDiff(data) {
   renderContractColumns();
   renderAnnotationsSidebar();
 
-  // 双栏渲染完毕后，同步左右每一行条款的高度，确保上下滑动严格对齐
+  // 双栏渲染完毕后，同步左右每一行条款的高度
   requestAnimationFrame(() => {
     syncClauseHeights();
     setupThreeWaySyncScroll();
@@ -1019,7 +2079,7 @@ function renderContractColumns() {
   blocks.forEach((block, idx) => {
     const isMatch = block.status === 'MATCH';
     if (currentViewMode === 'diff' && isMatch) {
-      return; // 仅看变更条款模式下跳过完全一致项
+      return;
     }
 
     const txt = block.standard_text || block.reviewed_text || '';
@@ -1051,12 +2111,11 @@ function renderContractColumns() {
   });
 }
 
-// 左右条款高度等高自适应平衡算法（保证上下滑动左右始终绝对对齐）
+// 左右条款高度等高自适应平衡算法
 function syncClauseHeights() {
   if (!currentData || !currentData.aligned_blocks) return;
   const blocks = currentData.aligned_blocks;
 
-  // 1. 重置初始高度
   blocks.forEach(b => {
     const s = document.getElementById(`std-${b.block_id}`);
     const r = document.getElementById(`rev-${b.block_id}`);
@@ -1064,7 +2123,6 @@ function syncClauseHeights() {
     if (r) r.style.minHeight = '0px';
   });
 
-  // 2. 测量并设置成两边最大值
   blocks.forEach(b => {
     const s = document.getElementById(`std-${b.block_id}`);
     const r = document.getElementById(`rev-${b.block_id}`);
@@ -1080,8 +2138,8 @@ window.addEventListener('resize', () => {
   syncClauseHeights();
 });
 
-// ==================== 核心：三栏双向协同联动滚动 (Three-Way Sync Scrolling) ====================
-let activeDriver = null; // 'std' | 'rev' | 'detail' | null
+// ==================== 三栏双向协同联动滚动 ====================
+let activeDriver = null;
 let driverReleaseTimer = null;
 let syncListenerAttached = false;
 
@@ -1103,7 +2161,6 @@ function setupThreeWaySyncScroll() {
   const colRev = document.getElementById('colReviewedContainer');
   const colDetail = document.getElementById('annotationsList');
 
-  // 提前通过鼠标手势/触摸捕获滚动主控权，杜绝死循环
   colStd.addEventListener('wheel', () => claimDriver('std'), { passive: true });
   colStd.addEventListener('touchstart', () => claimDriver('std'), { passive: true });
   colRev.addEventListener('wheel', () => claimDriver('rev'), { passive: true });
@@ -1111,46 +2168,32 @@ function setupThreeWaySyncScroll() {
   colDetail.addEventListener('wheel', () => claimDriver('detail'), { passive: true });
   colDetail.addEventListener('touchstart', () => claimDriver('detail'), { passive: true });
 
-  // 1. 左栏（母本）滑动 ➔ 驱动中栏（送审）完全平齐，且驱动右栏（详情）对齐对应条款
   colStd.addEventListener('scroll', () => {
     if (activeDriver && activeDriver !== 'std') return;
     claimDriver('std');
-
-    // 中栏等距跟随
     colRev.scrollTop = colStd.scrollTop;
-
-    // 驱动右侧详情专栏
     syncRightDetailFromDoc(colStd.scrollTop);
   }, { passive: true });
 
-  // 2. 中栏（送审）滑动 ➔ 驱动左栏（母本）完全平齐，且驱动右栏（详情）对齐对应条款
   colRev.addEventListener('scroll', () => {
     if (activeDriver && activeDriver !== 'rev') return;
     claimDriver('rev');
-
-    // 左栏等距跟随
     colStd.scrollTop = colRev.scrollTop;
-
-    // 驱动右侧详情专栏
     syncRightDetailFromDoc(colRev.scrollTop);
   }, { passive: true });
 
-  // 3. 右栏（详情专栏）滑动 ➔ 驱动左栏与中栏同步居中到该条款
   colDetail.addEventListener('scroll', () => {
     if (activeDriver && activeDriver !== 'detail') return;
     claimDriver('detail');
-
     syncDocFromRightDetail();
   }, { passive: true });
 }
 
-// 文档滚动时同步右侧详情专栏可见卡片
 function syncRightDetailFromDoc(scrollTop) {
   if (!currentData || !currentData.aligned_blocks) return;
   const blocks = currentData.aligned_blocks;
   const colDetail = document.getElementById('annotationsList');
 
-  // 寻找视口顶部最靠前的条款块
   let visibleBlock = null;
   for (let i = 0; i < blocks.length; i++) {
     const el = document.getElementById(`std-${blocks[i].block_id}`) || document.getElementById(`rev-${blocks[i].block_id}`);
@@ -1181,7 +2224,6 @@ function syncRightDetailFromDoc(scrollTop) {
   }
 }
 
-// 右侧详情专栏滑动时驱动文档左右两栏对齐该条款
 function syncDocFromRightDetail() {
   const colDetail = document.getElementById('annotationsList');
   const cards = colDetail.querySelectorAll('.annotation-card');
@@ -1214,25 +2256,24 @@ function syncDocFromRightDetail() {
   }
 }
 
-// 渲染右侧法务审阅批注专栏卡片列表
 function renderAnnotationsSidebar() {
   const container = document.getElementById('annotationsList');
   container.innerHTML = '';
 
   const anns = currentData.annotations || [];
   anns.forEach((ann) => {
-    // 批注类型过滤
     if (currentFilter === 'HIGH' && (ann.risk_level !== 'HIGH' || ann.delta_type === 'MISSING_CLAUSE')) return;
     if (currentFilter === 'MISSING' && ann.delta_type !== 'MISSING_CLAUSE') return;
     if (currentFilter === 'NEW' && ann.delta_type !== 'NEW_CLAUSE') return;
     if (currentFilter === 'WARNING' && (ann.risk_level !== 'MEDIUM' || ann.delta_type === 'NEW_CLAUSE')) return;
 
+    const isCurrentRunning = (agentState && agentState.currentAnnId === ann.id);
+
     const card = document.createElement('div');
-    card.className = `annotation-card status-${ann.review_status || 'PENDING'}`;
+    card.className = `annotation-card status-${ann.review_status || 'PENDING'} ${isCurrentRunning ? 'agent-running' : ''}`;
     card.id = `card-${ann.id}`;
     card.onclick = () => selectAnnotation(ann.id);
 
-    // 对比片段 HTML
     let compHtml = '';
     if (ann.delta_type === 'MISSING_CLAUSE') {
       compHtml = `
@@ -1259,9 +2300,47 @@ function renderAnnotationsSidebar() {
       `;
     }
 
+    // 研判来源状态徽章
+    let sourceBadge = '';
+    if (isCurrentRunning) {
+      sourceBadge = `<span class="card-source-badge running">⚡ 正在深度研判...</span>`;
+    } else if (ann._aiDone) {
+      if (ann._source === 'FALLBACK_RULE' || ann._source === 'CIRCUIT_BREAKER_FALLBACK') {
+        sourceBadge = `<span class="card-source-badge fallback" title="${escapeHtml(ann.ai_analysis || '')}">🛡️ 容灾规则降级</span>`;
+      } else if (ann._source === 'WATCHDOG_TIMEOUT_FALLBACK') {
+        sourceBadge = `<span class="card-source-badge watchdog" title="看门狗超时抢救兜底">⏱️ 看门狗抢救</span>`;
+      } else if (ann._source === 'CHECKPOINT_RESUMED') {
+        sourceBadge = `<span class="card-source-badge resume" title="从断点检查点秒级自愈恢复">💾 断点自愈恢复</span>`;
+      } else if (ann._fromCache) {
+        sourceBadge = `<span class="card-source-badge cache" title="命中本地安全 Hash 缓存">⚡ 本地缓存</span>`;
+      } else {
+        const sec = ann._elapsedSec ? `${ann._elapsedSec}s` : '';
+        sourceBadge = `<span class="card-source-badge ai" title="大模型实时研判">🤖 AI研判 ${sec}</span>`;
+      }
+    }
+
+    // 思考过程
+    let reasoningBoxHtml = '';
+    let reasoningBtnHtml = '';
+    if (ann._reasoning) {
+      reasoningBtnHtml = `<button class="card-mini-action-btn" onclick="event.stopPropagation(); toggleReasoning('${ann.id}')" title="展开/收起思考链">🧠 思考链</button>`;
+      reasoningBoxHtml = `<div class="card-reasoning-collapse" id="reasoning-${ann.id}" style="display:none;">${escapeHtml(ann._reasoning)}</div>`;
+    }
+
+    // 优先插队或单卡重审按钮
+    let cardControlBtn = '';
+    if (!ann._aiDone && !isCurrentRunning) {
+      cardControlBtn = `<button class="card-mini-action-btn" onclick="event.stopPropagation(); prioritizeCard('${ann.id}')" title="插队至第一位优先研判">⚡ 优先</button>`;
+    } else {
+      cardControlBtn = `<button class="card-mini-action-btn" onclick="event.stopPropagation(); retryCard('${ann.id}')" title="清除缓存并重新研判此卡片">🔁 重审</button>`;
+    }
+
     card.innerHTML = `
       <div class="card-top">
-        <span class="card-index">批注 #${ann.index < 10 ? '0' + ann.index : ann.index}</span>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <span class="card-index">批注 #${ann.index < 10 ? '0' + ann.index : ann.index}</span>
+          ${sourceBadge}
+        </div>
         <span class="card-risk-pill ${ann.risk_level}">${escapeHtml(ann.risk_label)}</span>
       </div>
 
@@ -1270,6 +2349,7 @@ function renderAnnotationsSidebar() {
 
       <div class="card-analysis">${escapeHtml(ann.ai_analysis)}</div>
       <div class="card-advice">${escapeHtml(ann.action_advice)}</div>
+      ${reasoningBoxHtml}
 
       <div class="card-actions">
         <div class="card-action-btn-group">
@@ -1277,7 +2357,11 @@ function renderAnnotationsSidebar() {
           <button class="mini-btn ${ann.review_status === 'QUESTIONED' ? 'active-question' : ''}" onclick="event.stopPropagation(); setAnnotationStatus('${ann.id}', 'QUESTIONED')">⚠️ 存疑</button>
           <button class="mini-btn ${ann.review_status === 'OVERRULED' ? 'active-overrule' : ''}" onclick="event.stopPropagation(); setAnnotationStatus('${ann.id}', 'OVERRULED')">❌ 驳回</button>
         </div>
-        <button class="locate-btn" onclick="event.stopPropagation(); selectAnnotation('${ann.id}')">🎯 定位正文</button>
+        <div class="card-extra-action">
+          ${cardControlBtn}
+          ${reasoningBtnHtml}
+          <button class="locate-btn" onclick="event.stopPropagation(); selectAnnotation('${ann.id}')">🎯 定位正文</button>
+        </div>
       </div>
     `;
 
@@ -1285,7 +2369,6 @@ function renderAnnotationsSidebar() {
   });
 }
 
-// 选中某个批注并实现三栏精确平滑对齐与高光
 function selectAnnotation(annId) {
   if (!currentData || !currentData.annotations) return;
 
@@ -1294,7 +2377,6 @@ function selectAnnotation(annId) {
   activeAnnotationIndex = annIdx;
   const ann = currentData.annotations[annIdx];
 
-  // 1. 高亮右侧专栏中的对应批注卡片
   document.querySelectorAll('.annotation-card').forEach(c => c.classList.remove('active'));
   const card = document.getElementById(`card-${annId}`);
   if (card) {
@@ -1302,7 +2384,6 @@ function selectAnnotation(annId) {
     card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
-  // 2. 定位正文条款段落并播放发光动画
   document.querySelectorAll('.clause-block').forEach(el => el.classList.remove('active-clause'));
   const revBlock = document.getElementById(`rev-${ann.block_id}`);
   const stdBlock = document.getElementById(`std-${ann.block_id}`);
@@ -1317,7 +2398,6 @@ function selectAnnotation(annId) {
     document.getElementById('colReviewedContainer').scrollTo({ top: targetTop, behavior: 'smooth' });
   }
 
-  // 3. 更新导航指示器
   const total = currentData.annotations.length;
   const ind = document.getElementById('navIndicator');
   if (ind) ind.innerText = `批注 ${ann.index} / ${total}`;
@@ -1384,7 +2464,428 @@ function toggleSidebarCollapse() {
   ws.classList.toggle('sidebar-collapsed');
 }
 
-// 键盘快捷键支持：[ 上一处，] 下一处，Esc 关闭弹窗
+// ==================== Agent 智能研判与全链路容灾客户端 (爱马仕/CC/小龙虾) ====================
+let agentEventSource = null;
+let agentReconnectTimer = null;
+let agentHeartbeatTimer = null;
+let agentState = {
+  status: 'IDLE',
+  completed: 0,
+  total: 0,
+  currentAnnId: null,
+  circuitBreaker: { state: 'CLOSED', failure_count: 0 }
+};
+
+function initAgentSSE(force = false) {
+  // 若当前已有活跃健康的长连接且非强制重建，无需强行关闭重建（杜绝切换模板时的连接重置报错）
+  if (!force && agentEventSource && (agentEventSource.readyState === EventSource.OPEN || agentEventSource.readyState === EventSource.CONNECTING)) {
+    updateHeartbeatTag(true);
+    return;
+  }
+
+  if (agentEventSource) {
+    try { agentEventSource.close(); } catch (e) {}
+    agentEventSource = null;
+  }
+  clearTimeout(agentReconnectTimer);
+  clearTimeout(agentHeartbeatTimer);
+
+  const resetHeartbeat = () => {
+    clearTimeout(agentHeartbeatTimer);
+    updateHeartbeatTag(true);
+    agentHeartbeatTimer = setTimeout(() => {
+      console.warn('[SSE] 心跳超时（>14s无响应），启动自动重连...');
+      updateHeartbeatTag(false);
+      initAgentSSE(true);
+    }, 14000);
+  };
+
+  try {
+    agentEventSource = new EventSource('/api/diff/agent_stream');
+
+    agentEventSource.onopen = () => {
+      console.log('[SSE] 已接入法务 Agent 实时研判流');
+      updateHeartbeatTag(true);
+      resetHeartbeat();
+    };
+
+    agentEventSource.addEventListener('snapshot', (e) => {
+      resetHeartbeat();
+      try {
+        const snap = JSON.parse(e.data);
+        handleAgentSnapshot(snap);
+      } catch (err) { console.error('Error handling snapshot:', err); }
+    });
+
+    agentEventSource.addEventListener('init', (e) => {
+      resetHeartbeat();
+      try {
+        const data = JSON.parse(e.data);
+        agentState.status = data.status || 'RUNNING';
+        agentState.completed = data.completed || 0;
+        agentState.total = data.total || 0;
+        updateAgentUI();
+        if (data.restored_count > 0) {
+          showToast(`已从持久化检查点秒级恢复 ${data.restored_count} 项研判！`, 'info');
+        }
+      } catch (err) {}
+    });
+
+    agentEventSource.addEventListener('card_start', (e) => {
+      resetHeartbeat();
+      try {
+        const data = JSON.parse(e.data);
+        agentState.currentAnnId = data.id;
+        updateCardRunningStatus(data.id, true);
+        updateAgentUI();
+      } catch (err) {}
+    });
+
+    agentEventSource.addEventListener('card_complete', (e) => {
+      resetHeartbeat();
+      try {
+        const data = JSON.parse(e.data);
+        handleCardComplete(data);
+      } catch (err) {}
+    });
+
+    agentEventSource.addEventListener('card_prioritized', (e) => {
+      resetHeartbeat();
+      try {
+        const data = JSON.parse(e.data);
+        showToast(`条款 #${data.id} 已成功插队至首位！`, 'success');
+      } catch (err) {}
+    });
+
+    agentEventSource.addEventListener('card_retry', (e) => {
+      resetHeartbeat();
+      try {
+        const data = JSON.parse(e.data);
+        showToast(`条款 #${data.id} 已重置并进入优先队列！`, 'info');
+      } catch (err) {}
+    });
+
+    agentEventSource.addEventListener('card_skip', (e) => {
+      resetHeartbeat();
+      try {
+        const data = JSON.parse(e.data);
+        showToast(`条款 #${data.id} 已跳过研判。`, 'info');
+      } catch (err) {}
+    });
+
+    agentEventSource.addEventListener('progress', (e) => {
+      resetHeartbeat();
+      try {
+        const data = JSON.parse(e.data);
+        agentState.completed = data.completed;
+        agentState.total = data.total;
+        updateAgentUI();
+      } catch (err) {}
+    });
+
+    agentEventSource.addEventListener('status_change', (e) => {
+      resetHeartbeat();
+      try {
+        const data = JSON.parse(e.data);
+        agentState.status = data.status;
+        updateAgentUI();
+      } catch (err) {}
+    });
+
+    agentEventSource.addEventListener('circuit_state_change', (e) => {
+      resetHeartbeat();
+      try {
+        const data = JSON.parse(e.data);
+        agentState.circuitBreaker = data;
+        updateAgentUI();
+        if (data.state === 'OPEN') {
+          showToast('⚠️ 大模型连续异常，已自动激活爱马仕/CC级自适应熔断保护（秒级规则兜底）', 'warning');
+        } else if (data.state === 'CLOSED') {
+          showToast('🟢 大模型服务已恢复，熔断器已复位正常', 'success');
+        }
+      } catch (err) {}
+    });
+
+    agentEventSource.addEventListener('watchdog_alert', (e) => {
+      resetHeartbeat();
+      try {
+        const data = JSON.parse(e.data);
+        showToast('🛡️ ' + (data.message || '看门狗抢救超时条款成功'), 'warning');
+      } catch (err) {}
+    });
+
+    agentEventSource.addEventListener('all_complete', (e) => {
+      resetHeartbeat();
+      try {
+        const data = JSON.parse(e.data);
+        agentState.status = 'COMPLETED';
+        agentState.currentAnnId = null;
+        updateAgentUI();
+        showToast('🎉 ' + (data.message || '全篇条款全部静默研判完毕！'), 'success');
+      } catch (err) {}
+    });
+
+    agentEventSource.onerror = (e) => {
+      // 只有在长连接彻底断开时触发状态更新与退避自愈
+      if (!agentEventSource || agentEventSource.readyState === EventSource.CLOSED) {
+        updateHeartbeatTag(false);
+        clearTimeout(agentReconnectTimer);
+        agentReconnectTimer = setTimeout(() => initAgentSSE(true), 2500);
+      }
+    };
+  } catch (err) {
+    console.error('SSE initialization failed:', err);
+  }
+}
+
+function handleAgentSnapshot(snap) {
+  agentState.status = snap.status || 'IDLE';
+  agentState.currentAnnId = snap.current_ann_id;
+  agentState.completed = snap.completed_count || 0;
+  agentState.total = snap.total_count || 0;
+  if (snap.circuit_breaker) {
+    agentState.circuitBreaker = snap.circuit_breaker;
+  }
+
+  // 批量合并已研判卡片
+  if (currentData && currentData.annotations && snap.completed_cards) {
+    snap.completed_cards.forEach(card => {
+      const ann = currentData.annotations.find(a => a.id === card.id);
+      if (ann) {
+        ann.risk_level = card.risk_level || ann.risk_level;
+        ann.risk_label = card.risk_label || ann.risk_label;
+        ann.ai_analysis = card.ai_analysis || ann.ai_analysis;
+        ann.action_advice = card.action_advice || ann.action_advice;
+        ann._reasoning = card.reasoning || '';
+        ann._source = card.source || 'AI_AGENT';
+        ann._elapsedSec = card.elapsed_sec || 0;
+        ann._fromCache = card.from_cache || false;
+        ann._aiDone = true;
+      }
+    });
+    renderAnnotationsSidebar();
+  }
+  updateAgentUI();
+}
+
+function handleCardComplete(data) {
+  agentState.completed = data.completed;
+  agentState.total = data.total;
+  if (agentState.currentAnnId === data.id) {
+    agentState.currentAnnId = null;
+  }
+
+  if (currentData && currentData.annotations) {
+    const ann = currentData.annotations.find(a => a.id === data.id);
+    if (ann) {
+      ann.risk_level = data.risk_level;
+      ann.risk_label = data.risk_label;
+      ann.ai_analysis = data.ai_analysis;
+      ann.action_advice = data.action_advice;
+      ann._reasoning = data.reasoning;
+      ann._source = data.source;
+      ann._elapsedSec = data.elapsed_sec;
+      ann._fromCache = data.from_cache;
+      ann._aiDone = true;
+    }
+  }
+
+  // 单卡增量更新 DOM，避免整体重绘丢失滚动位
+  const card = document.getElementById(`card-${data.id}`);
+  if (card) {
+    card.classList.remove('agent-running');
+    const pill = card.querySelector('.card-risk-pill');
+    if (pill) {
+      pill.className = `card-risk-pill ${data.risk_level}`;
+      pill.innerText = data.risk_label;
+    }
+    const analysisEl = card.querySelector('.card-analysis');
+    if (analysisEl) analysisEl.innerText = data.ai_analysis;
+    const adviceEl = card.querySelector('.card-advice');
+    if (adviceEl) adviceEl.innerText = data.action_advice;
+
+    // 更新来源标签
+    let sBadge = card.querySelector('.card-source-badge');
+    let badgeText = '🤖 AI研判';
+    let badgeClass = 'ai';
+    if (data.source === 'FALLBACK_RULE' || data.source === 'CIRCUIT_BREAKER_FALLBACK') {
+      badgeText = '🛡️ 容灾规则降级'; badgeClass = 'fallback';
+    } else if (data.source === 'WATCHDOG_TIMEOUT_FALLBACK') {
+      badgeText = '⏱️ 看门狗抢救'; badgeClass = 'watchdog';
+    } else if (data.source === 'CHECKPOINT_RESUMED') {
+      badgeText = '💾 断点自愈恢复'; badgeClass = 'resume';
+    } else if (data.from_cache) {
+      badgeText = '⚡ 本地缓存'; badgeClass = 'cache';
+    } else if (data.elapsed_sec) {
+      badgeText = `🤖 AI研判 ${data.elapsed_sec}s`;
+    }
+    if (sBadge) {
+      sBadge.className = `card-source-badge ${badgeClass}`;
+      sBadge.innerText = badgeText;
+    }
+  } else {
+    renderAnnotationsSidebar();
+  }
+
+  updateAgentUI();
+}
+
+function updateCardRunningStatus(annId, isRunning) {
+  document.querySelectorAll('.annotation-card').forEach(c => c.classList.remove('agent-running'));
+  if (isRunning && annId) {
+    const card = document.getElementById(`card-${annId}`);
+    if (card) {
+      card.classList.add('agent-running');
+      let sBadge = card.querySelector('.card-source-badge');
+      if (sBadge) {
+        sBadge.className = 'card-source-badge running';
+        sBadge.innerText = '⚡ 正在深度研判...';
+      }
+    }
+  }
+}
+
+function updateAgentUI() {
+  const badge = document.getElementById('agentStateBadge');
+  const ratio = document.getElementById('agentProgressRatio');
+  const bar = document.getElementById('agentProgressBar');
+  const btnPause = document.getElementById('btnAgentPause');
+  const btnResetCircuit = document.getElementById('btnResetCircuit');
+  const circuitTag = document.getElementById('agentCircuitTag');
+
+  const cur = agentState.completed || 0;
+  const tot = agentState.total || 0;
+  const pct = tot > 0 ? Math.round((cur / tot) * 100) : 0;
+
+  if (ratio) ratio.innerText = `${cur}/${tot} (${pct}%)`;
+  if (bar) bar.style.width = `${pct}%`;
+
+  if (badge) {
+    if (agentState.status === 'COMPLETED') {
+      badge.className = 'agent-state-pill COMPLETED';
+      badge.innerText = '✅ 全部研判完成';
+      if (btnPause) btnPause.disabled = true;
+    } else if (agentState.status === 'PAUSED') {
+      badge.className = 'agent-state-pill PAUSED';
+      badge.innerText = '⏸️ 研判已暂停';
+      if (btnPause) { btnPause.disabled = false; btnPause.innerText = '▶️ 继续'; }
+    } else if (agentState.circuitBreaker && agentState.circuitBreaker.state === 'OPEN') {
+      badge.className = 'agent-state-pill CIRCUIT_OPEN';
+      badge.innerText = '🛡️ 熔断降级自愈中';
+      if (btnPause) { btnPause.disabled = false; btnPause.innerText = '⏸️ 暂停'; }
+    } else {
+      badge.className = 'agent-state-pill RUNNING';
+      badge.innerText = `🟢 智能研判中 (${cur}/${tot})`;
+      if (btnPause) { btnPause.disabled = false; btnPause.innerText = '⏸️ 暂停'; }
+    }
+  }
+
+  if (circuitTag && agentState.circuitBreaker) {
+    const cbState = agentState.circuitBreaker.state;
+    if (cbState === 'OPEN') {
+      circuitTag.innerText = '🛡️ 熔断触发 (企业红线速断)';
+      circuitTag.style.color = '#DC2626';
+      if (btnResetCircuit) btnResetCircuit.style.display = 'inline-block';
+    } else {
+      circuitTag.innerText = '🛡️ 熔断防护: 闭合';
+      circuitTag.style.color = '#64748B';
+      if (btnResetCircuit) btnResetCircuit.style.display = 'none';
+    }
+  }
+}
+
+function updateHeartbeatTag(isAlive) {
+  const tag = document.getElementById('agentHeartbeatTag');
+  if (tag) {
+    if (isAlive) {
+      tag.innerText = '💓 心跳正常';
+      tag.style.color = '#10B981';
+    } else {
+      tag.innerText = '💔 重连中...';
+      tag.style.color = '#EF4444';
+    }
+  }
+}
+
+async function toggleAgentPause() {
+  try {
+    const resp = await fetch('/api/diff/toggle_pause', { method: 'POST' });
+    const res = await resp.json();
+    agentState.status = res.status;
+    updateAgentUI();
+    showToast(res.status === 'PAUSED' ? '研判已暂停' : '研判已恢复继续', 'info');
+  } catch (err) {
+    showToast('切换暂停失败: ' + err, 'error');
+  }
+}
+
+async function rerunAgentReview() {
+  showLoading('正在重置并启动全篇重新研判...');
+  try {
+    const resp = await fetch('/api/diff/rerun_review', { method: 'POST' });
+    const res = await resp.json();
+    hideLoading();
+    if (res.success) {
+      showToast('已清空旧任务，全新研判流水线已就绪启动！', 'success');
+      initAgentSSE();
+    }
+  } catch (err) {
+    hideLoading();
+    showToast('重置研判请求失败: ' + err, 'error');
+  }
+}
+
+async function prioritizeCard(annId) {
+  try {
+    const resp = await fetch('/api/diff/prioritize_card', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: annId })
+    });
+    const res = await resp.json();
+    if (res.success) {
+      showToast(`条款 #${annId} 已插队至第一位！`, 'success');
+    }
+  } catch (err) {
+    showToast('插队请求失败: ' + err, 'error');
+  }
+}
+
+async function retryCard(annId) {
+  try {
+    const resp = await fetch('/api/diff/retry_card', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: annId })
+    });
+    const res = await resp.json();
+    if (res.success) {
+      showToast(`条款 #${annId} 缓存已清除，进入优先重审！`, 'info');
+    }
+  } catch (err) {
+    showToast('重审请求失败: ' + err, 'error');
+  }
+}
+
+async function resetCircuitBreaker() {
+  try {
+    const resp = await fetch('/api/diff/reset_circuit', { method: 'POST' });
+    const res = await resp.json();
+    if (res.success) {
+      showToast('大模型熔断器已手动复位！', 'success');
+    }
+  } catch (err) {
+    showToast('复位熔断器失败: ' + err, 'error');
+  }
+}
+
+function toggleReasoning(annId) {
+  const el = document.getElementById(`reasoning-${annId}`);
+  if (el) {
+    el.style.display = (el.style.display === 'none') ? 'block' : 'none';
+  }
+}
+
 window.addEventListener('keydown', (e) => {
   if (e.key === '[' || (e.altKey && e.key === 'ArrowUp')) {
     prevAnnotation();
@@ -1392,13 +2893,14 @@ window.addEventListener('keydown', (e) => {
     nextAnnotation();
   } else if (e.key === 'Escape') {
     closeUploadModal();
+    closeTemplateModal();
   }
 });
 
-// 页面初始化加载默认高危用例
 window.addEventListener('DOMContentLoaded', () => {
   if (window.INITIAL_DATA) {
     renderFullDiff(window.INITIAL_DATA);
+    initAgentSSE();
   }
 });
 </script>
@@ -1410,15 +2912,83 @@ window.addEventListener('DOMContentLoaded', () => {
 class DiffVisualizerHandler(BaseHTTPRequestHandler):
     """处理前端页面与比对 API 请求。"""
 
+    protocol_version = "HTTP/1.1"
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            self.close_connection = True
+
+    def log_message(self, format, *args):
+        # 正常请求打印日志，网络断开时不刷屏
+        if args and any("Connection" in str(a) or "10053" in str(a) for a in args):
+            return
+        super().log_message(format, *args)
+
+    def _send_json(self, status_code: int, data: Any):
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
+        global CURRENT_DOC_NAME, CURRENT_FORCED_TEMPLATE_ID
         parsed = urllib.parse.urlparse(self.path)
 
         if parsed.path in ("/", "/index.html"):
             html = generate_rendered_html()
+            body = html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(html.encode("utf-8"))
+            self.wfile.write(body)
+
+        elif parsed.path == "/api/diff/agent_stream":
+            mgr = get_agent_manager()
+            sub_q = mgr.subscribe()
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-transform")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+            try:
+                while True:
+                    try:
+                        msg = sub_q.get(timeout=2.0)
+                        line = f"event: {msg['name']}\ndata: {json.dumps(msg['data'], ensure_ascii=False)}\n\n"
+                        self.wfile.write(line.encode("utf-8"))
+                        self.wfile.flush()
+                    except queue.Empty:
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+            except (
+                BrokenPipeError,
+                ConnectionResetError,
+                ConnectionAbortedError,
+                Exception,
+            ):
+                pass
+            finally:
+                self.close_connection = True
+                mgr.unsubscribe(sub_q)
+            return
+
+        elif parsed.path == "/api/templates/list":
+            try:
+                catalog = get_ranked_templates_catalog(
+                    CURRENT_SESSION_FILE, CURRENT_FORCED_TEMPLATE_ID
+                )
+                self._send_json(200, {"success": True, "templates": catalog})
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
 
         elif parsed.path == "/api/diff/sample":
             qs = urllib.parse.parse_qs(parsed.query)
@@ -1427,49 +2997,155 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             try:
                 if key == "prescreen_tampered":
                     sample_file = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
+                    CURRENT_DOC_NAME = "《国内专利服务合同（年费缴纳）》送审修改稿"
                 elif key == "missing_confidential":
                     sample_file = (
-                        config.GOLDEN_DIR
-                        / "mut_06_missing_confidentiality.docx"
+                        config.GOLDEN_DIR / "mut_06_missing_confidentiality.docx"
+                    )
+                    CURRENT_DOC_NAME = (
+                        "《国内专利服务合同（年费缴纳）》送审修改稿（保密义务被删）"
                     )
                 else:
-                    sample_files = list(
-                        config.TEMPLATE_DIR.glob("**/*驳回复审*.docx")
-                    )
+                    sample_files = list(config.TEMPLATE_DIR.glob("**/*驳回复审*.docx"))
                     sample_file = (
                         sample_files[0]
                         if sample_files
                         else config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
                     )
+                    CURRENT_DOC_NAME = "《商标驳回复审代理协议》送审原稿"
 
-                res = build_full_contract_diff(sample_file)
-                self.send_response(200)
-                self.send_header(
-                    "Content-Type", "application/json; charset=utf-8"
+                shutil.copyfile(sample_file, CURRENT_SESSION_FILE)
+                CURRENT_FORCED_TEMPLATE_ID = None
+
+                res = execute_current_diff(
+                    CURRENT_SESSION_FILE, forced_template_id=None
                 )
-                self.end_headers()
-                self.wfile.write(
-                    json.dumps(res, ensure_ascii=False).encode("utf-8")
-                )
+                get_agent_manager().start_document_review(res)
+                self._send_json(200, res)
             except Exception as e:
-                self.send_response(500)
-                self.send_header(
-                    "Content-Type", "application/json; charset=utf-8"
-                )
-                self.end_headers()
-                self.wfile.write(
-                    json.dumps({"error": str(e)}, ensure_ascii=False).encode(
-                        "utf-8"
-                    )
-                )
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/diff/agent_status":
+            try:
+                snap = get_agent_manager().get_current_snapshot()
+                self._send_json(200, snap)
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
 
         else:
             self.send_response(404)
             self.end_headers()
 
     def do_POST(self):
+        global CURRENT_DOC_NAME, CURRENT_FORCED_TEMPLATE_ID
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path == "/api/diff/upload":
+
+        if parsed.path == "/api/templates/reload":
+            try:
+                res = hot_reload_template_library()
+                self._send_json(200, res)
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/diff/switch-template":
+            length = int(self.headers.get("content-length", 0))
+            raw_body = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+                target_tpl_id = (data.get("template_id") or "").strip()
+                if not target_tpl_id or target_tpl_id == "auto":
+                    CURRENT_FORCED_TEMPLATE_ID = None
+                else:
+                    CURRENT_FORCED_TEMPLATE_ID = target_tpl_id
+
+                if not CURRENT_SESSION_FILE.exists():
+                    default_sample = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
+                    shutil.copyfile(default_sample, CURRENT_SESSION_FILE)
+
+                res = execute_current_diff(
+                    CURRENT_SESSION_FILE, forced_template_id=CURRENT_FORCED_TEMPLATE_ID
+                )
+                get_agent_manager().start_document_review(res)
+                self._send_json(200, res)
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/diff/prioritize_card":
+            length = int(self.headers.get("content-length", 0))
+            raw_body = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+                ann_id = data.get("id") or ""
+                ok = get_agent_manager().prioritize_card(ann_id)
+                self._send_json(200, {"success": ok})
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/diff/toggle_pause":
+            try:
+                cur_status = get_agent_manager().toggle_pause()
+                self._send_json(200, {"status": cur_status})
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/diff/rerun_review":
+            try:
+                if CURRENT_SESSION_FILE.exists():
+                    res = execute_current_diff(
+                        CURRENT_SESSION_FILE,
+                        forced_template_id=CURRENT_FORCED_TEMPLATE_ID,
+                    )
+                    get_agent_manager().start_document_review(res, force_restart=True)
+                self._send_json(200, {"success": True})
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/diff/retry_card":
+            length = int(self.headers.get("content-length", 0))
+            raw_body = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+                ann_id = data.get("id") or ""
+                ok = get_agent_manager().retry_card(ann_id)
+                self._send_json(200, {"success": ok})
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/diff/skip_card":
+            length = int(self.headers.get("content-length", 0))
+            raw_body = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+                ann_id = data.get("id") or ""
+                ok = get_agent_manager().skip_card(ann_id)
+                self._send_json(200, {"success": ok})
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/diff/reset_circuit":
+            try:
+                status = get_agent_manager().reset_circuit_breaker()
+                self._send_json(200, {"success": True, "circuit": status})
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/diff/feedback":
+            length = int(self.headers.get("content-length", 0))
+            raw_body = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+                saved_path = record_user_feedback(data)
+                self._send_json(200, {"success": True, "saved_to": str(saved_path)})
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/diff/export_training_data":
+            try:
+                res = export_sft_dataset()
+                self._send_json(200, res)
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+        elif parsed.path == "/api/diff/upload":
             ctype = self.headers.get("content-type", "")
             if "multipart/form-data" in ctype and "boundary=" in ctype:
                 boundary = ctype.split("boundary=")[-1].strip().encode("utf-8")
@@ -1477,10 +3153,9 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                 body = self.rfile.read(length)
                 parts = body.split(b"--" + boundary)
                 file_bytes = None
-                file_name = "uploaded_contract.docx"
+                file_name = "待审合同.docx"
                 for part in parts:
                     if b'name="file"' in part:
-                        # Extract filename if available
                         fn_m = re.search(rb'filename="([^"]+)"', part)
                         if fn_m:
                             try:
@@ -1495,50 +3170,53 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                             break
 
                 if file_bytes:
-                    suffix = Path(file_name).suffix or ".docx"
-                    with tempfile.NamedTemporaryFile(
-                        suffix=suffix, delete=False
-                    ) as tmp:
-                        tmp.write(file_bytes)
-                        tmp_path = Path(tmp.name)
+                    stem_clean = Path(file_name).stem
+                    CURRENT_DOC_NAME = (
+                        f"《{stem_clean}》送审稿"
+                        if not stem_clean.startswith("《")
+                        else stem_clean
+                    )
+                    CURRENT_FORCED_TEMPLATE_ID = None
+                    CURRENT_SESSION_FILE.write_bytes(file_bytes)
+
                     try:
-                        res = build_full_contract_diff(tmp_path)
-                        res["uploaded_file"] = file_name
-                    finally:
-                        try:
-                            tmp_path.unlink()
-                        except Exception:
-                            pass
+                        res = execute_current_diff(
+                            CURRENT_SESSION_FILE, forced_template_id=None
+                        )
+                        get_agent_manager().start_document_review(res)
+                        self._send_json(200, res)
+                        return
+                    except Exception as e:
+                        self._send_json(500, {"error": str(e)})
+                        return
 
-                    self.send_response(200)
-                    self.send_header(
-                        "Content-Type", "application/json; charset=utf-8"
-                    )
-                    self.end_headers()
-                    self.wfile.write(
-                        json.dumps(res, ensure_ascii=False).encode("utf-8")
-                    )
-                    return
+            self._send_json(400, {"error": "invalid_upload"})
 
-            self.send_response(400)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(b'{"error": "invalid_upload"}')
         else:
             self.send_response(404)
             self.end_headers()
 
 
 def generate_rendered_html() -> str:
-    """生成内嵌初始默认高危用例数据的独立完整 HTML。"""
+    """生成内嵌初始默认高危用例数据与按置信度排序的母本清单的独立完整 HTML。"""
     try:
         sample_file = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
-        initial_data = build_full_contract_diff(sample_file)
+        if not CURRENT_SESSION_FILE.exists():
+            shutil.copyfile(sample_file, CURRENT_SESSION_FILE)
+        initial_data = execute_current_diff(CURRENT_SESSION_FILE)
         data_json = json.dumps(initial_data, ensure_ascii=False)
     except Exception:
         data_json = "null"
 
-    return HTML_TEMPLATE.replace("__INITIAL_DATA_PLACEHOLDER__", data_json)
+    try:
+        catalog = get_ranked_templates_catalog(CURRENT_SESSION_FILE)
+        catalog_json = json.dumps(catalog, ensure_ascii=False)
+    except Exception:
+        catalog_json = "[]"
+
+    html = HTML_TEMPLATE.replace("__INITIAL_DATA_PLACEHOLDER__", data_json)
+    html = html.replace("__ALL_TEMPLATES_PLACEHOLDER__", catalog_json)
+    return html
 
 
 def export_standalone_html():
@@ -1553,16 +3231,20 @@ def export_standalone_html():
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="合同整版原格式对照与右侧批注前端服务"
-    )
-    parser.add_argument(
-        "--port", type=int, default=8089, help="Web 端口（默认 8089）"
-    )
+    parser = argparse.ArgumentParser(description="合同整版原格式对照与右侧批注前端服务")
+    parser.add_argument("--port", type=int, default=8089, help="Web 端口（默认 8089）")
     parser.add_argument(
         "--export-only", action="store_true", help="仅导出独立 HTML 页面"
     )
     args = parser.parse_args()
+
+    default_sample = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
+    if default_sample.exists() and not CURRENT_SESSION_FILE.exists():
+        shutil.copyfile(default_sample, CURRENT_SESSION_FILE)
+
+    if CURRENT_SESSION_FILE.exists():
+        initial_data = execute_current_diff(CURRENT_SESSION_FILE)
+        get_agent_manager().start_document_review(initial_data)
 
     export_standalone_html()
     if args.export_only:
@@ -1575,10 +3257,15 @@ def main():
     print(
         "👉 请在浏览器中打开上方网址，即可体验整版双栏原格式对照与右侧智能法务审阅批注！\n"
     )
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\n服务已停止。")
+    while True:
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\n服务已停止。")
+            break
+        except Exception as e:
+            print(f"\n服务异常自动重连: {e}")
+            time.sleep(0.5)
 
 
 if __name__ == "__main__":

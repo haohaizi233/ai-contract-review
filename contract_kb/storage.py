@@ -290,6 +290,8 @@ def create_storage(
     resolved_dsn = (
         dsn if dsn is not None else os.environ.get("CONTRACT_KB_PG_DSN", config.PG_DSN)
     ).strip()
+    if resolved_backend == "auto":
+        resolved_backend = "postgres" if resolved_dsn else "sqlite"
 
     if resolved_backend in ("postgres", "postgresql", "pg") or (
         backend is None and bool(resolved_dsn) and resolved_backend == "sqlite"
@@ -1483,7 +1485,7 @@ class Storage:
                 if tenant_id is not None:
                     sql += " AND tenant_id=?"
                     params.append(tenant_id)
-                sql += " ORDER BY imported_at DESC LIMIT 1"
+                sql += " ORDER BY CASE WHEN document_id LIKE 'MB%' THEN 0 ELSE 1 END, imported_at DESC LIMIT 1"
                 row = self.conn.execute(sql, params).fetchone()
                 if row:
                     return dict(row)
@@ -1497,7 +1499,7 @@ class Storage:
                 if tenant_id is not None:
                     sql += " AND tenant_id=?"
                     params.append(tenant_id)
-                sql += " ORDER BY imported_at DESC LIMIT 1"
+                sql += " ORDER BY CASE WHEN document_id LIKE 'MB%' THEN 0 ELSE 1 END, imported_at DESC LIMIT 1"
                 row = self.conn.execute(sql, params).fetchone()
                 if row:
                     return dict(row)
