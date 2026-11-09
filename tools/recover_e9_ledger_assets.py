@@ -307,10 +307,14 @@ def refresh_cdp_cookie():
         Path(os.environ["LOCALAPPDATA"]) / "Google/Chrome/User Data/DevToolsActivePort"
     )
     endpoints = []
+    saved = ROOT / "tmp/image_recovery_20261109/working_cdp_endpoint.txt"
+    if saved.exists():
+        endpoints.append(saved.read_text(encoding="utf8").strip())
     if profile.exists():
         parts = profile.read_text().splitlines()
         if len(parts) >= 2:
             endpoints.append("ws://127.0.0.1:" + parts[0] + parts[1])
+        endpoints.append("ws://127.0.0.1:" + parts[0] + "/devtools/browser")
     for port in [9333]:
         try:
             endpoints.append(
@@ -352,7 +356,7 @@ def watch_session():
     initial = digest((ROOT / "data/.e9_cookie").read_bytes())
     status = WORK / "watch_status.json"
     while True:
-        refresh_cdp_cookie()
+        # Cookie acquisition is a single supervised connection, not a polling handshake.
         current = digest((ROOT / "data/.e9_cookie").read_bytes())
         if current != initial:
             status.write_text(
