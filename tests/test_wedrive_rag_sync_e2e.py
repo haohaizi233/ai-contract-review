@@ -414,7 +414,11 @@ def test_e13_large_file_boundary(test_env):
     create_sample_docx(huge_f, "超大合同", [("第一条", "基础信息")])
 
     # 模拟文件大小超限 > 20MB
-    with patch("pathlib.Path.stat") as mock_stat:
+    target_cls = type(huge_f)
+    with (
+        patch.object(target_cls, "stat") as mock_stat,
+        patch.object(Path, "stat", mock_stat),
+    ):
         mock_stat_res = os.stat(huge_f)
         # 伪造 st_size 为 25MB
         mock_stat.return_value = os.stat_result(

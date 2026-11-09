@@ -22,6 +22,7 @@ packaging==26.3
 pathspec==1.1.1
 pglast==8.7
 pillow==13.0.0
+pypdf==6.21.4
 pluggy==1.7.0
 psycopg2-binary==2.9.13
 pydantic==2.14.3

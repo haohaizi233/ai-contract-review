@@ -19,12 +19,14 @@ dependencies = [
     "requests>=2.31",
     "python-dotenv>=1.0",
     "python-tds>=1.15",
+    "pypdf>=4.0.0",
 ]
 
 [project.optional-dependencies]
 postgres = [
     "psycopg2-binary>=2.9",
     "pglast>=6.0",
+    "pypdf>=4.0.0",
 ]
 integrations = [
     "python-tds>=1.15",

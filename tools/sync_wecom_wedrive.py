@@ -420,6 +420,19 @@ class WeDriveSyncManager:
             tracker.state = FileSyncState.PARSING
             t_parse_0 = time.perf_counter()
 
+            try:
+                f_size = resolved_file.stat().st_size
+            except Exception:
+                f_size = 0
+            if f_size > 20 * 1024 * 1024:
+                logger.warning(
+                    f"文件大小超过 20MB 安全阈值，隔离处置: {rel_path} ({f_size} bytes)"
+                )
+                tracker.state = FileSyncState.QUARANTINED
+                tracker.error_msg = "file_too_large"
+                metrics.files_failed += 1
+                continue
+
             if resolved_file.suffix.lower() == ".docx":
                 sec = security_check_file(resolved_file)
                 if not sec.passed:
