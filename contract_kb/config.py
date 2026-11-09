@@ -31,6 +31,12 @@ PG_DSN = os.environ.get("CONTRACT_KB_PG_DSN", "").strip()
 
 # 上传文件安全边界与临时文件保留策略（0 = 同步审核完成后立即清理临时文件）
 MAX_DOCX_BYTES = 20 * 1024 * 1024  # 单文件大小上限 20MB
+MAX_REQUEST_BODY_BYTES = int(
+    os.environ.get(
+        "CONTRACT_KB_MAX_REQUEST_BODY_BYTES",
+        str(MAX_DOCX_BYTES + 5 * 1024 * 1024),
+    )
+)  # 请求正文上限（单文件 20MB + 5MB multipart 冗余开销）
 MAX_ZIP_ENTRIES = 500  # 压缩包条目上限
 MAX_ZIP_RATIO = 200  # 压缩比上限（压缩炸弹防护）
 ALLOWED_EXT = {".docx"}

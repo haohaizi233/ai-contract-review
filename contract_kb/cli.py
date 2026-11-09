@@ -120,14 +120,55 @@ def _cmd_inventory() -> None:
     print(f"written: {out}")
 
 
+def _cmd_refresh() -> dict:
+    """存量模板分类刷新：对扫描到的模板重新计算分类，并原子更新数据库与检索索引。"""
+    config.ensure_dirs()
+    from .storage import create_storage
+
+    st = create_storage()
+    result = scan_and_import(config.TEMPLATE_DIR)
+    raw = result.pop("_raw")
+
+    refreshed = 0
+    skipped = 0
+    for d in raw:
+        doc_dict = d.to_dict()
+        doc_row = st.find_document_by_hash(doc_dict["sha256"])
+        if doc_row:
+            ok = st.update_document_classification(
+                document_id=doc_row["document_id"],
+                category=doc_dict.get("category", ""),
+                subtype=doc_dict.get("subtype", ""),
+                tenant_id=doc_row.get("tenant_id"),
+            )
+            if ok:
+                refreshed += 1
+            else:
+                skipped += 1
+        else:
+            skipped += 1
+
+    st.log_audit(
+        "cli",
+        "refresh_classification",
+        str(config.TEMPLATE_DIR),
+        f"refreshed={refreshed} skipped={skipped}",
+    )
+    st.close()
+    print(f"refreshed={refreshed} skipped={skipped}")
+    return {"refreshed": refreshed, "skipped": skipped}
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "import"
     if cmd == "import":
         _do_import()
+    elif cmd in ("refresh", "reclassify"):
+        _cmd_refresh()
     elif cmd == "inventory":
         _cmd_inventory()
     else:
-        print("usage: python -m contract_kb.cli [import|inventory]")
+        print("usage: python -m contract_kb.cli [import|refresh|inventory]")
 
 
 if __name__ == "__main__":

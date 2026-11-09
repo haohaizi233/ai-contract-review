@@ -186,122 +186,195 @@ def evaluate_configuration(
 ) -> dict[str, Any]:
     """执行单个消融配置的独立评测，记录真实的组件调用与指标。"""
     call_tracker = tracker or ComponentCallTracker()
+    is_contract = bool(allow_mock_for_contract_test or cfg.is_contract_test)
 
     # 1. 真实模型可用性守卫 (Fail-Closed, 绝不拿简单算法冒充)
     if cfg.embedding_type == "DENSE_REAL":
         avail, reason = check_real_dense_model_available()
-        if not avail and not allow_mock_for_contract_test:
+        if not avail and not is_contract:
             return {
                 "config_name": cfg.name,
                 "status": "NOT_EXECUTED_MODEL_UNAVAILABLE",
+                "is_contract_test": is_contract,
+                "execution_mode": "PRODUCTION_REAL",
                 "blocking_reason": reason,
                 "component_trace": call_tracker.to_dict(),
                 "metrics": None,
             }
-    if cfg.reranker_type == "CROSS_ENCODER":
-        avail, reason = check_cross_encoder_available()
-        if not avail and not allow_mock_for_contract_test:
+    if cfg.reranker_type in ("CROSS_ENCODER", "MOCK_CROSS_ENCODER_TEST"):
+        if cfg.reranker_type == "CROSS_ENCODER" and not is_contract:
+            avail, reason = check_cross_encoder_available()
+            if not avail:
+                return {
+                    "config_name": cfg.name,
+                    "status": "NOT_EXECUTED_MODEL_UNAVAILABLE",
+                    "is_contract_test": is_contract,
+                    "execution_mode": "PRODUCTION_REAL",
+                    "blocking_reason": reason,
+                    "component_trace": call_tracker.to_dict(),
+                    "metrics": None,
+                }
+        elif cfg.reranker_type == "MOCK_CROSS_ENCODER_TEST" and not is_contract:
             return {
                 "config_name": cfg.name,
                 "status": "NOT_EXECUTED_MODEL_UNAVAILABLE",
-                "blocking_reason": reason,
+                "is_contract_test": False,
+                "execution_mode": "PRODUCTION_REAL",
+                "blocking_reason": "BLOCKED_MOCK_DISALLOWED: 未开启契约测试模式时严禁使用 Mock 组件",
                 "component_trace": call_tracker.to_dict(),
                 "metrics": None,
             }
 
-    # 2. 初始化对应技术组件
+    # 2. 初始化对应技术组件并接入真实调用追踪代理
     use_dyn = cfg.query_mode == "DYNAMIC"
     planner = ContractAwareQueryPlanner() if use_dyn else None
+    if use_dyn and planner is not None:
+        orig_plan = planner.plan_clause_intents_deterministic
 
-    # 初始化重排器
-    if cfg.reranker_type == "CROSS_ENCODER":
-        if allow_mock_for_contract_test:
+        def _tracked_plan(*args, **kwargs):
+            call_tracker.query_planning_calls += 1
+            return orig_plan(*args, **kwargs)
+
+        planner.plan_clause_intents_deterministic = _tracked_plan  # type: ignore[assignment]
+
+    # 初始化重排器并路由真实/Mock/词法实现
+    if cfg.reranker_type in ("CROSS_ENCODER", "MOCK_CROSS_ENCODER_TEST"):
+        if cfg.reranker_type == "MOCK_CROSS_ENCODER_TEST" or (
+            is_contract and cfg.reranker_type == "CROSS_ENCODER"
+        ):
+            if not is_contract:
+                raise ValueError("Mock cross-encoder only allowed when is_contract=True")
             reranker: Any = MockCrossEncoderReranker()
         else:
             from .rerankers import CrossEncoderReranker
 
             reranker = CrossEncoderReranker()
-    else:
+
+        orig_rerank = reranker.rerank
+
+        def _tracked_ce_rerank(*args, **kwargs):
+            call_tracker.cross_encoder_calls += 1
+            return orig_rerank(*args, **kwargs)
+
+        reranker.rerank = _tracked_ce_rerank
+    elif cfg.reranker_type == "LEXICAL":
         reranker = LexicalCoverageReranker()
+    else:
+        raise ValueError(f"未知的 reranker_type: {cfg.reranker_type}")
+
+    # 检索与 Embedding 真实调用追踪
+    orig_search = st.search
+
+    def _tracked_search(*args, **kwargs):
+        call_tracker.search_calls += 1
+        return orig_search(*args, **kwargs)
+
+    st.search = _tracked_search  # type: ignore[assignment]
+
+    if hasattr(st, "emb") and hasattr(st.emb, "embed"):
+        orig_embed = st.emb.embed
+
+        def _tracked_embed(*args, **kwargs):
+            call_tracker.embedding_calls += 1
+            return orig_embed(*args, **kwargs)
+
+        st.emb.embed = _tracked_embed  # type: ignore[assignment]
+
+    # 层级扩展真实调用追踪
+    if cfg.use_parent_child and knowledge_tree is not None:
+        orig_expand = knowledge_tree.expand_parent_child_context
+
+        def _tracked_expand(*args, **kwargs):
+            call_tracker.hierarchy_expansions += 1
+            return orig_expand(*args, **kwargs)
+
+        knowledge_tree.expand_parent_child_context = _tracked_expand  # type: ignore[assignment]
+
+    # 结构化比对真实调用追踪
+    comp_engine = ClauseComparisonEngine() if cfg.use_structural_comparison else None
+    if comp_engine is not None:
+        orig_comp = comp_engine.compare_clauses
+
+        def _tracked_comp(*args, **kwargs):
+            call_tracker.structural_comparison_calls += 1
+            return orig_comp(*args, **kwargs)
+
+        comp_engine.compare_clauses = _tracked_comp  # type: ignore[assignment]
 
     _ = GovernedRetrievalService(st, reranker=reranker)
-    comp_engine = ClauseComparisonEngine() if cfg.use_structural_comparison else None
     verifier = CitationVerifier()
 
     n = len(GOLDEN_QUERIES)
     rows = []
     latencies = []
 
-    for q in GOLDEN_QUERIES:
-        t0 = time.perf_counter()
+    try:
+        for q in GOLDEN_QUERIES:
+            t0 = time.perf_counter()
 
-        # Step 1: 查询构造与规划
-        if use_dyn and planner is not None:
-            simulated_clause = {
-                "clause_id": f"sim_{q.qid}",
-                "clause_category": q.expected_category,
-                "original_text": q.query,
-            }
-            intents = planner.plan_clause_intents_deterministic(simulated_clause)
-            call_tracker.query_planning_calls += 1
-            q_text = (
-                intents[0].semantic_queries[0]
-                if (intents and intents[0].semantic_queries)
-                else q.query
+            # Step 1: 查询构造与规划（经 tracked 代理真实计数）
+            if use_dyn and planner is not None:
+                simulated_clause = {
+                    "clause_id": f"sim_{q.qid}",
+                    "clause_category": q.expected_category,
+                    "original_text": q.query,
+                }
+                intents = planner.plan_clause_intents_deterministic(simulated_clause)
+                q_text = (
+                    intents[0].semantic_queries[0]
+                    if (intents and intents[0].semantic_queries)
+                    else q.query
+                )
+            else:
+                q_text = q.query
+
+            # Step 2: 检索执行（经 tracked 代理真实计数）
+            hits = st.search(q_text, top_k=8, approved_only=True, rerank=False)
+
+            # Step 3: 层级扩展 (Parent-Child)（经 tracked 代理真实计数）
+            if cfg.use_parent_child and knowledge_tree is not None:
+                expanded_hits = []
+                for h in hits:
+                    cid = str(h.get("clause_id") or "")
+                    exp = knowledge_tree.expand_parent_child_context(cid)
+                    if exp.get("expanded_text"):
+                        h_copy = dict(h)
+                        h_copy["text"] = exp["expanded_text"]
+                        expanded_hits.append(h_copy)
+                    else:
+                        expanded_hits.append(h)
+                hits = expanded_hits
+
+            # Step 4: 语义精排（仅 Cross-Encoder 经 tracked 代理真实计数，词法不计数）
+            hits = reranker.rerank(q_text, hits, top_k=8)
+
+            # Step 5: 结构化差异比对 (Structural Comparison)（经 tracked 代理真实计数）
+            if cfg.use_structural_comparison and comp_engine is not None and hits:
+                top_candidate = hits[0]
+                simulated_clause = {
+                    "clause_id": f"sim_{q.qid}",
+                    "clause_category": q.expected_category,
+                    "original_text": q.query,
+                }
+                comp = comp_engine.compare_clauses(simulated_clause, top_candidate)
+                hits[0]["comparison_conclusion"] = comp.conclusion
+
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            latencies.append(elapsed_ms)
+
+            j = judge_hits(q, hits)
+            rows.append(
+                {
+                    "qid": q.qid,
+                    "first_relevant": j["first_relevant"],
+                    "ndcg": j["ndcg"],
+                    "avoided_hard_negatives": j["avoided_hard_negatives"],
+                    "hits": hits,
+                }
             )
-        else:
-            q_text = q.query
-
-        # Step 2: 检索执行
-        hits = st.search(q_text, top_k=8, approved_only=True, rerank=False)
-        call_tracker.search_calls += 1
-
-        # Step 3: 层级扩展 (Parent-Child)
-        if cfg.use_parent_child and knowledge_tree is not None:
-            expanded_hits = []
-            for h in hits:
-                cid = str(h.get("clause_id") or "")
-                exp = knowledge_tree.expand_parent_child_context(cid)
-                call_tracker.hierarchy_expansions += 1
-                if exp.get("expanded_text"):
-                    h_copy = dict(h)
-                    h_copy["text"] = exp["expanded_text"]
-                    expanded_hits.append(h_copy)
-                else:
-                    expanded_hits.append(h)
-            hits = expanded_hits
-
-        # Step 4: 语义精排
-        if cfg.reranker_type in ("CROSS_ENCODER", "MOCK_CROSS_ENCODER_TEST"):
-            call_tracker.cross_encoder_calls += 1
-        hits = reranker.rerank(q_text, hits, top_k=8)
-
-        # Step 5: 结构化差异比对 (Structural Comparison)
-        if cfg.use_structural_comparison and comp_engine is not None and hits:
-            top_candidate = hits[0]
-            simulated_clause = {
-                "clause_id": f"sim_{q.qid}",
-                "clause_category": q.expected_category,
-                "original_text": q.query,
-            }
-            comp = comp_engine.compare_clauses(simulated_clause, top_candidate)
-            call_tracker.structural_comparison_calls += 1
-            # 记录差异分析结果
-            hits[0]["comparison_conclusion"] = comp.conclusion
-
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        latencies.append(elapsed_ms)
-
-        j = judge_hits(q, hits)
-        rows.append(
-            {
-                "qid": q.qid,
-                "first_relevant": j["first_relevant"],
-                "ndcg": j["ndcg"],
-                "avoided_hard_negatives": j["avoided_hard_negatives"],
-                "hits": hits,
-            }
-        )
+    finally:
+        # 恢复包装方法，避免污染外部实例
+        st.search = orig_search  # type: ignore[assignment]
 
     # 计算指标
     metrics: dict[str, float] = {}
@@ -333,6 +406,8 @@ def evaluate_configuration(
     return {
         "config_name": cfg.name,
         "status": "EXECUTED",
+        "is_contract_test": is_contract,
+        "execution_mode": "CONTRACT_TEST_MOCK" if is_contract else "PRODUCTION_REAL",
         "metrics": metrics,
         "component_trace": call_tracker.to_dict(),
         "latency_p50_ms": round(p50, 2),

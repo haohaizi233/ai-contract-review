@@ -129,13 +129,32 @@ install_observability_and_error_handlers(app)
 
 @app.middleware("http")
 async def capture_request_body_middleware(request: Request, call_next):
-    MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB 有界读取
-    body = await request.body()
-    if len(body) > MAX_BODY_SIZE:
-        return JSONResponse(
-            status_code=413,
-            content={"error": "file_too_large", "detail": "Request Entity Too Large"},
-        )
+    max_limit = config.MAX_REQUEST_BODY_BYTES
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max_limit:
+                return JSONResponse(
+                    status_code=413,
+                    content={"error": "file_too_large", "detail": "Request Entity Too Large"},
+                )
+        except ValueError:
+            pass
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > max_limit:
+            return JSONResponse(
+                status_code=413,
+                content={"error": "file_too_large", "detail": "Request Entity Too Large"},
+            )
+        chunks.append(chunk)
+
+    body = b"".join(chunks)
+    request._body = body
+    request.scope["_body"] = body
     response = await call_next(request)
     return response
 
@@ -257,7 +276,7 @@ def get_metrics(request: Request, fmt: str = Query(default="json", alias="format
 
 
 @shared_router.post("/contract-kb/import", tags=["knowledge-base"])
-def import_templates(request: Request):
+def import_templates(request: Request, refresh: bool = Query(default=False)):
     p = _principal(request)
     st = get_storage()
     from .ingest import scan_and_import
@@ -266,20 +285,61 @@ def import_templates(request: Request):
     raw = result.pop("_raw")
     inserted, skipped = 0, 0
     for d in raw:
-        _, is_new = st.upsert_document(d.to_dict(), tenant=p.tenant_id)
+        _, is_new = st.upsert_document(
+            d.to_dict(), tenant=p.tenant_id, refresh_classification=refresh
+        )
         inserted += 1 if is_new else 0
         skipped += 0 if is_new else 1
     st.log_audit(
         p.user_id,
         "import",
         config.TEMPLATE_DIR.name,
-        f"inserted={inserted} skipped={skipped}",
+        f"inserted={inserted} skipped={skipped} refresh={refresh}",
     )
     return {
         "scanned": result["file_count"],
         "inserted": inserted,
         "skipped_idempotent": skipped,
         "failures": result["failures"],
+    }
+
+
+@shared_router.post("/contract-kb/refresh", tags=["knowledge-base"])
+def refresh_classifications(request: Request):
+    """刷新存量模板分类元数据与检索索引（不覆盖正文与已有审批状态）。"""
+    p = _principal(request)
+    st = get_storage()
+    from .ingest import scan_and_import
+
+    result = scan_and_import(config.TEMPLATE_DIR)
+    raw = result.pop("_raw")
+    refreshed, skipped = 0, 0
+    for d in raw:
+        doc_dict = d.to_dict()
+        doc_row = st.find_document_by_hash(doc_dict["sha256"], tenant_id=p.tenant_id)
+        if doc_row:
+            ok = st.update_document_classification(
+                document_id=doc_row["document_id"],
+                category=doc_dict.get("category", ""),
+                subtype=doc_dict.get("subtype", ""),
+                tenant_id=p.tenant_id,
+            )
+            if ok:
+                refreshed += 1
+            else:
+                skipped += 1
+        else:
+            skipped += 1
+    st.log_audit(
+        p.user_id,
+        "refresh_classification",
+        config.TEMPLATE_DIR.name,
+        f"refreshed={refreshed} skipped={skipped}",
+    )
+    return {
+        "scanned": result["file_count"],
+        "refreshed": refreshed,
+        "skipped": skipped,
     }
 
 

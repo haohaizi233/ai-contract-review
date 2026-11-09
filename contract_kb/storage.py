@@ -46,6 +46,7 @@ __all__ = [
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS documents (
     document_id TEXT PRIMARY KEY,
+    template_id TEXT,
     source_file TEXT, source_hash TEXT, source_version TEXT,
     tenant_id TEXT NOT NULL DEFAULT 'default', business_category TEXT, contract_subtype TEXT,
     document_type TEXT, imported_at REAL, status TEXT, raw_meta TEXT,
@@ -433,6 +434,79 @@ class Storage:
             self.conn.execute(
                 "ALTER TABLE documents ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"
             )
+        if "template_id" not in doc_cols:
+            self.conn.execute("ALTER TABLE documents ADD COLUMN template_id TEXT")
+            self.conn.execute(
+                "UPDATE documents SET template_id = document_id WHERE template_id IS NULL OR template_id = ''"
+            )
+
+        # 检查并迁移旧版 SQLite 数据库全局 source_hash UNIQUE 约束至 (tenant_id, source_hash)
+        needs_doc_rebuild = False
+        try:
+            indexes = self.conn.execute("PRAGMA index_list('documents')").fetchall()
+            for idx in indexes:
+                if idx[2] == 1:  # unique
+                    idx_name = idx[1]
+                    cols = [
+                        r[2]
+                        for r in self.conn.execute(
+                            f"PRAGMA index_info('{idx_name}')"
+                        ).fetchall()
+                    ]
+                    if cols == ["source_hash"]:
+                        needs_doc_rebuild = True
+                        break
+        except Exception:
+            pass
+
+        if needs_doc_rebuild:
+            self.conn.execute("SAVEPOINT sp_doc_schema_migrate")
+            try:
+                self.conn.execute(
+                    "UPDATE documents SET tenant_id='default' WHERE tenant_id IS NULL OR trim(tenant_id)=''"
+                )
+                self.conn.execute(
+                    """
+                    CREATE TABLE documents_new (
+                        document_id TEXT PRIMARY KEY,
+                        template_id TEXT,
+                        source_file TEXT, source_hash TEXT, source_version TEXT,
+                        tenant_id TEXT NOT NULL DEFAULT 'default', business_category TEXT, contract_subtype TEXT,
+                        document_type TEXT, imported_at REAL, status TEXT, raw_meta TEXT,
+                        revision INTEGER NOT NULL DEFAULT 1,
+                        UNIQUE (tenant_id, source_hash)
+                    )
+                    """
+                )
+                cols_now = self._table_cols("documents")
+                has_tpl = "template_id" in cols_now
+                has_rev = "revision" in cols_now
+                tpl_expr = "template_id" if has_tpl else "document_id"
+                rev_expr = "revision" if has_rev else "1"
+                self.conn.execute(
+                    f"""
+                    INSERT INTO documents_new (
+                        document_id, template_id, source_file, source_hash, source_version,
+                        tenant_id, business_category, contract_subtype, document_type,
+                        imported_at, status, raw_meta, revision
+                    )
+                    SELECT
+                        document_id, {tpl_expr}, source_file, source_hash, source_version,
+                        COALESCE(NULLIF(tenant_id, ''), 'default'), business_category, contract_subtype, document_type,
+                        imported_at, status, raw_meta, {rev_expr}
+                    FROM documents
+                    """
+                )
+                self.conn.execute("DROP TABLE documents")
+                self.conn.execute("ALTER TABLE documents_new RENAME TO documents")
+                self.conn.execute("RELEASE SAVEPOINT sp_doc_schema_migrate")
+            except Exception:
+                self.conn.execute("ROLLBACK TO SAVEPOINT sp_doc_schema_migrate")
+                raise
+
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_docs_template_tenant ON documents(template_id, tenant_id)"
+        )
         clause_cols = self._table_cols("clauses")
         if "revision" not in clause_cols:
             self.conn.execute(
@@ -569,7 +643,12 @@ class Storage:
             self.conn.close()
 
     # ---------- 导入（幂等 + 增量 + 原子事务） ----------
-    def upsert_document(self, doc: dict, tenant: str | None = None) -> tuple[str, bool]:
+    def upsert_document(
+        self,
+        doc: dict,
+        tenant: str | None = None,
+        refresh_classification: bool = False,
+    ) -> tuple[str, bool]:
         """按 source_hash 幂等：显式传入 tenant 时按 (tenant_id, source_hash) 隔离判重；单租户默认调用按全局哈希判重。"""
         effective_tenant = tenant if tenant is not None else config.TENANT_ID
         with self._lock:
@@ -585,36 +664,74 @@ class Storage:
                 )
             row = cur.fetchone()
             if row:
+                if refresh_classification:
+                    new_cat = doc.get("category", "")
+                    new_sub = doc.get("subtype", "")
+                    if new_cat or new_sub:
+                        self.update_document_classification(
+                            document_id=row["document_id"],
+                            category=new_cat,
+                            subtype=new_sub,
+                            tenant_id=effective_tenant,
+                        )
                 return row["document_id"], False
 
             base_did = doc.get("template_id") or doc.get("document_id") or "doc_unknown"
+            template_id = doc.get("template_id") or base_did
+
+            existing_versions = self.conn.execute(
+                "SELECT document_id, source_version, imported_at, status FROM documents WHERE (template_id=? OR document_id=?) AND tenant_id=? ORDER BY imported_at ASC",
+                (template_id, template_id, effective_tenant),
+            ).fetchall()
+
             existing_id = self.conn.execute(
                 "SELECT tenant_id FROM documents WHERE document_id=?",
                 (base_did,),
             ).fetchone()
-            did = (
-                f"{effective_tenant}:{base_did}"
-                if existing_id and existing_id["tenant_id"] != effective_tenant
-                else base_did
-            )
-            prefix_clause = did != base_did
+
+            if existing_versions:
+                if doc.get("document_id") and not self.conn.execute(
+                    "SELECT 1 FROM documents WHERE document_id=?", (doc["document_id"],)
+                ).fetchone():
+                    did = doc["document_id"]
+                else:
+                    ver_num = len(existing_versions) + 1
+                    ver_tag = doc.get("template_version") or f"v{ver_num}"
+                    did = f"{base_did}_{ver_tag}"
+                    if self.conn.execute(
+                        "SELECT 1 FROM documents WHERE document_id=?", (did,)
+                    ).fetchone():
+                        did = f"{base_did}_{ver_tag}_{doc['sha256'][:8]}"
+                prefix_clause = True
+                doc_status = "PENDING_REVIEW"
+                source_ver = doc.get("template_version") or f"v{len(existing_versions) + 1}"
+            else:
+                if existing_id and existing_id["tenant_id"] != effective_tenant:
+                    did = f"{effective_tenant}:{base_did}"
+                    prefix_clause = True
+                else:
+                    did = doc.get("document_id") or base_did
+                    prefix_clause = did != base_did
+                doc_status = doc.get("status", "ACTIVE")
+                source_ver = doc.get("template_version", "v1")
 
             try:
                 self.conn.execute(
-                    "INSERT INTO documents (document_id, source_file, source_hash, source_version, "
+                    "INSERT INTO documents (document_id, template_id, source_file, source_hash, source_version, "
                     "tenant_id, business_category, contract_subtype, document_type, imported_at, "
-                    "status, raw_meta) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    "status, raw_meta) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         did,
+                        template_id,
                         doc["source_file"],
                         doc["sha256"],
-                        doc.get("template_version", "v1"),
+                        source_ver,
                         effective_tenant,
                         doc.get("category", ""),
                         doc.get("subtype", ""),
                         doc.get("document_type", "contract_template"),
                         time.time(),
-                        doc.get("status", "ACTIVE"),
+                        doc_status,
                         json.dumps(
                             {
                                 "clause_count": doc.get("clause_count", 0),
@@ -627,18 +744,22 @@ class Storage:
                     ),
                 )
                 for c in doc.get("clauses", []):
-                    cid = (
-                        f"{effective_tenant}:{c['clause_id']}"
-                        if prefix_clause
-                        else c["clause_id"]
-                    )
-                    # 严格知识治理：导入绝不自动提升审批状态！
-                    # 未指定审批状态时统一默认为 PENDING_REVIEW；
-                    # 文档是否 ACTIVE、是否为模板、is_company_standard=True 均不代表法务已完成审批！
-                    # 严格知识治理：普通数据导入绝不自动提升审批状态！
-                    # 数据导入仅产生知识候选，不授予知识权威；无论外部传入何种参数，普通导入一律强制置为 PENDING_REVIEW。
-                    clause_appr = "PENDING_REVIEW"
+                    raw_cid = c["clause_id"]
+                    if existing_versions:
+                        cid = f"{did}:{raw_cid}"
+                    elif prefix_clause:
+                        cid = f"{effective_tenant}:{raw_cid}"
+                    else:
+                        existing_clause = self.conn.execute(
+                            "SELECT document_id FROM clauses WHERE clause_id=?",
+                            (raw_cid,),
+                        ).fetchone()
+                        if existing_clause and existing_clause["document_id"] != did:
+                            cid = f"{did}:{raw_cid}"
+                        else:
+                            cid = raw_cid
 
+                    clause_appr = "PENDING_REVIEW"
                     is_template_doc = doc.get("document_type") == "contract_template"
                     clause_ktype = c.get("knowledge_type") or (
                         "TEMPLATE" if is_template_doc else "HISTORICAL_CASE"
@@ -649,7 +770,7 @@ class Storage:
                         "is_company_standard, approval_status, source_node_ids, knowledge_type, "
                         "effective_time, revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1) "
                         "ON CONFLICT(clause_id) DO UPDATE SET "
-                        "document_id=excluded.document_id, clause_number=excluded.clause_number, "
+                        "clause_number=excluded.clause_number, "
                         "clause_category=excluded.clause_category, clause_subcategory=excluded.clause_subcategory, "
                         "original_text=excluded.original_text, normalized_summary=excluded.normalized_summary, "
                         "source_node_ids=excluded.source_node_ids, effective_time=excluded.effective_time",
@@ -811,25 +932,101 @@ class Storage:
             self._commit()
             self.rebuild_index()
 
-    def rollback_to_version(self, document_id: str, source_hash: str) -> bool:
-        """回滚：旧哈希仍保留在库（文档版本化），重新激活指定版本并重建索引。"""
+    def rollback_to_version(
+        self, document_id: str, source_hash: str, tenant_id: str | None = None
+    ) -> bool:
+        """回滚：旧哈希仍保留在库（文档版本化），重新激活指定版本并重建索引。限定指定租户及同一模板版本链。"""
+        effective_tenant = tenant_id if tenant_id is not None else config.TENANT_ID
         with self._lock:
             row = self.conn.execute(
-                "SELECT * FROM documents WHERE source_hash=?", (source_hash,)
+                "SELECT * FROM documents WHERE source_hash=? AND tenant_id=?",
+                (source_hash, effective_tenant),
             ).fetchone()
             if not row:
+                row = self.conn.execute(
+                    "SELECT * FROM documents WHERE document_id=? AND tenant_id=?",
+                    (document_id, effective_tenant),
+                ).fetchone()
+            if not row:
                 return False
-            self.conn.execute(
-                "UPDATE documents SET status='ACTIVE' WHERE source_hash=?",
-                (source_hash,),
+
+            target_did = row["document_id"]
+            tpl_id = (
+                row["template_id"]
+                if "template_id" in row.keys() and row["template_id"]
+                else target_did
             )
             self.conn.execute(
-                "UPDATE documents SET status='SUPERSEDED' WHERE document_id<>? AND source_file=? AND tenant_id=?",
-                (row["document_id"], row["source_file"], row["tenant_id"]),
+                "UPDATE documents SET status='ACTIVE' WHERE document_id=? AND tenant_id=?",
+                (target_did, effective_tenant),
+            )
+            self.conn.execute(
+                "UPDATE documents SET status='SUPERSEDED' WHERE (template_id=? OR document_id=?) AND document_id<>? AND tenant_id=?",
+                (tpl_id, tpl_id, target_did, effective_tenant),
             )
             self._commit()
             self.rebuild_index()
             return True
+
+    def update_document_classification(
+        self,
+        document_id: str,
+        category: str,
+        subtype: str,
+        tenant_id: str | None = None,
+        force: bool = False,
+    ) -> bool:
+        """原子更新文档及其分块索引中的分类元数据（不修改条款文本、ID 与已有审批状态）。"""
+        effective_tenant = tenant_id if tenant_id is not None else config.TENANT_ID
+        with self._lock:
+            doc = self.get_document(document_id, tenant_id=effective_tenant)
+            if not doc:
+                return False
+
+            raw_meta = {}
+            if doc.get("raw_meta"):
+                try:
+                    raw_meta = json.loads(doc["raw_meta"])
+                except Exception:
+                    raw_meta = {}
+            if not force and raw_meta.get("manual_classification_override"):
+                return False
+
+            old_cat = doc.get("business_category") or ""
+            old_sub = doc.get("contract_subtype") or ""
+            if old_cat == category and old_sub == subtype:
+                return False
+
+            try:
+                self.conn.execute(
+                    "UPDATE documents SET business_category=?, contract_subtype=? WHERE document_id=? AND tenant_id=?",
+                    (category, subtype, document_id, effective_tenant),
+                )
+                self.conn.execute(
+                    "UPDATE embeddings SET business_category=?, contract_subtype=? WHERE document_id=?",
+                    (category, subtype, document_id),
+                )
+                now_ts = time.time()
+                detail = json.dumps(
+                    {
+                        "document_id": document_id,
+                        "old_category": old_cat,
+                        "old_subtype": old_sub,
+                        "new_category": category,
+                        "new_subtype": subtype,
+                        "tenant_id": effective_tenant,
+                    },
+                    ensure_ascii=False,
+                )
+                self.conn.execute(
+                    "INSERT INTO audit_log (at, actor, action, target, detail) VALUES (?,?,?,?,?)",
+                    (now_ts, "system", "update_document_classification", document_id, detail),
+                )
+                self._commit()
+                return True
+            except Exception:
+                self._rollback()
+                raise
 
     def log_audit(self, actor: str, action: str, target: str, detail: str = "") -> None:
         safe_detail = redact_sensitive_text(detail, max_len=1000)
@@ -933,9 +1130,9 @@ class Storage:
                 raise ValueError(
                     f"文档不存在或跨租户未授权：{document_id} (tenant={tenant_id})"
                 )
-            if doc.get("status") != "ACTIVE":
+            if doc.get("status") not in ("ACTIVE", "PENDING", "PENDING_REVIEW"):
                 raise ValueError(
-                    f"仅 ACTIVE 状态文档允许审批知识版本，当前状态：{doc.get('status')}"
+                    f"仅 ACTIVE 或 PENDING 状态文档允许审批知识版本，当前状态：{doc.get('status')}"
                 )
 
             current_rev = int(doc.get("revision") or 1)
@@ -944,9 +1141,10 @@ class Storage:
                     f"知识版本审批冲突：预期 revision={expected_revision}，当前数据库 revision={current_rev}"
                 )
 
+            tpl_id = doc.get("template_id") or doc.get("document_id")
             if expected_revision is not None:
                 cur = self.conn.execute(
-                    "UPDATE documents SET revision = revision + 1 WHERE document_id=? AND tenant_id=? AND revision=?",
+                    "UPDATE documents SET status='ACTIVE', revision = revision + 1 WHERE document_id=? AND tenant_id=? AND revision=?",
                     (document_id, tenant_id, current_rev),
                 )
                 if cur.rowcount == 0:
@@ -955,8 +1153,14 @@ class Storage:
                     )
             else:
                 self.conn.execute(
-                    "UPDATE documents SET revision = revision + 1 WHERE document_id=? AND tenant_id=?",
+                    "UPDATE documents SET status='ACTIVE', revision = revision + 1 WHERE document_id=? AND tenant_id=?",
                     (document_id, tenant_id),
+                )
+
+            if tpl_id:
+                self.conn.execute(
+                    "UPDATE documents SET status='SUPERSEDED' WHERE (template_id=? OR document_id=?) AND document_id<>? AND tenant_id=? AND status='ACTIVE'",
+                    (tpl_id, tpl_id, document_id, tenant_id),
                 )
             new_revision = current_rev + 1
 

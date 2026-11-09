@@ -201,7 +201,27 @@ class TrustedHeaderAuth:
                 # (1) 读取真实请求正文并校验正文摘要 SHA-256
                 raw_body = getattr(request, "_body", None)
                 if raw_body is None:
-                    raw_body = request.scope.get("_body", b"")
+                    raw_body = request.scope.get("_body", None)
+
+                if raw_body is None:
+                    # 鉴权无法获得可靠正文摘要时必须拒绝请求，严禁把“无法取得正文”当成合法空正文
+                    cl = request.headers.get("content-length", "").strip()
+                    te = request.headers.get("transfer-encoding", "").strip()
+                    ct = request.headers.get("content-type", "").strip()
+                    if cl == "0":
+                        raw_body = b""
+                    elif (
+                        not cl
+                        and not te
+                        and not ct
+                        and request.method
+                        in ("GET", "HEAD", "OPTIONS", "DELETE", "POST", "PUT")
+                    ):
+                        raw_body = b""
+                    else:
+                        raise HTTPException(
+                            401, "无法获取可靠请求正文摘要以完成签名校验"
+                        )
                 real_body_sha = hashlib.sha256(raw_body).hexdigest()
                 header_body_sha = request.headers.get("X-Content-SHA256", "").strip()
                 if not header_body_sha:

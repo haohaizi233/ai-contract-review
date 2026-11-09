@@ -306,7 +306,12 @@ class PgVectorStorage:
             self.conn.close()
 
     # ---------- 导入（幂等 + 原子事务） ----------
-    def upsert_document(self, doc: dict, tenant: str | None = None) -> tuple[str, bool]:
+    def upsert_document(
+        self,
+        doc: dict,
+        tenant: str | None = None,
+        refresh_classification: bool = False,
+    ) -> tuple[str, bool]:
         effective_tenant = tenant if tenant is not None else "default"
         with self._lock:
             try:
@@ -323,6 +328,16 @@ class PgVectorStorage:
                         )
                     row = cur.fetchone()
                     if row:
+                        if refresh_classification:
+                            new_cat = doc.get("category", "")
+                            new_sub = doc.get("subtype", "")
+                            if new_cat or new_sub:
+                                self.update_document_classification(
+                                    document_id=row[0],
+                                    category=new_cat,
+                                    subtype=new_sub,
+                                    tenant_id=effective_tenant,
+                                )
                         self._commit()
                         return row[0], False
 
@@ -331,32 +346,70 @@ class PgVectorStorage:
                         or doc.get("document_id")
                         or "doc_unknown"
                     )
+                    template_id = doc.get("template_id") or base_did
+
+                    cur.execute(
+                        "SELECT document_id, source_version, status FROM documents WHERE (template_id=%s OR document_id=%s) AND tenant_id=%s ORDER BY imported_at ASC",
+                        (template_id, template_id, effective_tenant),
+                    )
+                    existing_versions = cur.fetchall()
+
                     cur.execute(
                         "SELECT tenant_id FROM documents WHERE document_id=%s",
                         (base_did,),
                     )
                     existing_id = cur.fetchone()
-                    did = (
-                        f"{effective_tenant}:{base_did}"
-                        if existing_id and existing_id[0] != effective_tenant
-                        else base_did
-                    )
-                    prefix_clause = did != base_did
+
+                    if existing_versions:
+                        if doc.get("document_id"):
+                            cur.execute(
+                                "SELECT 1 FROM documents WHERE document_id=%s",
+                                (doc["document_id"],),
+                            )
+                            if not cur.fetchone():
+                                did = doc["document_id"]
+                            else:
+                                ver_num = len(existing_versions) + 1
+                                ver_tag = doc.get("template_version") or f"v{ver_num}"
+                                did = f"{base_did}_{ver_tag}"
+                        else:
+                            ver_num = len(existing_versions) + 1
+                            ver_tag = doc.get("template_version") or f"v{ver_num}"
+                            did = f"{base_did}_{ver_tag}"
+                            cur.execute(
+                                "SELECT 1 FROM documents WHERE document_id=%s",
+                                (did,),
+                            )
+                            if cur.fetchone():
+                                did = f"{base_did}_{ver_tag}_{doc['sha256'][:8]}"
+                        prefix_clause = True
+                        doc_status = "PENDING_REVIEW"
+                        source_ver = doc.get("template_version") or f"v{len(existing_versions) + 1}"
+                    else:
+                        if existing_id and existing_id[0] != effective_tenant:
+                            did = f"{effective_tenant}:{base_did}"
+                            prefix_clause = True
+                        else:
+                            did = doc.get("document_id") or base_did
+                            prefix_clause = did != base_did
+                        doc_status = doc.get("status", "ACTIVE")
+                        source_ver = doc.get("template_version", "v1")
 
                     cur.execute(
-                        "INSERT INTO documents (document_id, source_file, source_hash, source_version,"
+                        "INSERT INTO documents (document_id, template_id, source_file, source_hash, source_version,"
                         "tenant_id, business_category, contract_subtype, document_type, status, raw_meta)"
-                        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                         (
                             did,
+                            template_id,
                             doc["source_file"],
                             doc["sha256"],
-                            doc.get("template_version", "v1"),
+                            source_ver,
                             effective_tenant,
                             doc.get("category", ""),
                             doc.get("subtype", ""),
                             doc.get("document_type", "contract_template"),
-                            doc.get("status", "ACTIVE"),
+                            doc_status,
                             json.dumps(
                                 {
                                     "clause_count": doc.get("clause_count", 0),
@@ -369,18 +422,30 @@ class PgVectorStorage:
                         ),
                     )
                     for c in doc.get("clauses", []):
-                        cid = (
-                            f"{effective_tenant}:{c['clause_id']}"
-                            if prefix_clause
-                            else c["clause_id"]
-                        )
+                        raw_cid = c["clause_id"]
+                        if existing_versions:
+                            cid = f"{did}:{raw_cid}"
+                        elif prefix_clause:
+                            cid = f"{effective_tenant}:{raw_cid}"
+                        else:
+                            cur.execute(
+                                "SELECT document_id FROM clauses WHERE clause_id=%s",
+                                (raw_cid,),
+                            )
+                            ex_clause = cur.fetchone()
+                            if ex_clause and ex_clause[0] != did:
+                                cid = f"{did}:{raw_cid}"
+                            else:
+                                cid = raw_cid
                         cur.execute(
                             "INSERT INTO clauses (clause_id, document_id, clause_number, clause_category,"
                             "clause_subcategory, original_text, normalized_summary, is_company_standard,"
                             "approval_status, source_node_ids, knowledge_type)"
                             " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
-                            " ON CONFLICT (clause_id) DO UPDATE SET document_id=EXCLUDED.document_id,"
-                            " original_text=EXCLUDED.original_text, normalized_summary=EXCLUDED.normalized_summary",
+                            " ON CONFLICT (clause_id) DO UPDATE SET "
+                            " clause_number=EXCLUDED.clause_number, clause_category=EXCLUDED.clause_category, "
+                            " clause_subcategory=EXCLUDED.clause_subcategory, original_text=EXCLUDED.original_text, "
+                            " normalized_summary=EXCLUDED.normalized_summary",
                             (
                                 cid,
                                 did,
@@ -489,29 +554,97 @@ class PgVectorStorage:
                 self._rollback()
                 raise
 
-    def rollback_to_version(self, document_id: str, source_hash: str) -> bool:
+    def rollback_to_version(
+        self, document_id: str, source_hash: str, tenant_id: str | None = None
+    ) -> bool:
+        effective_tenant = tenant_id if tenant_id is not None else "default"
         with self._lock:
             try:
                 with self.conn.cursor() as cur:
                     cur.execute(
-                        "SELECT source_file, tenant_id FROM documents WHERE source_hash=%s",
-                        (source_hash,),
+                        "SELECT document_id, template_id, source_file, tenant_id FROM documents WHERE source_hash=%s AND tenant_id=%s",
+                        (source_hash, effective_tenant),
                     )
                     row = cur.fetchone()
                     if not row:
+                        cur.execute(
+                            "SELECT document_id, template_id, source_file, tenant_id FROM documents WHERE document_id=%s AND tenant_id=%s",
+                            (document_id, effective_tenant),
+                        )
+                        row = cur.fetchone()
+                    if not row:
                         self._commit()
                         return False
+
+                    target_did = row[0]
+                    tpl_id = row[1] or target_did
+
                     cur.execute(
-                        "UPDATE documents SET status='ACTIVE' WHERE source_hash=%s",
-                        (source_hash,),
+                        "UPDATE documents SET status='ACTIVE' WHERE document_id=%s AND tenant_id=%s",
+                        (target_did, effective_tenant),
                     )
                     cur.execute(
                         "UPDATE documents SET status='SUPERSEDED' "
-                        "WHERE source_file=%s AND source_hash<>%s AND tenant_id=%s",
-                        (row[0], source_hash, row[1]),
+                        "WHERE (template_id=%s OR document_id=%s) AND document_id<>%s AND tenant_id=%s",
+                        (tpl_id, tpl_id, target_did, effective_tenant),
                     )
                 self._commit()
                 self.rebuild_index()
+                return True
+            except Exception:
+                self._rollback()
+                raise
+
+    def update_document_classification(
+        self,
+        document_id: str,
+        category: str,
+        subtype: str,
+        tenant_id: str | None = None,
+        force: bool = False,
+    ) -> bool:
+        """原子更新文档及其分块索引中的分类元数据（PostgreSQL）。"""
+        effective_tenant = tenant_id if tenant_id is not None else "default"
+        with self._lock:
+            try:
+                doc = self.get_document(document_id, tenant_id=effective_tenant)
+                if not doc:
+                    return False
+
+                raw_meta = {}
+                if doc.get("raw_meta"):
+                    try:
+                        raw_meta = (
+                            json.loads(doc["raw_meta"])
+                            if isinstance(doc["raw_meta"], str)
+                            else doc["raw_meta"]
+                        )
+                    except Exception:
+                        raw_meta = {}
+                if not force and raw_meta.get("manual_classification_override"):
+                    return False
+
+                old_cat = doc.get("business_category") or ""
+                old_sub = doc.get("contract_subtype") or ""
+                if old_cat == category and old_sub == subtype:
+                    return False
+
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE documents SET business_category=%s, contract_subtype=%s WHERE document_id=%s AND tenant_id=%s",
+                        (category, subtype, document_id, effective_tenant),
+                    )
+                    cur.execute(
+                        "UPDATE embeddings SET business_category=%s, contract_subtype=%s WHERE document_id=%s",
+                        (category, subtype, document_id),
+                    )
+                self.log_audit(
+                    "system",
+                    "update_document_classification",
+                    document_id,
+                    f"from {old_cat}/{old_sub} to {category}/{subtype}",
+                )
+                self._commit()
                 return True
             except Exception:
                 self._rollback()
@@ -640,9 +773,9 @@ class PgVectorStorage:
                     raise ValueError(
                         f"文档不存在或跨租户未授权：{document_id} (tenant={tenant_id})"
                     )
-                if doc.get("status") != "ACTIVE":
+                if doc.get("status") not in ("ACTIVE", "PENDING", "PENDING_REVIEW"):
                     raise ValueError(
-                        f"仅 ACTIVE 状态文档允许审批知识版本，当前状态：{doc.get('status')}"
+                        f"仅 ACTIVE 或 PENDING 状态文档允许审批知识版本，当前状态：{doc.get('status')}"
                     )
 
                 current_rev = int(doc.get("revision") or 1)
@@ -654,10 +787,11 @@ class PgVectorStorage:
                         f"知识版本审批冲突：预期 revision={expected_revision}，当前数据库 revision={current_rev}"
                     )
 
+                tpl_id = doc.get("template_id") or doc.get("document_id")
                 with self.conn.cursor() as cur:
                     if expected_revision is not None:
                         cur.execute(
-                            "UPDATE documents SET revision = revision + 1 WHERE document_id=%s AND tenant_id=%s AND revision=%s",
+                            "UPDATE documents SET status='ACTIVE', revision = revision + 1 WHERE document_id=%s AND tenant_id=%s AND revision=%s",
                             (document_id, tenant_id, current_rev),
                         )
                         if cur.rowcount == 0:
@@ -666,8 +800,13 @@ class PgVectorStorage:
                             )
                     else:
                         cur.execute(
-                            "UPDATE documents SET revision = revision + 1 WHERE document_id=%s AND tenant_id=%s",
+                            "UPDATE documents SET status='ACTIVE', revision = revision + 1 WHERE document_id=%s AND tenant_id=%s",
                             (document_id, tenant_id),
+                        )
+                    if tpl_id:
+                        cur.execute(
+                            "UPDATE documents SET status='SUPERSEDED' WHERE (template_id=%s OR document_id=%s) AND document_id<>%s AND tenant_id=%s AND status='ACTIVE'",
+                            (tpl_id, tpl_id, document_id, tenant_id),
                         )
                     new_revision = current_rev + 1
 
