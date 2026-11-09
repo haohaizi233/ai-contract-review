@@ -394,7 +394,9 @@ def _enhance_diff_tables(
 
 
 def build_full_contract_diff(
-    docx_path: str | Path, forced_template_id: str | None = None
+    docx_path: str | Path,
+    forced_template_id: str | None = None,
+    storage: Any = None,
 ) -> dict[str, Any]:
     """执行整版合同对齐，生成左右对比标红与全量法务批注数据。"""
     docx_path = Path(docx_path)
@@ -409,7 +411,12 @@ def build_full_contract_diff(
     if rec is None:
         raise RuntimeError(f"待审文档解析失败: {err}")
 
-    st = create_storage()
+    should_close = False
+    if storage is not None:
+        st = storage
+    else:
+        st = create_storage()
+        should_close = True
     try:
         matched_tpl = None
         if forced_template_id:
@@ -426,7 +433,8 @@ def build_full_contract_diff(
 
         tpl_clauses = st.get_document_clauses(matched_tpl["document_id"])
     finally:
-        st.close()
+        if should_close:
+            st.close()
 
     rev_clauses = rec.clauses or []
 
