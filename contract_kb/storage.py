@@ -585,6 +585,12 @@ class Storage:
                 )
             row = cur.fetchone()
             if row:
+                if row["status"] != "ACTIVE":
+                    self.conn.execute(
+                        "UPDATE documents SET status='ACTIVE' WHERE document_id=?",
+                        (row["document_id"],),
+                    )
+                    self._commit()
                 return row["document_id"], False
 
             base_did = doc.get("template_id") or doc.get("document_id") or "doc_unknown"
@@ -603,7 +609,13 @@ class Storage:
                 self.conn.execute(
                     "INSERT INTO documents (document_id, source_file, source_hash, source_version, "
                     "tenant_id, business_category, contract_subtype, document_type, imported_at, "
-                    "status, raw_meta) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    "status, raw_meta) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(document_id) DO UPDATE SET "
+                    "source_file=excluded.source_file, source_hash=excluded.source_hash, "
+                    "source_version=excluded.source_version, business_category=excluded.business_category, "
+                    "contract_subtype=excluded.contract_subtype, document_type=excluded.document_type, "
+                    "imported_at=excluded.imported_at, status=excluded.status, raw_meta=excluded.raw_meta, "
+                    "revision=documents.revision+1",
                     (
                         did,
                         doc["source_file"],
