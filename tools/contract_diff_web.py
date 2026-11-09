@@ -1212,15 +1212,13 @@ function renderFullDiff(data) {
     friendlyDocTitle = '《国内专利服务合同（年费缴纳）》送审修改稿（保密义务被删）';
   } else if (rawFileName.includes('驳回复审')) {
     friendlyDocTitle = '《商标驳回复审代理协议》送审原稿';
+  } else if (rawFileName.startsWith('mut_')) {
+    friendlyDocTitle = '合同送审修改稿';
   }
 
-  // 待审文档标题展示（如果是测试样本，附加原文件名灰色徽章以便追溯）
+  // 待审文档标题展示（面向用户纯净展示规范名称或上传文件名，不暴露内部测试样本文件名）
   const docFileEl = document.getElementById('docFileName');
-  if (friendlyDocTitle !== rawFileName) {
-    docFileEl.innerHTML = `${escapeHtml(friendlyDocTitle)} <span style="font-size:11.5px; color:#64748B; background:#F1F5F9; border:1px solid #E2E8F0; padding:2px 7px; border-radius:4px; font-weight:normal; vertical-align:middle; margin-left:6px;">${escapeHtml(rawFileName)}</span>`;
-  } else {
-    docFileEl.innerText = rawFileName;
-  }
+  docFileEl.innerText = friendlyDocTitle;
 
   // 母本文件名称展示（杜绝显示 16 位底层十六进制 Hash 码，展示真实母本文档名）
   const tplFileName = data.matched_template_name || '标准母本.docx';

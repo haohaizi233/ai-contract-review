@@ -80,6 +80,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--watch-session", action="store_true")
+    parser.add_argument("--retry-errors", default="")
     args = parser.parse_args()
     if args.watch_session:
         return watch_session()
@@ -107,12 +108,21 @@ def main():
     (WORK / "raw").mkdir(exist_ok=True)
     checkpoint = WORK / ("signed_results_" + digest(cookie.encode())[:12] + ".jsonl")
     done = {}
+    latest = {}
     if checkpoint.exists():
         for line in checkpoint.open(encoding="utf8"):
             r = json.loads(line)
+            latest[r["url_hash"]] = r
             if r["status"] in ("restored", "valid_unmatched"):
                 done[r["url_hash"]] = r
     urls = [u for u in urls if digest(u.encode()) not in done]
+    if args.retry_errors:
+        retry_types = set(args.retry_errors.split(","))
+        urls = [
+            u
+            for u in urls
+            if latest.get(digest(u.encode()), {}).get("error_type") in retry_types
+        ]
     if args.limit:
         urls = urls[: args.limit]
     stop = threading.Event()
@@ -129,7 +139,13 @@ def main():
             if src.startswith("data:"):
                 raw = base64.b64decode(src.split(",", 1)[1], validate=True)
             else:
-                assert urllib.parse.urlsplit(url).netloc == parts.netloc
+                source_url = urllib.parse.urlsplit(url)
+                if source_url.netloc != parts.netloc:
+                    if source_url.path.lower() != "/weaver/weaver.file.filedownload":
+                        raise ValueError("unrecognized external image source")
+                    url = urllib.parse.urlunsplit(
+                        source_url._replace(scheme=parts.scheme, netloc=parts.netloc)
+                    )
                 rid = context.get(src)
                 referer = origin + "/wui/index.html"
                 if rid:
@@ -184,7 +200,7 @@ def main():
                             parts_url._replace(query=urllib.parse.urlencode(query))
                         )
                 req = urllib.request.Request(
-                    url,
+                    urllib.parse.quote(url, safe=":/?&=%"),
                     headers={
                         "Cookie": cookie,
                         "User-Agent": "Mozilla/5.0",
