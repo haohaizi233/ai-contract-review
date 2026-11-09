@@ -1,13 +1,22 @@
 # -*- coding: utf-8 -*-
 """合同比对与条款级 Diff 前端可视化服务（Contract Diff Web Visualizer）。
 
-功能：
-1. 交互式 DOCX 拖拽上传与盲审自动识别（无需人工指定模板，自动锁定 78 套母本）；
-2. 双栏并排对照（Side-by-Side）与行内标记（Inline Redline）双模式自由切换；
-3. 法律风控级要素高亮：数值篡改(NUMBER_CHANGE)、期限放宽(DEADLINE_CHANGE)、责任倒置(PARTY_CHANGE)、
-   否定词反转(NEGATION_CHANGE)、义务弱化(OBLIGATION_CHANGE)、条款缺失(MISSING)、客户新增(ADDED)；
-4. 内置真实高危变异用例（快速预审违约金篡改、保密条款偷删、商标驳回复审），一键秒级体验；
-5. 提供单文件独立 HTML 导出与轻量本地 Web 服务（零第三方 npm 依赖，开箱即用）。
+全新升级：
+1. 整版双栏对照（Full-Document Side-by-Side Comparison）：
+   从合同卷头、事项、各条款直到尾部签署页，完整呈现整篇合同阅读排版（A4 纸质排版风格），
+   条款逐行精准水平对齐，支持双栏同步滚动。
+2. 改变的地方加批注（Legal Review Annotations & Margin Callouts）：
+   对所有修改、篡改、删除、新增条款建立独立法务批注卡片；
+   正文中以互动标签 [批注 #XX] 锚定，右侧批注栏同步展现风险等级、母本对比、法律风险剖析与处置建议；
+   支持正文与批注卡片双向点击对焦、高亮脉冲动画与快捷键定位。
+3. 三种视图自由切换：
+   - 整版双栏对照 + 侧边批注（Side-by-Side + Annotations）
+   - 单版正文修订 + 批注引导（Word/WPS 经典审阅模式）
+   - 仅看变更条款（Diff Only Focus）
+4. 交互式审阅流程：
+   支持标记“确认接受”、“存疑待核”、“驳回修改”，实时统计审阅处理进度；
+   支持拖拽上传 DOCX 与快速加载高危实测用例；
+   支持独立离线 HTML 导出与开箱即用。
 
 用法：
   python tools/contract_diff_web.py [--port 8772]
@@ -34,26 +43,26 @@ except Exception:
     pass
 
 from contract_kb import config  # noqa: E402
-from tools.diff_contract import run_diff  # noqa: E402
+from contract_kb.full_diff import build_full_contract_diff  # noqa: E402
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI 合同审查 · 条款级 Diff 与风险透视工作台</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
+<title>AI 合同审查 · 条款级 Diff 与整版比对工作台</title>
 <style>
   :root {
-    --bg: #F8FAFC;
-    --card: #FFFFFF;
+    --bg: #F1F5F9;
+    --card-bg: #FFFFFF;
     --border: #E2E8F0;
-    --border-hover: #CBD5E1;
+    --border-dark: #CBD5E1;
     --text-main: #0F172A;
     --text-muted: #64748B;
     --text-sub: #94A3B8;
     --primary: #2563EB;
     --primary-light: #EFF6FF;
+    --primary-border: #BFDBFE;
     --danger: #DC2626;
     --danger-light: #FEF2F2;
     --danger-border: #FECACA;
@@ -65,224 +74,581 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --success-border: #BBF7D0;
     --purple: #7C3AED;
     --purple-light: #F5F3FF;
+    --purple-border: #DDD6FE;
+    --accent-glow: rgba(37, 99, 235, 0.35);
   }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     background: var(--bg);
     color: var(--text-main);
     line-height: 1.6;
-    padding-bottom: 60px;
+    overflow-x: hidden;
   }
+
+  /* 顶部全局导航栏 */
   .header {
     background: #FFFFFF;
     border-bottom: 1px solid var(--border);
-    padding: 14px 28px;
+    padding: 12px 28px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     position: sticky;
     top: 0;
-    z-index: 50;
-    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    z-index: 100;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
   }
   .brand { display: flex; align-items: center; gap: 12px; }
   .brand-logo {
-    width: 34px; height: 34px; border-radius: 8px;
+    width: 36px; height: 36px; border-radius: 9px;
     background: linear-gradient(135deg, #1E40AF 0%, #3B82F6 100%);
     color: #fff; display: flex; align-items: center; justify-content: center;
-    font-weight: 700; font-size: 16px; box-shadow: 0 2px 4px rgba(37,99,235,0.25);
+    font-weight: 800; font-size: 18px; box-shadow: 0 2px 6px rgba(37,99,235,0.28);
   }
-  .brand-title { font-size: 17px; font-weight: 600; color: #1E293B; }
-  .brand-tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #EEF2F6; color: #475569; font-weight: 500; }
-
-  .container { max-width: 1440px; margin: 24px auto; padding: 0 24px; }
-
-  /* 上传与预设区域 */
-  .control-grid {
-    display: grid;
-    grid-template-columns: 1fr 340px;
-    gap: 20px;
-    margin-bottom: 24px;
+  .brand-title { font-size: 17px; font-weight: 700; color: #1E293B; letter-spacing: -0.3px; }
+  .brand-sub { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+  .brand-tag {
+    font-size: 11px; padding: 2px 8px; border-radius: 999px;
+    background: #EEF2F6; color: #334155; font-weight: 600;
   }
-  .upload-box {
-    background: var(--card);
-    border: 2px dashed #CBD5E1;
+  .header-actions { display: flex; gap: 10px; align-items: center; }
+
+  .btn {
+    padding: 6px 14px; border-radius: 7px; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: all 0.15s ease; display: inline-flex;
+    align-items: center; gap: 6px; border: 1px solid var(--border);
+    background: #FFFFFF; color: #334155;
+  }
+  .btn:hover { background: #F8FAFC; border-color: var(--border-dark); }
+  .btn-primary {
+    background: var(--primary); color: #FFF; border-color: var(--primary);
+  }
+  .btn-primary:hover { background: #1D4ED8; }
+
+  /* 主容器 */
+  .main-wrapper {
+    max-width: 1820px;
+    margin: 16px auto;
+    padding: 0 20px;
+  }
+
+  /* 上传折叠区与实测用例切换 */
+  .upload-panel {
+    background: #FFFFFF;
+    border: 1px solid var(--border);
     border-radius: 12px;
-    padding: 24px 20px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+  }
+  .drop-zone {
+    border: 2px dashed #CBD5E1;
+    border-radius: 10px;
+    padding: 18px;
     text-align: center;
     cursor: pointer;
+    background: #F8FAFC;
     transition: all 0.2s ease;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    min-height: 140px;
   }
-  .upload-box:hover, .upload-box.dragover {
+  .drop-zone:hover, .drop-zone.dragover {
     border-color: var(--primary);
     background: var(--primary-light);
   }
-  .upload-icon { font-size: 28px; margin-bottom: 8px; }
-  .upload-title { font-size: 15px; font-weight: 600; color: #1E293B; margin-bottom: 4px; }
-  .upload-desc { font-size: 12px; color: var(--text-muted); }
+  .drop-icon { font-size: 26px; margin-bottom: 4px; }
+  .drop-title { font-size: 14px; font-weight: 600; color: #1E293B; }
+  .drop-desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
-  .preset-box {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
+  .preset-section {
+    display: flex; flex-direction: column; justify-content: space-between;
   }
-  .preset-title { font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
-  .preset-btn-group { display: flex; flex-direction: column; gap: 8px; }
+  .preset-title {
+    font-size: 12px; font-weight: 700; color: #475569; margin-bottom: 8px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .preset-grid { display: grid; grid-template-columns: 1fr; gap: 6px; }
   .preset-btn {
-    padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border);
+    padding: 7px 12px; border-radius: 6px; border: 1px solid var(--border);
     background: #F8FAFC; color: #334155; font-size: 12px; text-align: left;
-    cursor: pointer; transition: all 0.15s ease; display: flex; justify-content: space-between; align-items: center;
+    cursor: pointer; transition: all 0.15s ease; display: flex;
+    justify-content: space-between; align-items: center;
   }
-  .preset-btn:hover { border-color: var(--primary); background: #EFF6FF; color: var(--primary); }
-  .preset-tag { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: #E2E8F0; color: #475569; }
+  .preset-btn:hover {
+    border-color: var(--primary); background: #EFF6FF; color: var(--primary);
+  }
+  .badge-tag {
+    font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 600;
+  }
+  .badge-tag.danger { background: #FEE2E2; color: #991B1B; }
+  .badge-tag.warning { background: #FEF3C7; color: #92400E; }
+  .badge-tag.success { background: #DCFCE7; color: #15803D; }
 
   /* 状态概览卡片 */
-  .meta-card {
-    background: var(--card);
+  .meta-dashboard {
+    background: #FFFFFF;
     border: 1px solid var(--border);
     border-radius: 12px;
-    padding: 18px 24px;
-    margin-bottom: 24px;
+    padding: 16px 20px;
+    margin-bottom: 14px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.02);
   }
-  .meta-header {
-    display: flex; justify-content: space-between; align-items: flex-start;
-    padding-bottom: 16px; border-bottom: 1px solid #F1F5F9;
+  .meta-top-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding-bottom: 12px; border-bottom: 1px solid #F1F5F9;
   }
-  .doc-name { font-size: 18px; font-weight: 600; color: #0F172A; display: flex; align-items: center; gap: 10px; }
-  .match-badge {
-    padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;
+  .doc-title-box { display: flex; align-items: center; gap: 12px; }
+  .doc-title { font-size: 17px; font-weight: 700; color: #0F172A; }
+  .matched-tag {
+    font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 6px;
     background: #DCFCE7; color: #15803D; border: 1px solid #BBF7D0;
   }
-  .meta-details { display: flex; gap: 24px; margin-top: 10px; font-size: 13px; color: var(--text-muted); }
-  .meta-details strong { color: #334155; }
+  .verdict-banner {
+    font-size: 13px; font-weight: 600; padding: 4px 12px; border-radius: 6px;
+  }
+  .verdict-banner.danger { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+  .verdict-banner.success { background: #DCFCE7; color: #15803D; border: 1px solid #BBF7D0; }
 
-  .stats-strip {
+  .meta-details-strip {
+    display: flex; gap: 24px; margin-top: 10px; font-size: 12px; color: var(--text-muted);
+  }
+  .meta-details-strip strong { color: #1E293B; font-weight: 600; }
+
+  /* 统计徽章栏 */
+  .stats-row {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 12px;
-    margin-top: 16px;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 10px;
+    margin-top: 12px;
   }
-  .stat-pill {
-    padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border);
-    background: #F8FAFC; display: flex; flex-direction: column; gap: 4px;
+  .stat-card {
+    padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: #F8FAFC; display: flex; flex-direction: column; gap: 2px;
   }
-  .stat-pill.danger { background: var(--danger-light); border-color: var(--danger-border); color: var(--danger); }
-  .stat-pill.warning { background: var(--warning-light); border-color: var(--warning-border); color: var(--warning); }
-  .stat-pill.success { background: var(--success-light); border-color: var(--success-border); color: var(--success); }
-  .stat-pill.purple { background: var(--purple-light); border-color: #DDD6FE; color: var(--purple); }
-  .stat-label { font-size: 11px; font-weight: 500; opacity: 0.9; }
-  .stat-value { font-size: 20px; font-weight: 700; }
+  .stat-card.total { background: #EFF6FF; border-color: #BFDBFE; color: #1E40AF; }
+  .stat-card.danger { background: var(--danger-light); border-color: var(--danger-border); color: var(--danger); }
+  .stat-card.missing { background: #FEF3C7; border-color: #FDE68A; color: #92400E; }
+  .stat-card.new { background: var(--purple-light); border-color: var(--purple-border); color: var(--purple); }
+  .stat-card.warning { background: #FFFBEB; border-color: #FDE68A; color: #B45309; }
+  .stat-card.progress { background: #F0FDF4; border-color: #BBF7D0; color: #15803D; }
+  .stat-card-title { font-size: 11px; font-weight: 600; opacity: 0.9; }
+  .stat-card-val { font-size: 19px; font-weight: 800; }
 
-  /* 视图切换与过滤器 */
-  .toolbar {
-    display: flex; justify-content: space-between; align-items: center;
+  /* 固定操作控制条 */
+  .controls-bar {
+    position: sticky;
+    top: 61px;
+    z-index: 90;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 16px;
     margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.04);
   }
-  .filter-group { display: flex; gap: 8px; }
-  .filter-chip {
-    padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border);
-    background: #FFF; font-size: 12px; color: #475569; cursor: pointer;
-    transition: all 0.15s ease; font-weight: 500;
-  }
-  .filter-chip.active { background: #1E293B; color: #FFF; border-color: #1E293B; }
-
+  .control-left-group { display: flex; align-items: center; gap: 14px; }
   .view-switch {
     display: flex; background: #E2E8F0; padding: 2px; border-radius: 8px;
   }
-  .switch-btn {
-    padding: 4px 12px; font-size: 12px; font-weight: 600; border-radius: 6px;
+  .view-btn {
+    padding: 5px 14px; font-size: 12px; font-weight: 600; border-radius: 6px;
     border: none; background: transparent; color: #64748B; cursor: pointer;
+    transition: all 0.15s ease;
   }
-  .switch-btn.active { background: #FFF; color: #0F172A; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+  .view-btn.active {
+    background: #FFF; color: #0F172A; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
 
-  /* 对比列表 */
-  .diff-table-container {
-    background: var(--card);
+  .nav-group { display: flex; align-items: center; gap: 6px; }
+  .nav-btn {
+    padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border);
+    background: #FFF; font-size: 12px; font-weight: 600; color: #334155;
+    cursor: pointer;
+  }
+  .nav-btn:hover { background: #F1F5F9; border-color: var(--border-dark); }
+  .nav-indicator { font-size: 12px; font-weight: 700; color: #0F172A; min-width: 90px; text-align: center; }
+
+  .filter-chips { display: flex; gap: 6px; }
+  .filter-chip {
+    padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border);
+    background: #FFF; font-size: 11px; font-weight: 600; color: #475569;
+    cursor: pointer; transition: all 0.15s ease;
+  }
+  .filter-chip.active {
+    background: #1E293B; color: #FFF; border-color: #1E293B;
+  }
+
+  .control-right-group { display: flex; align-items: center; gap: 10px; }
+  .sync-toggle-label {
+    font-size: 12px; font-weight: 600; color: #475569; display: flex; align-items: center; gap: 6px;
+    cursor: pointer;
+  }
+
+  /* ==================== 核心工作区：整版对照 + 侧边批注 ==================== */
+  .workspace-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 420px;
+    gap: 16px;
+    align-items: start;
+  }
+
+  /* 当切换为单栏审阅模式时 */
+  .workspace-layout.mode-single {
+    grid-template-columns: minmax(0, 1fr) 420px;
+  }
+
+  /* 整版合同双栏对照容器 */
+  .document-grid-container {
+    background: #FFFFFF;
     border: 1px solid var(--border);
     border-radius: 12px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.03);
     overflow: hidden;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.02);
   }
-  .diff-row {
-    border-bottom: 1px solid #F1F5F9;
-    padding: 16px 20px;
-    transition: background 0.15s ease;
-  }
-  .diff-row:last-child { border-bottom: none; }
-  .diff-row:hover { background: #F8FAFC; }
-
-  .row-meta {
-    display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;
-  }
-  .row-cat-badge {
-    font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 4px;
-    background: #F1F5F9; color: #475569;
-  }
-  .status-tag {
-    font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;
-  }
-  .status-tag.DIFF { background: #FEE2E2; color: #B91C1C; }
-  .status-tag.MATCH { background: #DCFCE7; color: #15803D; }
-  .status-tag.MISSING { background: #FEF3C7; color: #92400E; }
-  .status-tag.NEW { background: #E0E7FF; color: #4338CA; }
-
-  /* 双栏对照视图 (Side-by-Side) */
-  .side-by-side {
+  .document-grid-header {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    font-size: 13px;
+    background: #F8FAFC;
+    border-bottom: 2px solid #E2E8F0;
+    position: sticky;
+    top: 114px;
+    z-index: 80;
   }
-  .pane {
-    background: #FAFAFA; border: 1px solid #E5E7EB; border-radius: 8px; padding: 12px 14px;
+  .mode-single .document-grid-header {
+    grid-template-columns: 1fr;
+  }
+  .grid-header-col {
+    padding: 10px 18px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #334155;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .grid-header-col.standard {
+    border-right: 1px solid var(--border);
+    background: #F8FAFC;
+    color: #475569;
+  }
+  .grid-header-col.reviewed {
+    background: #F0F7FF;
+    color: #1E40AF;
+  }
+
+  /* 条款行（整版行对齐） */
+  .aligned-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border-bottom: 1px solid #EDF2F7;
+    position: relative;
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+  }
+  .mode-single .aligned-row {
+    grid-template-columns: 1fr;
+  }
+  .mode-single .pane-standard {
+    display: none !important;
+  }
+
+  .aligned-row:hover {
+    background: #F8FAFC;
+  }
+  .aligned-row.row-flash {
+    animation: rowPulse 1.8s ease-in-out;
+  }
+  @keyframes rowPulse {
+    0% { background: #FEF08A; box-shadow: 0 0 0 2px #EAB308 inset; }
+    50% { background: #FEF9C3; }
+    100% { background: transparent; }
+  }
+
+  /* 左右两栏单元格 */
+  .pane-standard, .pane-reviewed {
+    padding: 14px 20px;
+    font-size: 13.5px;
+    line-height: 1.75;
+    position: relative;
+    word-break: break-all;
+    white-space: pre-wrap;
+  }
+  .pane-standard {
+    border-right: 1px solid #F1F5F9;
+    color: #334155;
+    background: #FFFFFF;
+  }
+  .pane-reviewed {
+    color: #0F172A;
+    background: #FFFFFF;
+  }
+
+  /* 条款类别小标签 */
+  .clause-tag {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 4px;
+    background: #EEF2F6;
+    color: #475569;
+    margin-bottom: 6px;
+    display: inline-block;
+  }
+
+  /* 缺失与新增条款整块样式 */
+  .diff-block-missing-wrap {
+    background: #FFF5F5;
+    border-left: 3px solid #EF4444;
+    padding: 10px 12px;
+    border-radius: 4px;
+  }
+  .badge-missing {
+    font-size: 11px; font-weight: 700; color: #DC2626; margin-bottom: 4px; display: block;
+  }
+  .diff-placeholder-missing {
+    background: #FEF2F2;
+    border: 1px dashed #FECACA;
+    border-radius: 6px;
+    padding: 14px 16px;
+    color: #991B1B;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .placeholder-icon { font-size: 16px; margin-right: 4px; }
+  .placeholder-text { font-weight: 600; font-size: 12.5px; }
+
+  .diff-placeholder-new {
+    background: #F8FAFC;
+    border: 1px dashed #CBD5E1;
+    border-radius: 6px;
+    padding: 14px 16px;
+    color: #64748B;
+    font-size: 12.5px;
+  }
+  .diff-block-new-wrap {
+    background: #FAF5FF;
+    border-left: 3px solid #8B5CF6;
+    padding: 10px 12px;
+    border-radius: 4px;
+  }
+  .badge-new {
+    font-size: 11px; font-weight: 700; color: #7C3AED; margin-bottom: 4px; display: block;
+  }
+
+  /* 修订高亮 */
+  .diff-del {
+    background: #FECACA;
+    color: #991B1B;
+    text-decoration: line-through;
+    padding: 1px 3px;
+    border-radius: 2px;
+  }
+  .diff-ins {
+    background: #BBF7D0;
+    color: #14532D;
+    font-weight: 600;
+    padding: 1px 3px;
+    border-radius: 2px;
+  }
+  .diff-ins-number {
+    background: #FDE68A !important;
+    color: #92400E !important;
+    font-weight: 700 !important;
+    border-bottom: 2px solid #D97706;
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+
+  /* 行内批注定位锚点药丸标签 */
+  .ann-anchor-bar {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .ann-pill {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .ann-pill:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.12);
+  }
+  .ann-pill.danger {
+    background: #FEE2E2; color: #991B1B; border: 1px solid #FCA5A5;
+  }
+  .ann-pill.warning {
+    background: #FEF3C7; color: #92400E; border: 1px solid #FCD34D;
+  }
+  .ann-pill.info {
+    background: #EFF6FF; color: #1E40AF; border: 1px solid #BFDBFE;
+  }
+  .ann-pill.purple {
+    background: #F3E8FF; color: #6B21A8; border: 1px solid #D8B4FE;
+  }
+
+  /* ==================== 右侧：智能法务审阅批注栏 ==================== */
+  .annotations-sidebar {
+    background: #FFFFFF;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.03);
+    position: sticky;
+    top: 114px;
+    max-height: calc(100vh - 130px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .sidebar-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: #F8FAFC;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .sidebar-title { font-size: 13.5px; font-weight: 700; color: #1E293B; display: flex; align-items: center; gap: 6px; }
+  .sidebar-count-badge {
+    background: #1E293B; color: #FFF; font-size: 11px; padding: 1px 6px; border-radius: 999px;
+  }
+
+  .annotations-list {
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex: 1;
+  }
+
+  /* 独立批注卡片 */
+  .annotation-card {
+    background: #FFFFFF;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
     position: relative;
   }
-  .pane.standard { border-left: 3px solid #64748B; }
-  .pane.reviewed { border-left: 3px solid var(--primary); }
-  .pane-title {
-    font-size: 11px; font-weight: 700; color: #94A3B8; text-transform: uppercase;
-    margin-bottom: 6px; letter-spacing: 0.5px;
+  .annotation-card:hover {
+    border-color: var(--primary);
+    box-shadow: 0 3px 8px rgba(37,99,235,0.08);
   }
-  .pane-content {
-    white-space: pre-wrap; word-break: break-all; color: #1F2937; line-height: 1.6;
+  .annotation-card.active {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+    background: #FAFCFF;
+  }
+  .annotation-card.status-ACCEPTED {
+    border-left: 4px solid #16A34A;
+  }
+  .annotation-card.status-QUESTIONED {
+    border-left: 4px solid #D97706;
+  }
+  .annotation-card.status-OVERRULED {
+    border-left: 4px solid #94A3B8;
+    opacity: 0.8;
   }
 
-  /* 法律要素标签 */
-  .delta-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-  .delta-pill {
-    font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 4px;
-    display: inline-flex; align-items: center; gap: 4px;
+  .card-top {
+    display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;
   }
-  .delta-pill.NUMBER_CHANGE { background: #FEE2E2; color: #991B1B; border: 1px solid #FCA5A5; }
-  .delta-pill.DEADLINE_CHANGE { background: #FEF3C7; color: #92400E; border: 1px solid #FCD34D; }
-  .delta-pill.PARTY_CHANGE { background: #EDE9FE; color: #5B21B6; border: 1px solid #C4B5FD; }
-  .delta-pill.NEGATION_CHANGE { background: #FFE4E6; color: #9F1239; border: 1px solid #FDA4AF; }
-  .delta-pill.OBLIGATION_CHANGE { background: #E0E7FF; color: #3730A3; border: 1px solid #A5B4FC; }
-  .delta-pill.TEXT_DELTA { background: #F1F5F9; color: #475569; border: 1px solid #CBD5E1; }
+  .card-index {
+    font-size: 11px; font-weight: 800; color: #64748B; background: #F1F5F9;
+    padding: 2px 6px; border-radius: 4px;
+  }
+  .card-risk-pill {
+    font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 4px;
+  }
+  .card-risk-pill.HIGH { background: #FEE2E2; color: #991B1B; }
+  .card-risk-pill.MEDIUM { background: #FEF3C7; color: #92400E; }
+  .card-risk-pill.LOW { background: #F1F5F9; color: #475569; }
 
-  /* 高亮样式 */
-  .del-hi { background: #FECACA; color: #7F1D1D; text-decoration: line-through; padding: 1px 3px; border-radius: 2px; }
-  .ins-hi { background: #BBF7D0; color: #14532D; font-weight: 600; padding: 1px 3px; border-radius: 2px; }
+  .card-clause-name {
+    font-size: 13px; font-weight: 700; color: #0F172A; margin-bottom: 6px;
+  }
 
-  .empty-state {
-    padding: 60px 20px; text-align: center; color: var(--text-muted); font-size: 14px;
+  /* 卡片内修改对比 */
+  .card-comparison-box {
+    background: #F8FAFC;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 11.5px;
+    margin-bottom: 8px;
+    border: 1px solid #EDF2F7;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
-  .loading-spinner {
-    display: inline-block; width: 18px; height: 18px; border: 2px solid #CBD5E1;
-    border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite;
+  .comp-row { display: flex; gap: 6px; }
+  .comp-label { font-weight: 700; color: #64748B; min-width: 44px; }
+  .comp-text { color: #1E293B; word-break: break-all; }
+  .comp-text.del { color: #991B1B; text-decoration: line-through; }
+  .comp-text.ins { color: #15803D; font-weight: 600; }
+
+  /* AI 法务剖析与建议 */
+  .card-analysis {
+    font-size: 12px; color: #334155; margin-bottom: 6px; line-height: 1.5;
   }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  .card-advice {
+    font-size: 11.5px; color: #1E40AF; background: #EFF6FF; border-left: 3px solid var(--primary);
+    padding: 6px 8px; border-radius: 0 4px 4px 0; margin-bottom: 10px; line-height: 1.45;
+  }
+
+  /* 审阅处置按钮栏 */
+  .card-actions {
+    display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #F1F5F9;
+    padding-top: 8px; margin-top: 4px;
+  }
+  .card-action-btn-group { display: flex; gap: 4px; }
+  .mini-btn {
+    padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600;
+    border: 1px solid var(--border); background: #FFF; color: #475569; cursor: pointer;
+  }
+  .mini-btn:hover { background: #F1F5F9; color: #0F172A; }
+  .mini-btn.active-accept { background: #DCFCE7; color: #15803D; border-color: #86EFAC; }
+  .mini-btn.active-question { background: #FEF3C7; color: #92400E; border-color: #FCD34D; }
+  .mini-btn.active-overrule { background: #F1F5F9; color: #64748B; border-color: #CBD5E1; }
+
+  .locate-btn {
+    font-size: 11px; font-weight: 600; color: var(--primary); border: none; background: transparent;
+    cursor: pointer; display: flex; align-items: center; gap: 2px;
+  }
+  .locate-btn:hover { text-decoration: underline; }
+
+  /* 打印样式适配 */
+  @media print {
+    .header, .controls-bar, .upload-panel, .header-actions, .card-actions { display: none !important; }
+    body { background: #FFF; }
+    .main-wrapper { max-width: 100%; margin: 0; padding: 0; }
+    .workspace-layout { display: block; }
+    .annotations-sidebar { position: static; max-height: none; margin-top: 30px; }
+    .aligned-row { page-break-inside: avoid; }
+  }
 </style>
 </head>
 <body>
@@ -291,120 +657,179 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="brand">
     <div class="brand-logo">Δ</div>
     <div>
-      <span class="brand-title">AI 合同审查 · 条款级 Diff 与风险透视工作台</span>
-      <span class="brand-tag">78 套标准母本库接入版</span>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span class="brand-title">AI 合同审查 · 条款级 Diff 与整版比对工作台</span>
+        <span class="brand-tag">78 套标准母本库接入版</span>
+      </div>
+      <div class="brand-sub">双栏整版阅读 · 字符级微观对齐 · 智能法务审阅批注</div>
     </div>
   </div>
-  <div>
-    <button class="filter-chip" onclick="window.print()" style="cursor:pointer;">🖨️ 导出/打印对比报告</button>
+  <div class="header-actions">
+    <button class="btn" onclick="toggleUploadPanel()">📂 上传新合同</button>
+    <button class="btn btn-primary" onclick="window.print()">🖨️ 导出审阅对比单</button>
   </div>
 </header>
 
-<main class="container">
+<main class="main-wrapper">
 
-  <!-- 控制与上传区域 -->
-  <div class="control-grid">
-    <div class="upload-box" id="dropZone" onclick="document.getElementById('fileInput').click()">
+  <!-- 上传与快捷用例区（可折叠） -->
+  <div class="upload-panel" id="uploadPanel">
+    <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
       <input type="file" id="fileInput" accept=".docx" style="display:none;" onchange="handleFileSelect(event)">
-      <div class="upload-icon">📄</div>
-      <div class="upload-title">点击或将修改后的 DOCX 合同拖拽至此</div>
-      <div class="upload-desc">零前置参数：系统将自动提取正文与表头特征，秒级锁定 78 套标准母本并出具 Diff</div>
+      <div class="drop-icon">📄</div>
+      <div class="drop-title">点击或拖拽修改后的 DOCX 送审合同至此</div>
+      <div class="drop-desc">无需人工匹配模板：系统自动解析正文结构，秒级定位 78 套标准母本并出具整版比对与批注</div>
     </div>
 
-    <div class="preset-box">
-      <div class="preset-title">⚡ 快速加载实测用例</div>
-      <div class="preset-btn-group">
+    <div class="preset-section">
+      <div class="preset-title">
+        <span>⚡ 快速加载实测高危用例</span>
+        <span style="font-size:10px; color:#94A3B8;">一键秒级还原法务实务</span>
+      </div>
+      <div class="preset-grid">
         <button class="preset-btn" onclick="loadSample('prescreen_tampered')">
           <span>🚨 快速预审 (违约金被偷改)</span>
-          <span class="preset-tag">高危篡改</span>
+          <span class="badge-tag danger">高危篡改</span>
         </button>
         <button class="preset-btn" onclick="loadSample('missing_confidential')">
-          <span>🚩 专利代理 (保密条款被删)</span>
-          <span class="preset-tag">条款缺失</span>
+          <span>🚩 专利代理 (保密与权利义务被偷删)</span>
+          <span class="badge-tag warning">核心缺失</span>
         </button>
         <button class="preset-btn" onclick="loadSample('trademark_match')">
-          <span>✅ 商标驳回复审 (合规原版)</span>
-          <span class="preset-tag">100%匹配</span>
+          <span>✅ 商标驳回复审 (合规原版基准)</span>
+          <span class="badge-tag success">100%匹配</span>
         </button>
       </div>
     </div>
   </div>
 
-  <!-- 识别与比对结果看板 -->
-  <div id="resultContainer" style="display:none;">
-    <div class="meta-card">
-      <div class="meta-header">
-        <div>
-          <div class="doc-name">
-            <span id="docFileName">待审合同.docx</span>
-            <span class="match-badge" id="matchBadge">已锁定母本: MB20251205012</span>
-          </div>
-          <div class="meta-details">
-            <span>识别业务子类: <strong id="detectedSubtype">-</strong></span>
-            <span>识别置信度: <strong id="confidenceRate">-</strong></span>
-            <span>基准母本库: <strong id="matchedTemplateName">-</strong></span>
-            <span>条款规模: 母本 <strong id="stdCount">-</strong> 条 vs 待审 <strong id="revCount">-</strong> 条</span>
-          </div>
-        </div>
-        <div id="overallVerdict"></div>
+  <!-- 审查看板 -->
+  <div class="meta-dashboard">
+    <div class="meta-top-row">
+      <div class="doc-title-box">
+        <span class="doc-title" id="docFileName">待审合同.docx</span>
+        <span class="matched-tag" id="matchedTemplateTag">已锁定标准母本: MB20251205012</span>
       </div>
-
-      <div class="stats-strip">
-        <div class="stat-pill success">
-          <span class="stat-label">完全一致类别</span>
-          <span class="stat-value" id="statMatch">0</span>
-        </div>
-        <div class="stat-pill danger">
-          <span class="stat-label">数值金额篡改</span>
-          <span class="stat-value" id="statNumberChange">0</span>
-        </div>
-        <div class="stat-pill warning">
-          <span class="stat-label">期限/主体/否定词变动</span>
-          <span class="stat-value" id="statLegalChange">0</span>
-        </div>
-        <div class="stat-pill danger">
-          <span class="stat-label">客户删减母本条款</span>
-          <span class="stat-value" id="statMissing">0</span>
-        </div>
-        <div class="stat-pill purple">
-          <span class="stat-label">客户新增非标条款</span>
-          <span class="stat-value" id="statNew">0</span>
-        </div>
-      </div>
+      <div class="verdict-banner danger" id="verdictBanner">🚨 发现高危条款篡改与核心义务缺失，建议重点复核并驳回修改</div>
     </div>
 
-    <!-- 工具栏 -->
-    <div class="toolbar">
-      <div class="filter-group">
-        <button class="filter-chip active" onclick="setFilter('ALL')">全部条款 (<span id="countAll">0</span>)</button>
-        <button class="filter-chip" onclick="setFilter('RISK')">🚨 只看风险变动 (<span id="countRisk">0</span>)</button>
-        <button class="filter-chip" onclick="setFilter('MISSING')">🚩 客户删减项 (<span id="countMissing">0</span>)</button>
-        <button class="filter-chip" onclick="setFilter('NEW')">⚠️ 客户新增项 (<span id="countNew">0</span>)</button>
-      </div>
-
-      <div class="view-switch">
-        <button class="switch-btn active" id="btnSide" onclick="setViewMode('side')">双栏并排 (Side-by-Side)</button>
-        <button class="switch-btn" id="btnUnified" onclick="setViewMode('unified')">行内修订 (Unified)</button>
-      </div>
+    <div class="meta-details-strip">
+      <span>识别业务子类: <strong id="detectedSubtype">-</strong></span>
+      <span>母本匹配置信度: <strong id="confidenceRate">-</strong></span>
+      <span>基准母本文件: <strong id="matchedTemplateName">-</strong></span>
+      <span>条款规模: 母本 <strong id="stdCount">-</strong> 条 vs 送审 <strong id="revCount">-</strong> 条</span>
     </div>
 
-    <!-- 条款比对卡片列表 -->
-    <div class="diff-table-container" id="diffList"></div>
+    <div class="stats-row">
+      <div class="stat-card total">
+        <span class="stat-card-title">📌 发现审查批注</span>
+        <span class="stat-card-val" id="statTotalAnnotations">0</span>
+      </div>
+      <div class="stat-card danger">
+        <span class="stat-card-title">🔴 高危数值篡改</span>
+        <span class="stat-card-val" id="statHighRisk">0</span>
+      </div>
+      <div class="stat-card missing">
+        <span class="stat-card-title">🚩 核心条款缺失</span>
+        <span class="stat-card-val" id="statMissingClauses">0</span>
+      </div>
+      <div class="stat-card new">
+        <span class="stat-card-title">➕ 客户新增非标</span>
+        <span class="stat-card-val" id="statNewClauses">0</span>
+      </div>
+      <div class="stat-card warning">
+        <span class="stat-card-title">🟠 期限/主体/弱化</span>
+        <span class="stat-card-val" id="statMediumRisk">0</span>
+      </div>
+      <div class="stat-card progress">
+        <span class="stat-card-title">⚖️ 批注核验进度</span>
+        <span class="stat-card-val" id="statProgress">0 / 0</span>
+      </div>
+    </div>
   </div>
 
-  <div id="initialPrompt" class="empty-state">
-    <div style="font-size:42px; margin-bottom:12px;">📑</div>
-    <div style="font-size:16px; font-weight:600; color:#334155; margin-bottom:6px;">请在上方拖入或选择任意一份合同 DOCX</div>
-    <div>系统将自动通过第一条事项与表格特征匹配 78 套标准母本，并逐条款生成法律要素 Diff</div>
+  <!-- 固定控制导航条 -->
+  <div class="controls-bar">
+    <div class="control-left-group">
+      <!-- 视图模式切换 -->
+      <div class="view-switch">
+        <button class="view-btn active" id="btnModeSide" onclick="setViewMode('side')">📑 整版双栏对照 + 批注</button>
+        <button class="view-btn" id="btnModeSingle" onclick="setViewMode('single')">📄 单版正文修订 + 侧边批注</button>
+        <button class="view-btn" id="btnModeDiff" onclick="setViewMode('diff')">🎯 仅看变更条款</button>
+      </div>
+
+      <!-- 上下批注快速定位 -->
+      <div class="nav-group">
+        <button class="nav-btn" onclick="prevAnnotation()" title="快捷键: [ 或 Alt+↑">⬅️ 上一处批注</button>
+        <span class="nav-indicator" id="navIndicator">批注 0 / 0</span>
+        <button class="nav-btn" onclick="nextAnnotation()" title="快捷键: ] 或 Alt+↓">下一处批注 ➡️</button>
+      </div>
+
+      <!-- 分类过滤标签 -->
+      <div class="filter-chips">
+        <button class="filter-chip active" onclick="setFilter('ALL')">全部 (<span id="filterAllCount">0</span>)</button>
+        <button class="filter-chip" onclick="setFilter('HIGH')">🔴 高危篡改 (<span id="filterHighCount">0</span>)</button>
+        <button class="filter-chip" onclick="setFilter('MISSING')">🚩 缺失条款 (<span id="filterMissingCount">0</span>)</button>
+        <button class="filter-chip" onclick="setFilter('NEW')">➕ 客户新增 (<span id="filterNewCount">0</span>)</button>
+        <button class="filter-chip" onclick="setFilter('WARNING')">🟠 期限/主体 (<span id="filterWarnCount">0</span>)</button>
+      </div>
+    </div>
+
+    <div class="control-right-group">
+      <label class="sync-toggle-label">
+        <input type="checkbox" id="syncScrollCheckbox" checked onchange="toggleSyncScroll(this.checked)">
+        <span>🔗 双栏同步滚动</span>
+      </label>
+    </div>
+  </div>
+
+  <!-- 核心对比主工作区 -->
+  <div class="workspace-layout" id="workspaceLayout">
+    <!-- 左侧/中间：整版合同对照区 -->
+    <div class="document-grid-container" id="documentGridContainer">
+      <div class="document-grid-header">
+        <div class="grid-header-col standard">
+          <span>🏛️ 知识库标准参考母本（基准正文）</span>
+          <span style="font-size:11px; opacity:0.8;" id="headerStdName">母本库</span>
+        </div>
+        <div class="grid-header-col reviewed">
+          <span>✏️ 送审合同文本（送审修改版）</span>
+          <span style="font-size:11px; opacity:0.8;" id="headerRevName">待审稿</span>
+        </div>
+      </div>
+
+      <!-- 整版行对齐主列表 -->
+      <div id="alignedRowsContainer"></div>
+    </div>
+
+    <!-- 右侧：智能法务审阅批注栏 -->
+    <div class="annotations-sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title">
+          <span>📋 智能法务审阅批注</span>
+          <span class="sidebar-count-badge" id="sidebarCount">0</span>
+        </div>
+        <span style="font-size:11px; color:#64748B;">点击直达正文对应行</span>
+      </div>
+
+      <div class="annotations-list" id="annotationsList"></div>
+    </div>
   </div>
 
 </main>
 
 <script>
-let currentDiffData = null;
+// 全局状态管理
+let currentData = null;
+let currentViewMode = 'side'; // 'side' | 'single' | 'diff'
 let currentFilter = 'ALL';
-let currentViewMode = 'side';
+let activeAnnotationIndex = -1;
+let syncScrollEnabled = true;
 
+// 预置默认数据占位符
+window.INITIAL_DATA = __INITIAL_DATA_PLACEHOLDER__;
+
+// 拖拽上传支持
 const dropZone = document.getElementById('dropZone');
 dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
@@ -416,200 +841,324 @@ dropZone.addEventListener('drop', (e) => {
   }
 });
 
-function handleFileSelect(event) {
-  if (event.target.files.length > 0) {
-    uploadDocx(event.target.files[0]);
+function handleFileSelect(e) {
+  if (e.target.files.length > 0) {
+    uploadDocx(e.target.files[0]);
   }
 }
 
+function toggleUploadPanel() {
+  const panel = document.getElementById('uploadPanel');
+  panel.style.display = panel.style.display === 'none' ? 'grid' : 'none';
+}
+
 async function uploadDocx(file) {
-  showLoading();
   const formData = new FormData();
   formData.append('file', file);
 
   try {
-    const resp = await fetch('/api/diff/upload', {
-      method: 'POST',
-      body: formData
-    });
+    const resp = await fetch('/api/diff/upload', { method: 'POST', body: formData });
     const res = await resp.json();
     if (res.error) {
-      alert('解析失败: ' + res.error);
-      hideLoading();
+      alert('上传解析失败: ' + res.error);
       return;
     }
-    renderDiffResult(res);
+    renderFullDiff(res);
   } catch (err) {
-    alert('请求失败，请确保本地后台服务运行中: ' + err);
-    hideLoading();
+    alert('请求失败，请确保后台 Web 服务正常启动: ' + err);
   }
 }
 
 async function loadSample(sampleKey) {
-  showLoading();
   try {
     const resp = await fetch('/api/diff/sample?key=' + sampleKey);
     const res = await resp.json();
-    renderDiffResult(res);
+    renderFullDiff(res);
   } catch (err) {
-    alert('加载用例失败: ' + err);
-    hideLoading();
+    alert('加载实测用例失败: ' + err);
   }
 }
 
-function showLoading() {
-  document.getElementById('initialPrompt').innerHTML = '<div class="loading-spinner"></div><div style="margin-top:12px;">正在自动提取附件指纹、匹配 78 套母本并计算条款 Diff...</div>';
-  document.getElementById('initialPrompt').style.display = 'block';
-  document.getElementById('resultContainer').style.display = 'none';
+// 渲染整版对比与批注
+function renderFullDiff(data) {
+  currentData = data;
+  activeAnnotationIndex = -1;
+
+  // 1. 顶部元信息与审查看板
+  const fileName = (data.uploaded_file || '待审合同.docx').split(/[\/\\]/).pop();
+  document.getElementById('docFileName').innerText = fileName;
+  document.getElementById('headerRevName').innerText = fileName;
+  document.getElementById('matchedTemplateTag').innerText = '🎯 已锁定母本: ' + data.matched_template_id;
+  document.getElementById('headerStdName').innerText = data.matched_template_id;
+
+  document.getElementById('detectedSubtype').innerText = data.detected_subtype || '-';
+  document.getElementById('confidenceRate').innerText = ((data.classification_confidence || 1.0) * 100).toFixed(1) + '%';
+  document.getElementById('matchedTemplateName').innerText = data.matched_template_name || '-';
+  document.getElementById('stdCount').innerText = data.standard_clause_count || 0;
+  document.getElementById('revCount').innerText = data.uploaded_clause_count || 0;
+
+  // 统计数据
+  const stats = data.stats || {};
+  document.getElementById('statTotalAnnotations').innerText = stats.total_annotations || (data.annotations ? data.annotations.length : 0);
+  document.getElementById('statHighRisk').innerText = stats.high_risk || 0;
+  document.getElementById('statMissingClauses').innerText = stats.missing_clauses || 0;
+  document.getElementById('statNewClauses').innerText = stats.new_clauses || 0;
+  document.getElementById('statMediumRisk').innerText = (stats.medium_risk || 0);
+  document.getElementById('sidebarCount').innerText = (data.annotations || []).length;
+
+  // 综合判定 Banner
+  const verdictEl = document.getElementById('verdictBanner');
+  if (stats.high_risk > 0 || stats.missing_clauses > 0) {
+    verdictEl.className = 'verdict-banner danger';
+    verdictEl.innerText = `🚨 发现 ${stats.high_risk} 处高危数值篡改与 ${stats.missing_clauses} 处核心条款缺失，建议重点复核并驳回修改`;
+  } else if ((data.annotations || []).length > 0) {
+    verdictEl.className = 'verdict-banner';
+    verdictEl.style.background = '#FEF3C7';
+    verdictEl.style.color = '#92400E';
+    verdictEl.innerText = `⚠️ 存在 ${stats.medium_risk || 0} 处常规条款微调，请确认商业合规性`;
+  } else {
+    verdictEl.className = 'verdict-banner success';
+    verdictEl.innerText = `✅ 与 78 套标准母本库 100% 吻合，无任何删改，可直接推进审批签署`;
+  }
+
+  // 过滤器数值
+  const anns = data.annotations || [];
+  document.getElementById('filterAllCount').innerText = anns.length;
+  document.getElementById('filterHighCount').innerText = anns.filter(a => a.risk_level === 'HIGH' && a.delta_type !== 'MISSING_CLAUSE').length;
+  document.getElementById('filterMissingCount').innerText = anns.filter(a => a.delta_type === 'MISSING_CLAUSE').length;
+  document.getElementById('filterNewCount').innerText = anns.filter(a => a.delta_type === 'NEW_CLAUSE').length;
+  document.getElementById('filterWarnCount').innerText = anns.filter(a => a.risk_level === 'MEDIUM' && a.delta_type !== 'NEW_CLAUSE').length;
+
+  updateProgressDisplay();
+  renderAlignedRows();
+  renderAnnotationsSidebar();
 }
 
-function hideLoading() {
-  document.getElementById('initialPrompt').style.display = 'none';
+function updateProgressDisplay() {
+  if (!currentData || !currentData.annotations) return;
+  const total = currentData.annotations.length;
+  const handled = currentData.annotations.filter(a => a.review_status && a.review_status !== 'PENDING').length;
+  document.getElementById('statProgress').innerText = `${handled} / ${total}`;
 }
 
-function renderDiffResult(res) {
-  currentDiffData = res;
-  hideLoading();
-  document.getElementById('resultContainer').style.display = 'block';
+// 渲染整版行对齐合同内容
+function renderAlignedRows() {
+  const container = document.getElementById('alignedRowsContainer');
+  container.innerHTML = '';
 
-  document.getElementById('docFileName').innerText = res.uploaded_file.split(/[\/\\]/).pop();
-  document.getElementById('matchBadge').innerText = '🎯 命中母本: ' + res.matched_template_id;
-  document.getElementById('detectedSubtype').innerText = res.detected_subtype;
-  document.getElementById('confidenceRate').innerText = (res.classification_confidence * 100).toFixed(1) + '%';
-  document.getElementById('matchedTemplateName').innerText = res.matched_template_name;
-  document.getElementById('stdCount').innerText = res.standard_clause_count;
-  document.getElementById('revCount').innerText = res.uploaded_clause_count;
-
-  // 统计数值
-  const reports = res.diff_report || [];
-  let matches = 0, numChanges = 0, legalChanges = 0, missings = 0, news = 0;
-
-  reports.forEach(r => {
-    if (r.status === 'MATCH') matches++;
-    if (r.status === 'MISSING_IN_REVIEWED') missings++;
-    if (r.status === 'NEW_IN_REVIEWED') news++;
-    if (r.deltas) {
-      r.deltas.forEach(d => {
-        if (d.delta_type === 'NUMBER_CHANGE') numChanges++;
-        if (['DEADLINE_CHANGE', 'PARTY_CHANGE', 'NEGATION_CHANGE', 'OBLIGATION_CHANGE'].includes(d.delta_type)) legalChanges++;
-      });
-    }
-  });
-
-  document.getElementById('statMatch').innerText = matches;
-  document.getElementById('statNumberChange').innerText = numChanges;
-  document.getElementById('statLegalChange').innerText = legalChanges;
-  document.getElementById('statMissing').innerText = missings;
-  document.getElementById('statNew').innerText = news;
-
-  document.getElementById('countAll').innerText = reports.length;
-  document.getElementById('countRisk').innerText = numChanges + legalChanges + missings;
-  document.getElementById('countMissing').innerText = missings;
-  document.getElementById('countNew').innerText = news;
-
-  renderDiffList();
-}
-
-function setFilter(filterType) {
-  currentFilter = filterType;
-  document.querySelectorAll('.filter-chip').forEach(btn => btn.classList.remove('active'));
-  event.target.classList.add('active');
-  renderDiffList();
-}
-
-function setViewMode(mode) {
-  currentViewMode = mode;
-  document.getElementById('btnSide').classList.toggle('active', mode === 'side');
-  document.getElementById('btnUnified').classList.toggle('active', mode === 'unified');
-  renderDiffList();
-}
-
-function renderDiffList() {
-  if (!currentDiffData) return;
-  const listEl = document.getElementById('diffList');
-  listEl.innerHTML = '';
-
-  const reports = currentDiffData.diff_report || [];
-
-  reports.forEach((item, idx) => {
-    const isMissing = item.status === 'MISSING_IN_REVIEWED';
-    const isNew = item.status === 'NEW_IN_REVIEWED';
-    const isDiff = item.status === 'DIFF';
-    const isMatch = item.status === 'MATCH';
-
+  const blocks = currentData.aligned_blocks || [];
+  blocks.forEach((block, bIdx) => {
     // 过滤逻辑
-    if (currentFilter === 'MISSING' && !isMissing) return;
-    if (currentFilter === 'NEW' && !isNew) return;
-    if (currentFilter === 'RISK' && isMatch) return;
+    const isMatch = block.status === 'MATCH';
+    if (currentViewMode === 'diff' && isMatch) {
+      return; // 仅看变更模式下跳过完全一致项
+    }
 
     const row = document.createElement('div');
-    row.className = 'diff-row';
+    row.className = 'aligned-row';
+    row.id = block.block_id;
 
-    let statusLabel = isMatch ? '一致' : (isMissing ? '客户删减' : (isNew ? '客户新增' : '实质差异'));
-    let statusClass = isMatch ? 'MATCH' : (isMissing ? 'MISSING' : (isNew ? 'NEW' : 'DIFF'));
+    // 左侧（母本）
+    const paneStd = document.createElement('div');
+    paneStd.className = 'pane-standard';
+    paneStd.innerHTML = `
+      <span class="clause-tag">${escapeHtml(block.clause_title)}</span>
+      ${block.standard_html || '<div style="color:#94A3B8;">（无）</div>'}
+    `;
 
-    // 法律要素变动标签
-    let deltasHtml = '';
-    if (item.deltas && item.deltas.length > 0) {
-      deltasHtml = '<div class="delta-pills">' + item.deltas.map(d => {
-        let icon = '🔍';
-        if (d.delta_type === 'NUMBER_CHANGE') icon = '🔴 数值篡改: ';
-        if (d.delta_type === 'DEADLINE_CHANGE') icon = '🟠 期限放宽: ';
-        if (d.delta_type === 'PARTY_CHANGE') icon = '🟣 主体倒置: ';
-        if (d.delta_type === 'NEGATION_CHANGE') icon = '⛔ 否定词反转: ';
-        if (d.delta_type === 'OBLIGATION_CHANGE') icon = '🟡 义务弱化: ';
-        if (d.delta_type === 'TEXT_DELTA') icon = '📝 措辞差异: ';
-        return `<span class="delta-pill ${d.delta_type}">${icon} ${escapeHtml(d.description)}</span>`;
-      }).join('') + '</div>';
-    }
+    // 右侧（送审修改版）
+    const paneRev = document.createElement('div');
+    paneRev.className = 'pane-reviewed';
+    paneRev.innerHTML = `
+      <span class="clause-tag" style="background:#E0E7FF; color:#3730A3;">${escapeHtml(block.clause_title)}</span>
+      ${block.reviewed_html || '<div style="color:#94A3B8;">（无）</div>'}
+    `;
 
-    let stdText = isNew ? '（标准母本无此条款）' : (item.standard_text || (item.deltas && item.deltas[0] ? item.deltas[0].standard_text : ''));
-    let revText = isMissing ? '（待审文档已删除此项）' : (item.reviewed_text || (item.deltas && item.deltas[0] ? item.deltas[0].reviewed_text : ''));
+    row.appendChild(paneStd);
+    row.appendChild(paneRev);
+    container.appendChild(row);
+  });
+}
 
-    let contentHtml = '';
-    if (currentViewMode === 'side') {
-      contentHtml = `
-        <div class="side-by-side">
-          <div class="pane standard">
-            <div class="pane-title">🏛️ 标准参考母本条款</div>
-            <div class="pane-content">${escapeHtml(stdText)}</div>
-          </div>
-          <div class="pane reviewed">
-            <div class="pane-title">✏️ 用户修改版送审条款</div>
-            <div class="pane-content">${escapeHtml(revText)}</div>
-          </div>
+// 渲染右侧审阅批注卡片列表
+function renderAnnotationsSidebar() {
+  const container = document.getElementById('annotationsList');
+  container.innerHTML = '';
+
+  const anns = currentData.annotations || [];
+  let visibleIndex = 0;
+
+  anns.forEach((ann, aIdx) => {
+    // 批注筛选
+    if (currentFilter === 'HIGH' && (ann.risk_level !== 'HIGH' || ann.delta_type === 'MISSING_CLAUSE')) return;
+    if (currentFilter === 'MISSING' && ann.delta_type !== 'MISSING_CLAUSE') return;
+    if (currentFilter === 'NEW' && ann.delta_type !== 'NEW_CLAUSE') return;
+    if (currentFilter === 'WARNING' && (ann.risk_level !== 'MEDIUM' || ann.delta_type === 'NEW_CLAUSE')) return;
+
+    visibleIndex++;
+
+    const card = document.createElement('div');
+    card.className = `annotation-card status-${ann.review_status || 'PENDING'}`;
+    card.id = `card-${ann.id}`;
+    card.onclick = () => selectAnnotation(ann.id);
+
+    // 对比片段 HTML
+    let compHtml = '';
+    if (ann.delta_type === 'MISSING_CLAUSE') {
+      compHtml = `
+        <div class="card-comparison-box">
+          <div class="comp-row"><span class="comp-label">母本约定:</span><span class="comp-text">${escapeHtml(ann.standard_span)}</span></div>
+          <div class="comp-row"><span class="comp-label">送审稿:</span><span class="comp-text del">（整段已被删除）</span></div>
+        </div>
+      `;
+    } else if (ann.delta_type === 'NEW_CLAUSE') {
+      compHtml = `
+        <div class="card-comparison-box">
+          <div class="comp-row"><span class="comp-label">母本约定:</span><span class="comp-text">（母本无此条款）</span></div>
+          <div class="comp-row"><span class="comp-label">送审稿:</span><span class="comp-text ins">${escapeHtml(ann.reviewed_span)}</span></div>
         </div>
       `;
     } else {
-      contentHtml = `
-        <div class="pane" style="background:#FFF;">
-          <div class="pane-title">修订对比</div>
-          <div class="pane-content">
-            ${isMissing ? `<div class="del-hi">${escapeHtml(stdText)}</div>` : ''}
-            ${isNew ? `<div class="ins-hi">${escapeHtml(revText)}</div>` : ''}
-            ${(!isMissing && !isNew) ? `<div>${escapeHtml(revText)}</div>` : ''}
-          </div>
+      compHtml = `
+        <div class="card-comparison-box">
+          <div class="comp-row"><span class="comp-label">母本原文:</span><span class="comp-text del">${escapeHtml(ann.standard_span || '')}</span></div>
+          <div class="comp-row"><span class="comp-label">送审修改:</span><span class="comp-text ins">${escapeHtml(ann.reviewed_span || '')}</span></div>
         </div>
       `;
     }
 
-    row.innerHTML = `
-      <div class="row-meta">
-        <span class="row-cat-badge">第 ${idx + 1} 项 · ${item.clause_category}</span>
-        <span class="status-tag ${statusClass}">${statusLabel}</span>
+    card.innerHTML = `
+      <div class="card-top">
+        <span class="card-index">批注 #${ann.index < 10 ? '0' + ann.index : ann.index}</span>
+        <span class="card-risk-pill ${ann.risk_level}">${escapeHtml(ann.risk_label)}</span>
       </div>
-      ${contentHtml}
-      ${deltasHtml}
+
+      <div class="card-clause-name">${escapeHtml(ann.clause_title)}</div>
+      ${compHtml}
+
+      <div class="card-analysis">${escapeHtml(ann.ai_analysis)}</div>
+      <div class="card-advice">${escapeHtml(ann.action_advice)}</div>
+
+      <div class="card-actions">
+        <div class="card-action-btn-group">
+          <button class="mini-btn ${ann.review_status === 'ACCEPTED' ? 'active-accept' : ''}" onclick="event.stopPropagation(); setAnnotationStatus('${ann.id}', 'ACCEPTED')">✅ 接受</button>
+          <button class="mini-btn ${ann.review_status === 'QUESTIONED' ? 'active-question' : ''}" onclick="event.stopPropagation(); setAnnotationStatus('${ann.id}', 'QUESTIONED')">⚠️ 存疑</button>
+          <button class="mini-btn ${ann.review_status === 'OVERRULED' ? 'active-overrule' : ''}" onclick="event.stopPropagation(); setAnnotationStatus('${ann.id}', 'OVERRULED')">❌ 驳回</button>
+        </div>
+        <button class="locate-btn" onclick="event.stopPropagation(); selectAnnotation('${ann.id}')">🎯 定位正文</button>
+      </div>
     `;
 
-    listEl.appendChild(row);
+    container.appendChild(card);
   });
 }
+
+// 选中某个批注并实现正文与卡片双向对齐平滑滚动与高光脉冲
+function selectAnnotation(annId) {
+  if (!currentData || !currentData.annotations) return;
+
+  const annIdx = currentData.annotations.findIndex(a => a.id === annId);
+  if (annIdx === -1) return;
+  activeAnnotationIndex = annIdx;
+  const ann = currentData.annotations[annIdx];
+
+  // 1. 高亮右侧批注卡片
+  document.querySelectorAll('.annotation-card').forEach(c => c.classList.remove('active'));
+  const card = document.getElementById(`card-${annId}`);
+  if (card) {
+    card.classList.add('active');
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  // 2. 定位正文行并播放发光脉冲动画
+  const targetRow = document.getElementById(ann.block_id);
+  if (targetRow) {
+    document.querySelectorAll('.aligned-row').forEach(r => r.classList.remove('row-flash'));
+    targetRow.classList.add('row-flash');
+    targetRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  // 3. 更新导航指示器
+  const total = currentData.annotations.length;
+  document.getElementById('navIndicator').innerText = `批注 ${ann.index} / ${total}`;
+}
+
+function nextAnnotation() {
+  if (!currentData || !currentData.annotations || currentData.annotations.length === 0) return;
+  let nextIdx = activeAnnotationIndex + 1;
+  if (nextIdx >= currentData.annotations.length) nextIdx = 0;
+  selectAnnotation(currentData.annotations[nextIdx].id);
+}
+
+function prevAnnotation() {
+  if (!currentData || !currentData.annotations || currentData.annotations.length === 0) return;
+  let prevIdx = activeAnnotationIndex - 1;
+  if (prevIdx < 0) prevIdx = currentData.annotations.length - 1;
+  selectAnnotation(currentData.annotations[prevIdx].id);
+}
+
+// 设置审阅状态
+function setAnnotationStatus(annId, status) {
+  const ann = (currentData.annotations || []).find(a => a.id === annId);
+  if (!ann) return;
+  ann.review_status = (ann.review_status === status) ? 'PENDING' : status;
+  renderAnnotationsSidebar();
+  // 保持当前高亮
+  const card = document.getElementById(`card-${annId}`);
+  if (card) card.classList.add('active');
+  updateProgressDisplay();
+}
+
+// 视图切换
+function setViewMode(mode) {
+  currentViewMode = mode;
+  document.getElementById('btnModeSide').classList.toggle('active', mode === 'side');
+  document.getElementById('btnModeSingle').classList.toggle('active', mode === 'single');
+  document.getElementById('btnModeDiff').classList.toggle('active', mode === 'diff');
+
+  const layout = document.getElementById('workspaceLayout');
+  layout.classList.toggle('mode-single', mode === 'single');
+
+  renderAlignedRows();
+}
+
+// 分类筛选
+function setFilter(filterType) {
+  currentFilter = filterType;
+  document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+  event.target.classList.add('active');
+  renderAnnotationsSidebar();
+}
+
+function toggleSyncScroll(enabled) {
+  syncScrollEnabled = enabled;
+}
+
+// 键盘快捷键支持：[ 上一个，] 下一个
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === '[' || (e.altKey && e.key === 'ArrowUp')) {
+    e.preventDefault();
+    prevAnnotation();
+  } else if (e.key === ']' || (e.altKey && e.key === 'ArrowDown')) {
+    e.preventDefault();
+    nextAnnotation();
+  }
+});
 
 function escapeHtml(text) {
   if (!text) return '';
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
+
+// 初始化加载
+window.addEventListener('DOMContentLoaded', () => {
+  if (window.INITIAL_DATA && window.INITIAL_DATA.aligned_blocks) {
+    renderFullDiff(window.INITIAL_DATA);
+  } else {
+    loadSample('prescreen_tampered');
+  }
+});
 </script>
 
 </body>
@@ -623,32 +1172,56 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/" or parsed.path == "/index.html":
+            # 渲染并提供页面
+            html_content = generate_rendered_html()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(HTML_TEMPLATE.encode("utf-8"))
+            self.wfile.write(html_content.encode("utf-8"))
 
         elif parsed.path == "/api/diff/sample":
             qs = urllib.parse.parse_qs(parsed.query)
             key = qs.get("key", ["prescreen_tampered"])[0]
 
-            # 生成对应的样本比对结果
-            if key == "prescreen_tampered":
-                # 寻找快速预审样本
-                sample_file = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
-                res = run_diff(sample_file)
-            elif key == "missing_confidential":
-                sample_file = config.GOLDEN_DIR / "mut_06_missing_confidentiality.docx"
-                res = run_diff(sample_file)
-            else:
-                # 找一份合规模板
-                sample_file = list(config.TEMPLATE_DIR.glob("**/*驳回复审*.docx"))[0]
-                res = run_diff(sample_file)
+            try:
+                if key == "prescreen_tampered":
+                    sample_file = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
+                elif key == "missing_confidential":
+                    sample_file = (
+                        config.GOLDEN_DIR
+                        / "mut_06_missing_confidentiality.docx"
+                    )
+                else:
+                    sample_files = list(
+                        config.TEMPLATE_DIR.glob("**/*驳回复审*.docx")
+                    )
+                    sample_file = (
+                        sample_files[0]
+                        if sample_files
+                        else config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
+                    )
 
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
+                res = build_full_contract_diff(sample_file)
+                self.send_response(200)
+                self.send_header(
+                    "Content-Type", "application/json; charset=utf-8"
+                )
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps(res, ensure_ascii=False).encode("utf-8")
+                )
+            except Exception as e:
+                self.send_response(500)
+                self.send_header(
+                    "Content-Type", "application/json; charset=utf-8"
+                )
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps({"error": str(e)}, ensure_ascii=False).encode(
+                        "utf-8"
+                    )
+                )
+
         else:
             self.send_response(404)
             self.end_headers()
@@ -679,7 +1252,7 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                         tmp.write(file_bytes)
                         tmp_path = Path(tmp.name)
                     try:
-                        res = run_diff(tmp_path)
+                        res = build_full_contract_diff(tmp_path)
                     finally:
                         try:
                             tmp_path.unlink()
@@ -687,7 +1260,9 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                             pass
 
                     self.send_response(200)
-                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header(
+                        "Content-Type", "application/json; charset=utf-8"
+                    )
                     self.end_headers()
                     self.wfile.write(
                         json.dumps(res, ensure_ascii=False).encode("utf-8")
@@ -703,19 +1278,36 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
 
+def generate_rendered_html() -> str:
+    """生成内嵌初始默认高危用例数据的独立完整 HTML。"""
+    try:
+        sample_file = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
+        initial_data = build_full_contract_diff(sample_file)
+        data_json = json.dumps(initial_data, ensure_ascii=False)
+    except Exception:
+        data_json = "null"
+
+    return HTML_TEMPLATE.replace("__INITIAL_DATA_PLACEHOLDER__", data_json)
+
+
 def export_standalone_html():
-    """将可视化页面导出为独立 HTML 文件存放在 data/contract_merged 供直接双击打开。"""
+    """将整版对比与批注工作台导出为独立 HTML 页面存放在 data/contract_merged 供直接双击使用。"""
     out_path = (
         config.DATA_DIR.parent / "contract_merged" / "合同模板条款比对与Diff可视化.html"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(HTML_TEMPLATE, encoding="utf-8")
-    print(f"[已生成独立可视化网页] {out_path}")
+    html_content = generate_rendered_html()
+    out_path.write_text(html_content, encoding="utf-8")
+    print(f"[已生成独立整版对照与批注网页] {out_path}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="合同 Diff 前端可视化服务")
-    parser.add_argument("--port", type=int, default=8772, help="Web 端口（默认 8772）")
+    parser = argparse.ArgumentParser(
+        description="合同整版对照与条款批注前端服务"
+    )
+    parser.add_argument(
+        "--port", type=int, default=8772, help="Web 端口（默认 8772）"
+    )
     parser.add_argument(
         "--export-only", action="store_true", help="仅导出独立 HTML 页面"
     )
@@ -726,8 +1318,12 @@ def main():
         return
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), DiffVisualizerHandler)
-    print(f"\n🚀 AI 合同条款级 Diff 前端工作台已启动: http://127.0.0.1:{args.port}")
-    print("👉 请在浏览器中打开上方网址，即可拖入任意 DOCX 合同进行可视化对比！\n")
+    print(
+        f"\n🚀 AI 合同审查 · 条款级 Diff 与整版比对工作台已启动: http://127.0.0.1:{args.port}"
+    )
+    print(
+        "👉 请在浏览器中打开上方网址，即可体验整版双栏对照与智能法务审阅批注！\n"
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

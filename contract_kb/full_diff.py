@@ -1,0 +1,511 @@
+# -*- coding: utf-8 -*-
+"""整版合同双栏对照与条款级法务批注生成引擎（Full-Document Diff & Annotation Engine）。
+
+功能：
+1. 提取送审合同与标准母本全部条款/段落，按自然阅读顺序（从标题、卷头、各条款至签署页）进行整版对齐；
+2. 采用动态规划（Needleman-Wunsch/LCS）算法完成条款级别行对齐，准确识别：
+   - MATCH（完全一致）
+   - DIFF（条款被修改，精细定位数值、期限、主体、否定词、义务动词、措辞）
+   - MISSING_IN_REVIEWED（母本包含但送审合同整段删除）
+   - NEW_IN_REVIEWED（送审合同单方新增非标条款）
+3. 生成字符/词级精细修订高亮 HTML（<del> 划线删除与 <ins> 突出修订）；
+4. 为每一处变动自动生成专业的 AI 法务审阅批注卡片（包含风险等级、条款定位、修改对比、法律风险剖析与处置建议）；
+5. 输出适用于整版双栏对照与边距批注阅读的结构化数据。
+"""
+
+from __future__ import annotations
+
+import difflib
+from pathlib import Path
+from typing import Any
+
+from contract_kb.storage import create_storage
+from contract_kb.ingest import import_template_file, security_check_file
+from contract_kb.clause_diff import diff_clauses, diff_clause_sets
+
+CATEGORY_TITLES = {
+    "FRONT_MATTER": "合同卷头与编号",
+    "TABLE_NOTE": "双方主体与基本信息",
+    "CONTRACT_SUBJECT": "第一条 合同事项",
+    "PARTY_B_OBLIGATIONS": "第二条 乙方权利与义务",
+    "PARTY_A_OBLIGATIONS": "第三条 甲方权利与义务",
+    "FEE_AND_PAYMENT": "第四条 费用及支付方式",
+    "CONFIDENTIALITY": "第五条 保密条款",
+    "LIABILITY": "第六条 违约责任",
+    "DISPUTE_RESOLUTION": "第七条 争议解决",
+    "EFFECTIVENESS_AND_TERMINATION": "第八条 合同生效及其他",
+    "SIGNATURE_BLOCK": "双方签署页",
+    "OTHER": "其他约定条款",
+}
+
+
+def escape_html(text: str) -> str:
+    """HTML 转义。"""
+    if not text:
+        return ""
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def generate_word_diff_html(std_text: str, rev_text: str) -> tuple[str, str]:
+    """生成词/字符级别的精准划线与插入高亮 HTML。"""
+    sm = difflib.SequenceMatcher(None, std_text, rev_text)
+    std_parts: list[str] = []
+    rev_parts: list[str] = []
+
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        s_chunk = std_text[i1:i2]
+        r_chunk = rev_text[j1:j2]
+        if tag == "equal":
+            std_parts.append(escape_html(s_chunk))
+            rev_parts.append(escape_html(r_chunk))
+        elif tag == "delete":
+            std_parts.append(
+                f'<del class="diff-del" title="标准母本原文字句（待审已删除）">{escape_html(s_chunk)}</del>'
+            )
+        elif tag == "insert":
+            is_num = any(c.isdigit() for c in r_chunk) or any(
+                sym in r_chunk for sym in ("‰", "%", "万", "元", "日")
+            )
+            cls = "diff-ins diff-ins-number" if is_num else "diff-ins"
+            rev_parts.append(
+                f'<ins class="{cls}" title="送审修改/新增内容">{escape_html(r_chunk)}</ins>'
+            )
+        elif tag == "replace":
+            std_parts.append(
+                f'<del class="diff-del" title="母本原文（已被篡改/替换）">{escape_html(s_chunk)}</del>'
+            )
+            is_num = any(c.isdigit() for c in r_chunk) or any(
+                sym in r_chunk for sym in ("‰", "%", "万", "元", "日")
+            )
+            cls = "diff-ins diff-ins-number" if is_num else "diff-ins"
+            rev_parts.append(
+                f'<ins class="{cls}" title="送审替换后内容">{escape_html(r_chunk)}</ins>'
+            )
+
+    return "".join(std_parts), "".join(rev_parts)
+
+
+def build_full_contract_diff(
+    docx_path: str | Path, forced_template_id: str | None = None
+) -> dict[str, Any]:
+    """执行整版合同对齐，生成双栏对照与全量法务批注数据。"""
+    docx_path = Path(docx_path)
+    if not docx_path.exists():
+        raise FileNotFoundError(f"文件不存在: {docx_path}")
+
+    sec = security_check_file(docx_path)
+    if not sec.passed:
+        raise ValueError(f"安全检查未通过: {sec.rejected_reason}")
+
+    rec, err = import_template_file(docx_path)
+    if rec is None:
+        raise RuntimeError(f"待审文档解析失败: {err}")
+
+    st = create_storage()
+    try:
+        matched_tpl = None
+        if forced_template_id:
+            matched_tpl = st.get_document(forced_template_id)
+        if not matched_tpl:
+            matched_tpl = st.find_active_template(
+                contract_subtype=rec.subtype, business_category=rec.category
+            )
+        if not matched_tpl:
+            raise ValueError(f"未能在标准库中找到业务子类 [{rec.subtype}] 的基准模板")
+
+        tpl_clauses = st.get_document_clauses(matched_tpl["document_id"])
+    finally:
+        st.close()
+
+    rev_clauses = rec.clauses or []
+
+    # 1. 动态规划 Needleman-Wunsch / LCS 对齐双端条款
+    def match_score(t: dict, r: dict) -> float:
+        cat_t = t.get("clause_category")
+        cat_r = r.get("clause_category")
+        num_t = t.get("clause_number")
+        num_r = r.get("clause_number")
+        text_t = (t.get("original_text") or "").strip()
+        text_r = (r.get("original_text") or "").strip()
+        sim = difflib.SequenceMatcher(None, text_t, text_r).ratio()
+
+        if cat_t == cat_r:
+            if num_t and num_r:
+                return 4.0 + sim if num_t == num_r else 0.8 + sim * 0.5
+            elif not num_t and not num_r:
+                return 2.5 + sim
+            else:
+                return 1.0 + sim
+        else:
+            return sim * 2.0 if sim > 0.6 else -0.5
+
+    n, m = len(tpl_clauses), len(rev_clauses)
+    dp = [[0.0] * (m + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            s = match_score(tpl_clauses[i - 1], rev_clauses[j - 1])
+            if s > 0.4:
+                dp[i][j] = max(dp[i - 1][j - 1] + s, dp[i - 1][j], dp[i][j - 1])
+            else:
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+
+    i, j = n, m
+    raw_aligned: list[tuple[str, int | None, int | None]] = []
+    while i > 0 or j > 0:
+        if i > 0 and j > 0:
+            s = match_score(tpl_clauses[i - 1], rev_clauses[j - 1])
+            if s > 0.4 and dp[i][j] == dp[i - 1][j - 1] + s:
+                raw_aligned.append(("MATCH_OR_DIFF", i - 1, j - 1))
+                i -= 1
+                j -= 1
+                continue
+        if i > 0 and (j == 0 or dp[i][j] == dp[i - 1][j]):
+            raw_aligned.append(("MISSING_IN_REVIEWED", i - 1, None))
+            i -= 1
+        elif j > 0:
+            raw_aligned.append(("NEW_IN_REVIEWED", None, j - 1))
+            j -= 1
+
+    raw_aligned.reverse()
+
+    aligned_blocks: list[dict[str, Any]] = []
+    annotations: list[dict[str, Any]] = []
+    ann_counter = 0
+
+    for idx, (status_type, t_idx, r_idx) in enumerate(raw_aligned):
+        block_id = f"block-{idx}"
+        t_c = tpl_clauses[t_idx] if t_idx is not None else None
+        r_c = rev_clauses[r_idx] if r_idx is not None else None
+        cat = (t_c or r_c).get("clause_category") or "OTHER"
+        cat_zh = CATEGORY_TITLES.get(cat, cat)
+        clause_num = (r_c or t_c).get("clause_number")
+
+        clause_title = cat_zh
+        if clause_num:
+            clause_title = f"{cat_zh} · 第 {clause_num} 款"
+
+        block_ann_ids: list[str] = []
+
+        if status_type == "MISSING_IN_REVIEWED":
+            s_text = (t_c.get("original_text") or "") if t_c else ""
+            ann_counter += 1
+            ann_id = f"ann-{ann_counter}"
+            block_ann_ids.append(ann_id)
+
+            is_core = cat in [
+                "CONFIDENTIALITY",
+                "LIABILITY",
+                "PARTY_A_OBLIGATIONS",
+                "PARTY_B_OBLIGATIONS",
+                "DISPUTE_RESOLUTION",
+            ]
+            risk_level = "HIGH" if is_core else "MEDIUM"
+            risk_label = "核心条款缺失" if is_core else "条款整段删除"
+
+            annotations.append(
+                {
+                    "id": ann_id,
+                    "index": ann_counter,
+                    "block_id": block_id,
+                    "clause_category": cat,
+                    "clause_category_zh": cat_zh,
+                    "clause_number": clause_num,
+                    "clause_title": clause_title,
+                    "delta_type": "MISSING_CLAUSE",
+                    "risk_level": risk_level,
+                    "risk_label": risk_label,
+                    "title": f"母本条款被整段删除: {clause_title}",
+                    "standard_span": s_text[:120]
+                    + ("..." if len(s_text) > 120 else ""),
+                    "reviewed_span": "（送审修改版已删除整段内容）",
+                    "quote_standard": s_text,
+                    "quote_reviewed": "",
+                    "ai_analysis": f"待审合同整段删除了母本中的【{clause_title}】。此举将导致我方在履约与追偿过程中失去合同明文保护，造成权利救济空白与实质性失衡。",
+                    "action_advice": "【法务处置建议】坚决要求对方恢复母本标准条款。若为商业实质妥协，须由业务主管与法务负责人提级审批。",
+                    "review_status": "PENDING",
+                }
+            )
+
+            s_html = (
+                f'<div class="diff-block-missing-wrap">'
+                f'<span class="badge-missing">母本原版条款（送审稿已删除）</span>'
+                f'<div class="missing-text">{escape_html(s_text)}</div>'
+                f"</div>"
+            )
+            r_html = (
+                f'<div class="diff-placeholder-missing">'
+                f'<span class="placeholder-icon">⚠️</span>'
+                f'<span class="placeholder-text">此处母本条款在送审版中已被整段删除</span>'
+                f'<span class="ann-pill danger" data-ann-id="{ann_id}" onclick="selectAnnotation(\'{ann_id}\')">'
+                f"🏷️ 批注 #{ann_counter:02d} · {risk_label}</span>"
+                f"</div>"
+            )
+
+            aligned_blocks.append(
+                {
+                    "block_id": block_id,
+                    "order": idx,
+                    "clause_category": cat,
+                    "clause_category_zh": cat_zh,
+                    "clause_number": clause_num,
+                    "clause_title": clause_title,
+                    "status": "MISSING_IN_REVIEWED",
+                    "standard_text": s_text,
+                    "reviewed_text": "",
+                    "standard_html": s_html,
+                    "reviewed_html": r_html,
+                    "annotation_ids": block_ann_ids,
+                }
+            )
+
+        elif status_type == "NEW_IN_REVIEWED":
+            r_text = (r_c.get("original_text") or "") if r_c else ""
+            ann_counter += 1
+            ann_id = f"ann-{ann_counter}"
+            block_ann_ids.append(ann_id)
+
+            annotations.append(
+                {
+                    "id": ann_id,
+                    "index": ann_counter,
+                    "block_id": block_id,
+                    "clause_category": cat,
+                    "clause_category_zh": cat_zh,
+                    "clause_number": clause_num,
+                    "clause_title": clause_title,
+                    "delta_type": "NEW_CLAUSE",
+                    "risk_level": "MEDIUM",
+                    "risk_label": "客户新增非标",
+                    "title": f"送审稿包含非标自定义条款: {clause_title}",
+                    "standard_span": "（标准参考母本库无此条款）",
+                    "reviewed_span": r_text[:120]
+                    + ("..." if len(r_text) > 120 else ""),
+                    "quote_standard": "",
+                    "quote_reviewed": r_text,
+                    "ai_analysis": "送审稿包含了标准母本库中不存在的自定义非标条款。非标约定常附带对方单方免责、排他性义务或单方解约权，需严格把关。",
+                    "action_advice": "【法务处置建议】严审此项非标约定的合规性与执行风险，确认是否已获得业务主管授权，必要时增加对等反制条款或要求删除。",
+                    "review_status": "PENDING",
+                }
+            )
+
+            s_html = (
+                '<div class="diff-placeholder-new">'
+                '<span class="placeholder-icon">🏛️</span>'
+                '<span class="placeholder-text">标准母本库无此条款（客户单方新增）</span>'
+                "</div>"
+            )
+            r_html = (
+                f'<div class="diff-block-new-wrap">'
+                f'<span class="badge-new">送审非标新增条款</span>'
+                f'<div class="new-text">{escape_html(r_text)}</div>'
+                f'<div class="ann-anchor-bar">'
+                f'<span class="ann-pill purple" data-ann-id="{ann_id}" onclick="selectAnnotation(\'{ann_id}\')">'
+                f"🏷️ 批注 #{ann_counter:02d} · 客户新增非标</span>"
+                f"</div></div>"
+            )
+
+            aligned_blocks.append(
+                {
+                    "block_id": block_id,
+                    "order": idx,
+                    "clause_category": cat,
+                    "clause_category_zh": cat_zh,
+                    "clause_number": clause_num,
+                    "clause_title": clause_title,
+                    "status": "NEW_IN_REVIEWED",
+                    "standard_text": "",
+                    "reviewed_text": r_text,
+                    "standard_html": s_html,
+                    "reviewed_html": r_html,
+                    "annotation_ids": block_ann_ids,
+                }
+            )
+
+        else:  # MATCH_OR_DIFF
+            s_text = (t_c.get("original_text") or "") if t_c else ""
+            r_text = (r_c.get("original_text") or "") if r_c else ""
+
+            if s_text.strip() == r_text.strip():
+                aligned_blocks.append(
+                    {
+                        "block_id": block_id,
+                        "order": idx,
+                        "clause_category": cat,
+                        "clause_category_zh": cat_zh,
+                        "clause_number": clause_num,
+                        "clause_title": clause_title,
+                        "status": "MATCH",
+                        "standard_text": s_text,
+                        "reviewed_text": r_text,
+                        "standard_html": f'<div class="clean-text">{escape_html(s_text)}</div>',
+                        "reviewed_html": f'<div class="clean-text">{escape_html(r_text)}</div>',
+                        "annotation_ids": [],
+                    }
+                )
+            else:
+                raw_deltas = diff_clauses(s_text, r_text)
+                # 过滤冗余的 TEXT_DELTA（当已有结构化变更时）
+                structural = [d for d in raw_deltas if d.delta_type != "TEXT_DELTA"]
+                active_deltas = structural if structural else raw_deltas
+
+                s_diff_html, r_diff_html = generate_word_diff_html(s_text, r_text)
+
+                ann_pills_html: list[str] = []
+                for d in active_deltas:
+                    ann_counter += 1
+                    ann_id = f"ann-{ann_counter}"
+                    block_ann_ids.append(ann_id)
+
+                    dtype = d.delta_type
+                    r_level = "MEDIUM"
+                    r_label = "条款变动"
+                    advice = "【法务处置建议】请法务与业务团队核对修改背景并确认是否接受。"
+                    analysis = d.description
+
+                    if dtype == "NUMBER_CHANGE":
+                        if cat in ["LIABILITY", "FEE_AND_PAYMENT"]:
+                            r_level = "HIGH"
+                            r_label = "高危数值篡改"
+                            analysis = (
+                                f"【核心数值被修改】母本约定 [{d.standard_span}] ➔ 送审变更为 [{d.reviewed_span}]。"
+                                f"若违约金或逾期利息被调低，将极大削弱履约保障；若涉及收款账号变更，关乎公司资金安全。"
+                            )
+                            advice = "【法务处置建议】若为违约金/赔偿金条款被单方削弱，坚决驳回并恢复母本标准；若为服务费填报，需核对审批对账单确认无误。"
+                        else:
+                            r_level = "LOW" if cat == "FRONT_MATTER" else "MEDIUM"
+                            r_label = "信息填报/数值变动"
+                            analysis = f"条款中数值要素发生变动: {d.description}。"
+                            advice = "【法务处置建议】核实编号与数值真实性。"
+                    elif dtype == "DEADLINE_CHANGE":
+                        r_level = "MEDIUM"
+                        r_label = "期限放宽"
+                        analysis = (
+                            f"【履行/付款期限被调整】母本约定 [{d.standard_span}] ➔ 送审变更为 [{d.reviewed_span}]。"
+                            f"可能延误我方回款或使我方陷入交付逾期违约。"
+                        )
+                        advice = "【法务处置建议】确认业务团队能否按期交付及对现金流周期的影响，避免宽限期被不合理拉长。"
+                    elif dtype == "PARTY_CHANGE":
+                        r_level = "HIGH"
+                        r_label = "责任主体倒置"
+                        analysis = (
+                            f"【权利义务主体错位】母本主体 [{d.standard_span}] ➔ 送审变更为 [{d.reviewed_span}]。"
+                            f"可能使我方承担原本由对方履行的法定或合同义务。"
+                        )
+                        advice = "【法务处置建议】坚决纠正责任主体表述，严防权利义务颠倒。"
+                    elif dtype == "NEGATION_CHANGE":
+                        r_level = "HIGH"
+                        r_label = "否定词反转"
+                        analysis = f"【法律义务方向反转】条款中否定词发生变化（{d.description}），使合同条款产生实质性的反向法律效力。"
+                        advice = "【法务处置建议】重大法律风险，建议立即恢复母本表述，拒绝单方逆转条款意图。"
+                    elif dtype == "OBLIGATION_CHANGE":
+                        r_level = "MEDIUM"
+                        r_label = "义务强度弱化"
+                        analysis = "【强制约束力被弱化】强义务动词被稀释为弱义务或任意权利，强制约束力降低。"
+                        advice = "【法务处置建议】建议坚持保留‘应当/必须’强义务动词，确保合同可执行性。"
+                    elif dtype == "TEXT_DELTA":
+                        r_level = "LOW"
+                        r_label = "措辞微调"
+                        analysis = f"文本细节表述存在差异（{d.description}）。"
+                        advice = "【法务处置建议】通读上下文确认语义清晰无歧义即可。"
+
+                    annotations.append(
+                        {
+                            "id": ann_id,
+                            "index": ann_counter,
+                            "block_id": block_id,
+                            "clause_category": cat,
+                            "clause_category_zh": cat_zh,
+                            "clause_number": clause_num,
+                            "clause_title": clause_title,
+                            "delta_type": dtype,
+                            "risk_level": r_level,
+                            "risk_label": r_label,
+                            "title": f"{r_label}: {clause_title}",
+                            "standard_span": d.standard_span or s_text[:80],
+                            "reviewed_span": d.reviewed_span or r_text[:80],
+                            "quote_standard": s_text,
+                            "quote_reviewed": r_text,
+                            "ai_analysis": analysis,
+                            "action_advice": advice,
+                            "review_status": "PENDING",
+                        }
+                    )
+
+                    pill_class = (
+                        "danger"
+                        if r_level == "HIGH"
+                        else ("warning" if r_level == "MEDIUM" else "info")
+                    )
+                    ann_pills_html.append(
+                        f'<span class="ann-pill {pill_class}" data-ann-id="{ann_id}" onclick="selectAnnotation(\'{ann_id}\')">'
+                        f"🏷️ 批注 #{ann_counter:02d} · {r_label}"
+                        f"</span>"
+                    )
+
+                pills_bar = (
+                    f'<div class="ann-anchor-bar">{" ".join(ann_pills_html)}</div>'
+                    if ann_pills_html
+                    else ""
+                )
+
+                aligned_blocks.append(
+                    {
+                        "block_id": block_id,
+                        "order": idx,
+                        "clause_category": cat,
+                        "clause_category_zh": cat_zh,
+                        "clause_number": clause_num,
+                        "clause_title": clause_title,
+                        "status": "DIFF",
+                        "standard_text": s_text,
+                        "reviewed_text": r_text,
+                        "standard_html": f'<div class="diff-text-std">{s_diff_html}</div>',
+                        "reviewed_html": f'<div class="diff-text-rev">{r_diff_html}{pills_bar}</div>',
+                        "annotation_ids": block_ann_ids,
+                    }
+                )
+
+    # 统计数据汇总
+    high_count = sum(1 for a in annotations if a["risk_level"] == "HIGH")
+    med_count = sum(1 for a in annotations if a["risk_level"] == "MEDIUM")
+    low_count = sum(1 for a in annotations if a["risk_level"] == "LOW")
+    missing_count = sum(
+        1 for a in annotations if a["delta_type"] == "MISSING_CLAUSE"
+    )
+    new_count = sum(1 for a in annotations if a["delta_type"] == "NEW_CLAUSE")
+
+    # 兼容已有旧版 diff_report
+    legacy_diff_report = diff_clause_sets(tpl_clauses, rev_clauses)
+
+    return {
+        "uploaded_file": str(docx_path),
+        "detected_subtype": rec.subtype,
+        "classification_confidence": rec.classification_confidence,
+        "matched_template_id": matched_tpl["document_id"],
+        "matched_template_name": matched_tpl.get("source_file", ""),
+        "standard_clause_count": len(tpl_clauses),
+        "uploaded_clause_count": len(rev_clauses),
+        "diff_report": legacy_diff_report,
+        "aligned_blocks": aligned_blocks,
+        "annotations": annotations,
+        "stats": {
+            "total_annotations": len(annotations),
+            "high_risk": high_count,
+            "medium_risk": med_count,
+            "low_risk": low_count,
+            "missing_clauses": missing_count,
+            "new_clauses": new_count,
+            "total_blocks": len(aligned_blocks),
+            "matched_blocks": sum(
+                1 for b in aligned_blocks if b["status"] == "MATCH"
+            ),
+            "diff_blocks": sum(
+                1 for b in aligned_blocks if b["status"] == "DIFF"
+            ),
+        },
+    }
