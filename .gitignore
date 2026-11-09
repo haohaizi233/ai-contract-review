@@ -27,6 +27,7 @@ reports/contract-kb/*
 !reports/contract-kb/rag-retrieval-evaluation.md
 !reports/contract-kb/contract-review-evaluation.md
 !reports/contract-kb/llm-e2e-evidence.json
+!reports/wedrive-*.md
 # 测试语料（合成样本由 contract_kb.synthetic/golden 运行时生成；真实语料受控不入库）
 tests/fixtures/*
 !tests/fixtures/evaluation_synthetic/

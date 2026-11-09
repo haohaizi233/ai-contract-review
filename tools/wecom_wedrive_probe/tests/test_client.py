@@ -415,3 +415,99 @@ def test_probe_runner_trusted_ip_blocked(monkeypatch):
         assert runner.result_data["conclusion"]["level"] == "C"
         assert "企业可信IP" in runner.result_data["conclusion"]["title"]
         assert "203.0.113.21" in runner.result_data["conclusion"]["details"]
+
+
+def test_http_200_with_640008_space_permission_denied():
+    """测试 HTTP 200 但业务返回 640008 权限拒绝时的识别与分类。"""
+    c = classify_wecom_error(640008, "permision deny, from ip: 183.23.152.239")
+    assert c["category"] == ErrorCategory.SPACE_NO_PERMISSION.value
+    assert "无访问权限" in c["description"]
+    assert "640008" in c["description"]
+
+
+def test_token_expiry_and_refresh_mechanism():
+    """测试 Token 失效判定与强制刷新。"""
+    client = WeComWeDriveClient("corp", "secret")
+    client._token = "expired_token"
+    client._token_expires_at = 1000.0  # 远早于当前时间
+
+    with patch.object(requests.Session, "get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "errcode": 0,
+            "errmsg": "ok",
+            "access_token": "fresh_token_123",
+            "expires_in": 7200,
+        }
+        mock_get.return_value = mock_resp
+
+        tok = client.ensure_token()
+        assert tok == "fresh_token_123"
+        assert client._token == "fresh_token_123"
+        assert mock_get.call_count == 1
+
+
+def test_network_timeout_handling():
+    """测试网络超时被安全捕获。"""
+    client = WeComWeDriveClient("corp", "secret", timeout=1)
+    client._token = "valid_tok"
+    client._token_expires_at = 9999999999.0
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.side_effect = requests.exceptions.Timeout("Connection timed out")
+        with pytest.raises(requests.exceptions.Timeout):
+            client.get_space_info("s.test")
+
+
+def test_rate_limit_and_space_not_exist_classification():
+    """测试接口限流 (45009) 与空间不存在 (640001) 的错误分类。"""
+    # 接口限流
+    c_rate = classify_wecom_error(45009, "api freq out of limit")
+    assert "超限" in c_rate["description"] or "45009" in str(c_rate)
+
+    # 空间不存在
+    c_not_exist = classify_wecom_error(640001, "space not exist")
+    assert "不存在" in c_not_exist["description"] or "640001" in str(c_not_exist)
+
+
+def test_missing_config_detection():
+    """测试环境变量缺失检查。"""
+    runner = WeDriveProbeRunner()
+    runner.corp_id = ""
+    runner.app_secret = ""
+    runner.space_id = ""
+    ok = runner.run_stage_a_env_check()
+    assert ok is False
+    res = runner.result_data["environment_check"]
+    assert res["has_corp_id"] is False
+    assert res["has_app_secret"] is False
+    assert res["has_space_id"] is False
+    assert len(res["missing_configs"]) == 3
+
+
+@pytest.mark.parametrize(
+    "errcode,errmsg,expected_cat,expected_kw",
+    [
+        (640001, "space not exist", ErrorCategory.RESOURCE_NOT_FOUND.value, "空间"),
+        (640002, "file not exist", ErrorCategory.RESOURCE_NOT_FOUND.value, "文件"),
+        (640004, "access forbidden", ErrorCategory.SPACE_NO_PERMISSION.value, "无权限访问"),
+        (640005, "member not in space", ErrorCategory.SPACE_NO_PERMISSION.value, "成员不在空间内"),
+        (640008, "permision deny", ErrorCategory.SPACE_NO_PERMISSION.value, "微盘空间无访问权限"),
+        (640017, "wedrive api disabled", ErrorCategory.API_UNAUTHORIZED.value, "未开启微盘 API"),
+        (45009, "api freq limit", ErrorCategory.RATE_LIMIT_ERROR.value, "频率超限"),
+        (45029, "app freq limit", ErrorCategory.RATE_LIMIT_ERROR.value, "频率超限"),
+        (60020, "from ip: 183.23.152.239", ErrorCategory.TRUSTED_IP_ERROR.value, "企业可信 IP"),
+        (999999, "custom unexpected error", ErrorCategory.UNKNOWN_ERROR.value, "未收录"),
+    ],
+)
+def test_official_wecom_error_codes_parameterized(errcode, errmsg, expected_cat, expected_kw):
+    """参数化严格验证企业微信官方微盘错误码分类及描述契约。"""
+    res = classify_wecom_error(errcode, errmsg, http_status=200)
+    assert res["category"] == expected_cat
+    assert expected_kw in res["description"]
+    assert res["errcode"] == errcode
+    assert res["http_status"] == 200
+    assert "official_doc" in res
+
+

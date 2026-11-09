@@ -28,6 +28,7 @@ class ErrorCategory(str, Enum):
     RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
     PARAMETER_ERROR = "PARAMETER_ERROR"
     DOWNLOAD_DENIED = "DOWNLOAD_DENIED"
+    RATE_LIMIT_ERROR = "RATE_LIMIT_ERROR"
     NETWORK_ERROR = "NETWORK_ERROR"
     UNKNOWN_ERROR = "UNKNOWN_ERROR"
 
@@ -60,17 +61,26 @@ def mask_cookie_or_url(url_or_cookie: str | None) -> str:
     return f"{url_or_cookie[:8]}...[MASKED]...{url_or_cookie[-4:]}"
 
 
-def classify_wecom_error(errcode: int, errmsg: str = "") -> dict[str, Any]:
-    """统一解析企业微信官方业务错误码并给出归类、中文原因与修复建议。"""
+def classify_wecom_error(
+    errcode: int, errmsg: str = "", http_status: int = 200
+) -> dict[str, Any]:
+    """统一解析企业微信官方业务错误码并给出归类、中文原因与修复建议。
+
+    严格遵循企业微信官方错误码契约:
+    - https://developer.work.weixin.qq.com/document/path/90313 (全局错误码)
+    - https://open.work.weixin.qq.com/devtool/query?e={errcode} (官方排障查询)
+    """
     errmsg_lower = errmsg.lower()
 
     if errcode == 0:
         return {
             "category": ErrorCategory.SUCCESS.value,
+            "http_status": http_status,
             "errcode": 0,
             "errmsg": errmsg or "ok",
             "description": "接口调用成功",
             "suggestion": "无",
+            "official_doc": "https://developer.work.weixin.qq.com/document/path/90313",
         }
 
     # 1. 60020: not allow to access from your ip
@@ -79,34 +89,43 @@ def classify_wecom_error(errcode: int, errmsg: str = "") -> dict[str, Any]:
         caller_ip = ip_match.group(1) if ip_match else "当前公网出口IP"
         return {
             "category": ErrorCategory.TRUSTED_IP_ERROR.value,
+            "http_status": http_status,
             "errcode": errcode,
             "errmsg": errmsg,
             "caller_ip": caller_ip,
-            "description": f"可信 IP 限制：当前执行环境的公网出口 IP ({caller_ip}) 未包含在企业微信管理后台配置的【企业可信 IP】白名单中。",
+            "description": f"企业可信 IP 限制 (errcode=60020): 当前执行环境出口 IP ({caller_ip}) 未包含在企业微信管理后台自建应用的【企业可信 IP】白名单中。",
             "suggestion": (
                 f"1. 请企业微信管理员登录后台 (work.weixin.qq.com) ->【应用管理】-> 选中当前自建应用 ->【企业可信IP】；\n"
                 f"2. 将当前出口 IP '{caller_ip}' 追加到可信 IP 列表中（若配置了多台服务器/网关，需依次录入）；\n"
                 f"3. 保存后通常 1-2 分钟在微信服务端生效，即可重新测试；\n"
                 f"4. 若企业使用中转代理网关节点，请在 .env 中配置 WECOM_PROXY 走指定代理出口。"
             ),
+            "official_doc": "https://open.work.weixin.qq.com/devtool/query?e=60020",
         }
 
-    # 2. 48002: api not authorized
+    # 2. 48002 / 640017: 微盘 API 未开通/未授权
     if (
-        errcode == 48002
+        errcode in (48002, 640017)
         or "api not allow" in errmsg_lower
         or "api forbidden" in errmsg_lower
     ):
+        desc = (
+            "企业未开启微盘 API 功能或管理端未开通权限 (errcode=640017)"
+            if errcode == 640017
+            else "微盘 API 未授权给当前应用 (errcode=48002)"
+        )
         return {
             "category": ErrorCategory.API_UNAUTHORIZED.value,
+            "http_status": http_status,
             "errcode": errcode,
             "errmsg": errmsg,
-            "description": "微盘 API 未授权：当前自建应用未获得调用企业微信微盘接口的权限。",
+            "description": desc,
             "suggestion": (
-                "1. 请企业管理员进入后台【管理工具】/【协作】->【微盘】->【API】；\n"
+                "1. 请企业管理员进入后台【协作】->【微盘】->【API】；\n"
                 "2. 确认已开启 API 接口同步，并将该自建应用添加到【可调用应用】名单中；\n"
                 "3. 为该应用勾选至少【只读】权限。"
             ),
+            "official_doc": f"https://open.work.weixin.qq.com/devtool/query?e={errcode}",
         }
 
     # 3. 凭证类错误
@@ -125,68 +144,103 @@ def classify_wecom_error(errcode: int, errmsg: str = "") -> dict[str, Any]:
 
         return {
             "category": ErrorCategory.INVALID_CREDENTIALS.value,
+            "http_status": http_status,
             "errcode": errcode,
             "errmsg": errmsg,
             "description": desc,
             "suggestion": sugg,
+            "official_doc": f"https://open.work.weixin.qq.com/devtool/query?e={errcode}",
         }
 
     # 4. 参数错误
     if errcode in (40058, 41001, 40035):
         return {
             "category": ErrorCategory.PARAMETER_ERROR.value,
+            "http_status": http_status,
             "errcode": errcode,
             "errmsg": errmsg,
             "description": f"请求参数错误: {errmsg}",
             "suggestion": "核对请求体 JSON 字段名称与数据类型（例如 spaceid、fatherid、start、limit）。",
+            "official_doc": f"https://open.work.weixin.qq.com/devtool/query?e={errcode}",
         }
 
-    # 5. 空间或文件无权限
-    if errcode in (2000003, 93001, 301036, 640008):
+    # 5. 空间或资源权限不足 (640004=无权限访问, 640005=成员不在空间内, 640008=没有空间权限)
+    if errcode in (2000003, 93001, 301036, 640004, 640005, 640008):
+        if errcode == 640004:
+            desc = f"无权限访问对应微盘资源 (errcode=640004: {errmsg})"
+        elif errcode == 640005:
+            desc = f"成员不在空间内 (errcode=640005: {errmsg})"
+        elif errcode == 640008:
+            desc = f"微盘空间无访问权限 (errcode=640008: {errmsg})：调用方缺少空间访问/协同权限。"
+        else:
+            desc = f"微盘空间/资源权限不足 (errcode={errcode}: {errmsg})"
+
         return {
             "category": ErrorCategory.SPACE_NO_PERMISSION.value,
+            "http_status": http_status,
             "errcode": errcode,
             "errmsg": errmsg,
-            "description": f"微盘空间无访问权限 (errcode={errcode}: {errmsg})：当前自建应用未获得目标微盘空间的访问权限。",
+            "description": desc,
             "suggestion": (
-                "1. 【排查项 A - 检查微盘 API 可调用授权】：\n"
-                "   请企业微信管理员登录后台 (work.weixin.qq.com) ->【协作】->【微盘】->【API】；\n"
-                "   确认已开启 API 接口同步，且在【可调用接口的应用】列表中已添加当前自建应用（<YOUR_AGENT_ID>），并分配了‘只读’权限。\n"
-                "2. 【排查项 B - 检查目标空间访问权限】：\n"
-                "   若目标空间由普通成员手动创建（agent_id=0），受企业微信应用权限隔离保护。\n"
-                "   请在企业微信管理后台【协作】->【微盘】->【空间管理】中检查该空间的权限设置；或由空间管理员在企业微信微盘中将自建应用/操作账号加入空间成员；\n"
-                "3. 【替代方案 - 应用专属空间同步】：\n"
-                "   若企业微信安全机制限制应用访问普通用户手动创建的既有空间，可在后台将需要同步的母本合同归集至由自建应用通过 API 创建的专属业务空间中。"
+                "1. 【微盘 API 全局授权检查】：请企业微信管理员登录后台 (work.weixin.qq.com) ->【协作】->【微盘】->【API】，确认应用已加入可调用列表并开启权限；\n"
+                "2. 【空间协同成员检查】：确认当前调用应用或关联管理员对目标微盘空间具有协同权限；\n"
+                "3. 【替代方案】：由自建应用通过 API space_create 创建专属空间，或通过微盘客户端本地同步盘读取。"
             ),
+            "official_doc": f"https://open.work.weixin.qq.com/devtool/query?e={errcode}",
         }
 
-    # 6. 资源不存在
-    if errcode in (2000002, 2000004, 93000, 93002):
+    # 6. 资源不存在 (640001=空间不存在, 640002=文件不存在)
+    if errcode in (2000002, 2000004, 93000, 93002, 640001, 640002):
+        if errcode == 640001:
+            desc = f"微盘不存在当前空间 (errcode=640001: {errmsg})"
+        elif errcode == 640002:
+            desc = f"微盘文件不存在 (errcode=640002: {errmsg})"
+        else:
+            desc = f"微盘空间或目标文件不存在 (errcode={errcode}): 可能已被删除或 ID 错误。"
+
         return {
             "category": ErrorCategory.RESOURCE_NOT_FOUND.value,
+            "http_status": http_status,
             "errcode": errcode,
             "errmsg": errmsg,
-            "description": "微盘空间或目标文件不存在（可能已被删除或 ID 错误）。",
+            "description": desc,
             "suggestion": "检查配置中的 space_id 或 file_id 是否与微盘中的实际对象一致。",
+            "official_doc": f"https://open.work.weixin.qq.com/devtool/query?e={errcode}",
         }
 
-    # 7. 下载无权限
+    # 7. 接口调用频率超限 (45009, 45029)
+    if errcode in (45009, 45029):
+        return {
+            "category": ErrorCategory.RATE_LIMIT_ERROR.value,
+            "http_status": http_status,
+            "errcode": errcode,
+            "errmsg": errmsg,
+            "description": f"接口调用频率超限 (errcode={errcode}): {errmsg}",
+            "suggestion": "请降低接口并发或增加请求延迟，遵守企业微信官方频控限制。",
+            "official_doc": f"https://open.work.weixin.qq.com/devtool/query?e={errcode}",
+        }
+
+    # 8. 下载受限
     if errcode in (2000005, 93003):
         return {
             "category": ErrorCategory.DOWNLOAD_DENIED.value,
+            "http_status": http_status,
             "errcode": errcode,
             "errmsg": errmsg,
             "description": "文件下载受限：文件设置了仅在线查看、空间水印保护或应用缺少下载权限。",
             "suggestion": "检查微盘空间的安全水印配置及成员下载权限限制。",
+            "official_doc": f"https://open.work.weixin.qq.com/devtool/query?e={errcode}",
         }
 
-    # 默认兜底
+    # 默认兜底：保留原始信息，不强行归类
     return {
         "category": ErrorCategory.UNKNOWN_ERROR.value,
+        "http_status": http_status,
         "errcode": errcode,
         "errmsg": errmsg,
         "description": f"未收录的企业微信业务错误 (errcode={errcode}): {errmsg}",
         "suggestion": f"请查阅企业微信官方开发者文档或根据 hint 访问错误查询工具: https://open.work.weixin.qq.com/devtool/query?e={errcode}",
+        "official_doc": f"https://open.work.weixin.qq.com/devtool/query?e={errcode}",
     }
 
 
