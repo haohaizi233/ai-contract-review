@@ -343,6 +343,8 @@ def test_e10_soft_delete_and_restore(test_env):
     mgr.sync_from_directory(watch)
     doc_id = mgr.trackers[f.name].document_id
 
+    # 保存原始字节，模拟同一文件重新上线。
+    original_bytes = f.read_bytes()
     # 移除文件
     f.unlink()
     # 第一次检测进入待删除
@@ -355,7 +357,7 @@ def test_e10_soft_delete_and_restore(test_env):
     assert doc["status"] == "INACTIVE"
 
     # 文件重新恢复
-    create_sample_docx(f, "生命周期", [("第一条", "生命周期条款")])
+    f.write_bytes(original_bytes)
     mgr.sync_from_directory(watch)
 
     doc_restored = mgr.storage.get_document(doc_id)
@@ -469,3 +471,35 @@ def test_e14_contract_rag_retrieval_traceability(test_env):
     assert "深圳市南山区人民法院" in top_hit["text"]
     assert top_hit["document_id"] == "MB10000000088"
     assert top_hit["clause_id"] is not None
+
+
+def test_restore_changed_file_does_not_reactivate_old_document(test_env):
+    mgr = test_env["manager"]
+    watch = test_env["watch_dir"]
+    mgr.removal_grace_seconds = 0
+    mgr.enable_auto_deactivation = True
+    f = watch / "MB10000000001_restore.docx"
+    create_sample_docx(f, "contract", [("第一条", "old content")])
+    mgr.sync_from_directory(watch)
+    old_id = mgr.trackers[f.name].document_id
+    f.unlink()
+    mgr.sync_from_directory(watch)
+    mgr.sync_from_directory(watch)
+    assert mgr.storage.get_document(old_id)["status"] == "INACTIVE"
+
+    # 不完整或损坏的恢复文件不能使旧文档重新生效。
+    f.write_bytes(b"invalid docx")
+    mgr.sync_from_directory(watch)
+    assert mgr.storage.get_document(old_id)["status"] == "INACTIVE"
+
+
+def test_sync_does_not_restore_manually_inactive_document(test_env):
+    mgr = test_env["manager"]
+    watch = test_env["watch_dir"]
+    f = watch / "MB10000000001_manual.docx"
+    create_sample_docx(f, "contract", [("第一条", "manual inactive")])
+    mgr.sync_from_directory(watch)
+    doc_id = mgr.trackers[f.name].document_id
+    mgr.storage.set_document_status(doc_id, "INACTIVE")
+    mgr.sync_from_directory(watch)
+    assert mgr.storage.get_document(doc_id)["status"] == "INACTIVE"

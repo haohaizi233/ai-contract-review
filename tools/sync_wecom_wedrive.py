@@ -365,11 +365,6 @@ class WeDriveSyncManager:
                 tracker = FileTracker(rel_path=rel_path, abs_path=resolved_file)
                 self.trackers[rel_path] = tracker
 
-            # 若先前处于待删除状态，恢复
-            if tracker.disappeared_since is not None:
-                logger.info(f"文件恢复在线: {rel_path}")
-                tracker.disappeared_since = None
-
             # 2. 文件稳定性检测
             if not self.check_file_stability(tracker):
                 logger.info(
@@ -393,8 +388,39 @@ class WeDriveSyncManager:
                 metrics.files_failed += 1
                 continue
 
+            # 仅恢复内容一致且因文件消失而停用的文档。
+            # 新内容必须走安全解析与版本导入。
+            with self.storage._lock:
+                stored_doc = self.storage.find_document_by_hash(
+                    file_sha256, tenant_id=config.TENANT_ID
+                )
+                if (
+                    tracker.disappeared_since is not None
+                    and stored_doc
+                    and stored_doc["status"] == "INACTIVE"
+                    and stored_doc["source_file"] in (rel_path, resolved_file.name)
+                ):
+                    template_id = (
+                        stored_doc.get("template_id") or stored_doc["document_id"]
+                    )
+                    has_active_version = any(
+                        (d.get("template_id") or d["document_id"]) == template_id
+                        and d["status"] == "ACTIVE"
+                        for d in self.storage.list_documents(tenant_id=config.TENANT_ID)
+                    )
+                    if not has_active_version:
+                        self.storage.set_document_status(
+                            stored_doc["document_id"],
+                            "ACTIVE",
+                            tenant_id=config.TENANT_ID,
+                        )
+                        tracker.document_id = stored_doc["document_id"]
+                        existing_hashes[file_sha256] = rel_path
+                        tracker.disappeared_since = None
+
             # 4. 判断内容是否完全未变动
             if file_sha256 in existing_hashes:
+                tracker.disappeared_since = None
                 stored_file = existing_hashes[file_sha256]
                 if stored_file == rel_path or stored_file == resolved_file.name:
                     tracker.state = FileSyncState.SKIPPED_IDENTICAL
@@ -470,6 +496,7 @@ class WeDriveSyncManager:
                 doc_id, is_new = self.storage.upsert_document(doc_dict)
                 metrics.index_duration_ms += (time.perf_counter() - t_idx_0) * 1000
                 tracker.document_id = doc_id
+                tracker.disappeared_since = None
                 tracker.state = FileSyncState.COMPLETED
                 metrics.files_changed += 1
                 existing_hashes[file_sha256] = rel_path
