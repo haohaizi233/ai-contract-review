@@ -30,7 +30,13 @@ def variants(raw):
         image.load()
         pixels = image.convert("RGBA").tobytes()
         size = image.size
-        mode = "RGBA" if image.mode in ("RGBA", "P", "LA") else "RGB"
+        mode = (
+            image.mode
+            if image.mode in ("RGBA", "RGB")
+            else "RGB"
+            if image.mode == "CMYK"
+            else "RGBA"
+        )
         converted = image.convert(mode)
         yield raw
         for optimize in (True, False):
@@ -40,6 +46,34 @@ def variants(raw):
             with Image.open(io.BytesIO(png)) as check:
                 assert check.size == size and check.convert("RGBA").tobytes() == pixels
             yield png
+
+
+def publish_verified_asset(target, data, expected_hash):
+    import tempfile
+
+    target = Path(target)
+    if digest(data) != expected_hash:
+        raise ValueError("source hash does not match historical ledger")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() and digest(target.read_bytes()) == expected_hash:
+        return
+    descriptor, name = tempfile.mkstemp(prefix=".recovery-", dir=target.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if target.exists():
+            if digest(target.read_bytes()) == expected_hash:
+                return
+            quarantine = target.with_name(
+                target.name + ".corrupt-" + str(time.time_ns())
+            )
+            target.rename(quarantine)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def main():
@@ -76,7 +110,8 @@ def main():
     if checkpoint.exists():
         for line in checkpoint.open(encoding="utf8"):
             r = json.loads(line)
-            done[r["url_hash"]] = r
+            if r["status"] in ("restored", "valid_unmatched"):
+                done[r["url_hash"]] = r
     urls = [u for u in urls if digest(u.encode()) not in done]
     if args.limit:
         urls = urls[: args.limit]
@@ -158,9 +193,22 @@ def main():
                 )
 
                 with urllib.request.urlopen(req, timeout=15) as response:
-                    raw = response.read(32 * 1024 * 1024 + 1)
-                if len(raw) > 32 * 1024 * 1024:
-                    raise ValueError("oversize")
+                    budget = (
+                        max(
+                            32 * 1024 * 1024,
+                            max(int(r.get("size", 0)) for r in missing.values()),
+                        )
+                        + 1
+                    )
+                    buffer = io.BytesIO()
+                    while buffer.tell() < budget:
+                        chunk = response.read(min(256 * 1024, budget - buffer.tell()))
+                        if not chunk:
+                            break
+                        buffer.write(chunk)
+                    raw = buffer.getvalue()
+                if len(raw) >= budget:
+                    raise ValueError("response exceeds ledger budget")
             rawhash = digest(raw)
             is_attachment = (
                 rawhash in missing and missing[rawhash]["kind"] == "attachment"
@@ -179,14 +227,7 @@ def main():
                 if h not in missing:
                     continue
                 target = BASE / missing[h]["local"]
-                if not target.exists():
-                    target.parent.mkdir(exist_ok=True, parents=True)
-                    try:
-                        with target.open("xb") as f:
-                            f.write(data)
-                    except FileExistsError:
-                        pass
-                assert digest(target.read_bytes()) == h
+                publish_verified_asset(target, data, h)
                 result["restored"].append(missing[h]["local"])
             result["restored"] = sorted(set(result["restored"]))
             result["status"] = "restored" if result["restored"] else "valid_unmatched"
@@ -194,12 +235,25 @@ def main():
             result["error_type"] = type(exc).__name__
         return result
 
+    def fetch_with_retry(src):
+        for attempt in range(3):
+            result = fetch(src)
+            if result["status"] != "failed":
+                return result
+            rid = context.get(src)
+            with flow_lock:
+                if not flow_cache.get(rid):
+                    flow_cache.pop(rid, None)
+            if attempt < 2:
+                time.sleep(attempt + 1)
+        return result
+
     counts = __import__("collections").Counter()
     with (
         checkpoint.open("a", encoding="utf8") as log,
         ThreadPoolExecutor(max_workers=6) as pool,
     ):
-        futures = [pool.submit(fetch, u) for u in urls]
+        futures = [pool.submit(fetch_with_retry, u) for u in urls]
         for i, future in enumerate(as_completed(futures), 1):
             result = future.result()
             counts[result["status"]] += 1
