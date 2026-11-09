@@ -127,11 +127,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .btn-primary:hover { background: #1D4ED8; }
 
-  /* 主容器 */
+  /* 主容器（宽幅双栏优先） */
   .main-wrapper {
-    max-width: 1820px;
+    max-width: 100%;
     margin: 16px auto;
-    padding: 0 20px;
+    padding: 0 24px;
   }
 
   /* 上传折叠区与实测用例切换 */
@@ -257,16 +257,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     align-items: center;
     box-shadow: 0 2px 6px rgba(0,0,0,0.04);
   }
-  .control-left-group { display: flex; align-items: center; gap: 14px; }
-  .view-switch {
+  .control-left-group { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .view-switch, .style-switch {
     display: flex; background: #E2E8F0; padding: 2px; border-radius: 8px;
   }
-  .view-btn {
-    padding: 5px 14px; font-size: 12px; font-weight: 600; border-radius: 6px;
+  .view-btn, .style-btn {
+    padding: 5px 12px; font-size: 12px; font-weight: 600; border-radius: 6px;
     border: none; background: transparent; color: #64748B; cursor: pointer;
-    transition: all 0.15s ease;
+    transition: all 0.15s ease; white-space: nowrap;
   }
-  .view-btn.active {
+  .view-btn.active, .style-btn.active {
     background: #FFF; color: #0F172A; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
   }
 
@@ -283,44 +283,61 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .filter-chip {
     padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border);
     background: #FFF; font-size: 11px; font-weight: 600; color: #475569;
-    cursor: pointer; transition: all 0.15s ease;
+    cursor: pointer; transition: all 0.15s ease; white-space: nowrap;
   }
   .filter-chip.active {
     background: #1E293B; color: #FFF; border-color: #1E293B;
   }
 
   .control-right-group { display: flex; align-items: center; gap: 10px; }
+  .btn-drawer {
+    background: #1E293B !important; color: #FFF !important; border-color: #1E293B !important;
+  }
+  .btn-drawer:hover { background: #334155 !important; }
+  .drawer-count-badge {
+    background: #EF4444; color: #FFF; font-size: 10.5px; padding: 1px 6px; border-radius: 999px; font-weight: 800;
+  }
   .sync-toggle-label {
     font-size: 12px; font-weight: 600; color: #475569; display: flex; align-items: center; gap: 6px;
     cursor: pointer;
   }
 
-  /* ==================== 核心工作区：整版对照 + 侧边批注 ==================== */
+  /* ==================== 核心工作区：左右 50/50 纯双栏对齐 ==================== */
   .workspace-layout {
+    display: block;
+    width: 100%;
+    position: relative;
+    transition: all 0.2s ease;
+  }
+
+  /* 宽屏固定侧栏模式 */
+  .workspace-layout.sidebar-pinned {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 420px;
-    gap: 16px;
+    grid-template-columns: minmax(0, 1fr) 440px;
+    gap: 18px;
     align-items: start;
   }
 
-  /* 当切换为单栏审阅模式时 */
+  /* 单版正文修订模式 */
   .workspace-layout.mode-single {
-    grid-template-columns: minmax(0, 1fr) 420px;
+    display: block;
+    width: 100%;
   }
 
-  /* 整版合同双栏对照容器 */
+  /* 整版合同双栏对照容器（A4纸张风格） */
   .document-grid-container {
     background: #FFFFFF;
     border: 1px solid var(--border);
     border-radius: 12px;
     box-shadow: 0 1px 4px rgba(0,0,0,0.03);
     overflow: hidden;
+    width: 100%;
   }
   .document-grid-header {
     display: grid;
     grid-template-columns: 1fr 1fr;
     background: #F8FAFC;
-    border-bottom: 2px solid #E2E8F0;
+    border-bottom: 2px solid #CBD5E1;
     position: sticky;
     top: 114px;
     z-index: 80;
@@ -329,21 +346,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     grid-template-columns: 1fr;
   }
   .grid-header-col {
-    padding: 10px 18px;
-    font-size: 13px;
+    padding: 12px 24px;
+    font-size: 14px;
     font-weight: 700;
-    color: #334155;
     display: flex;
     align-items: center;
     justify-content: space-between;
   }
   .grid-header-col.standard {
-    border-right: 1px solid var(--border);
+    border-right: 2px solid #CBD5E1;
     background: #F8FAFC;
     color: #475569;
   }
   .grid-header-col.reviewed {
-    background: #F0F7FF;
+    background: #EFF6FF;
     color: #1E40AF;
   }
 
@@ -351,7 +367,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .aligned-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    border-bottom: 1px solid #EDF2F7;
+    border-bottom: 1px solid #E2E8F0;
     position: relative;
     transition: background 0.15s ease, box-shadow 0.15s ease;
   }
@@ -374,169 +390,335 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     100% { background: transparent; }
   }
 
-  /* 左右两栏单元格 */
+  /* 左右两栏单元格（A4质感排版） */
   .pane-standard, .pane-reviewed {
-    padding: 14px 20px;
-    font-size: 13.5px;
-    line-height: 1.75;
+    padding: 18px 24px;
+    font-size: 14px;
+    line-height: 1.85;
     position: relative;
     word-break: break-all;
     white-space: pre-wrap;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
   }
   .pane-standard {
-    border-right: 1px solid #F1F5F9;
+    border-right: 2px solid #E2E8F0;
     color: #334155;
-    background: #FFFFFF;
+    background: #FAFAFC;
   }
   .pane-reviewed {
     color: #0F172A;
     background: #FFFFFF;
   }
 
-  /* 条款类别小标签 */
+  /* 条款顶栏标签条 */
+  .clause-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px dashed #E2E8F0;
+  }
   .clause-tag {
     font-size: 11px;
     font-weight: 700;
-    padding: 1px 7px;
+    padding: 2px 8px;
     border-radius: 4px;
+    display: inline-block;
+  }
+  .clause-tag.std {
     background: #EEF2F6;
     color: #475569;
-    margin-bottom: 6px;
-    display: inline-block;
+    border: 1px solid #CBD5E1;
+  }
+  .clause-tag.rev {
+    background: #E0E7FF;
+    color: #3730A3;
+    border: 1px solid #C7D2FE;
+  }
+  .clause-status-pill {
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 4px;
+  }
+  .clause-status-pill.status-match { background: #DCFCE7; color: #15803D; }
+  .clause-status-pill.status-diff { background: #FEF3C7; color: #92400E; }
+  .clause-status-pill.status-missing { background: #FEE2E2; color: #991B1B; }
+  .clause-status-pill.status-new { background: #F3E8FF; color: #7C3AED; }
+
+  /* ==================== 标红 (Redline) 核心视觉规范 ==================== */
+  /* 1. 删除文本标红 */
+  .diff-del, del {
+    background: #FEE2E2 !important;
+    color: #B91C1C !important;
+    text-decoration: line-through 2px #DC2626 !important;
+    border: 1px solid #FECACA !important;
+    font-weight: 700 !important;
+    padding: 1px 4px !important;
+    border-radius: 3px !important;
+    display: inline !important;
+  }
+
+  /* 2. 插入文本（红绿对比模式） */
+  .diff-ins, ins {
+    background: #DCFCE7;
+    color: #15803D;
+    text-decoration: underline 2px #16A34A;
+    border: 1px solid #BBF7D0;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 3px;
+    display: inline;
+  }
+
+  /* 3. 高危数值/比率/期限修改特别标红醒目徽章 */
+  .diff-ins-number {
+    background: #FEF08A !important;
+    color: #991B1B !important;
+    border: 2px solid #EF4444 !important;
+    font-weight: 900 !important;
+    padding: 2px 6px !important;
+    border-radius: 4px !important;
+    box-shadow: 0 1px 4px rgba(220, 38, 38, 0.25) !important;
+    letter-spacing: 0.5px !important;
+  }
+
+  /* 4. 【经典法务纯标红模式】：所有插入文本改为双红下划线/红字标红 */
+  .mode-pure-redline .diff-ins,
+  .mode-pure-redline ins {
+    background: #FEF2F2 !important;
+    color: #B91C1C !important;
+    text-decoration: underline double 2px #DC2626 !important;
+    border: 1px solid #FECACA !important;
+    font-weight: 700 !important;
+    padding: 1px 4px !important;
+    border-radius: 3px !important;
+    display: inline !important;
+  }
+  .mode-pure-redline .diff-ins-number {
+    background: #FEF08A !important;
+    color: #7F1D1D !important;
+    border: 2px solid #DC2626 !important;
+    font-weight: 900 !important;
+    box-shadow: 0 2px 6px rgba(220, 38, 38, 0.3) !important;
   }
 
   /* 缺失与新增条款整块样式 */
   .diff-block-missing-wrap {
     background: #FFF5F5;
-    border-left: 3px solid #EF4444;
-    padding: 10px 12px;
-    border-radius: 4px;
+    border: 1.5px solid #FECACA;
+    border-left: 5px solid #DC2626;
+    padding: 12px 16px;
+    border-radius: 6px;
   }
   .badge-missing {
-    font-size: 11px; font-weight: 700; color: #DC2626; margin-bottom: 4px; display: block;
+    background: #DC2626;
+    color: #FFF;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-bottom: 8px;
   }
   .diff-placeholder-missing {
     background: #FEF2F2;
-    border: 1px dashed #FECACA;
-    border-radius: 6px;
-    padding: 14px 16px;
+    border: 2px dashed #F87171;
+    border-radius: 8px;
+    padding: 16px;
     color: #991B1B;
-    font-size: 13px;
+    font-size: 13.5px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    align-items: flex-start;
+    gap: 10px;
+    align-items: stretch;
   }
   .placeholder-icon { font-size: 16px; margin-right: 4px; }
-  .placeholder-text { font-weight: 600; font-size: 12.5px; }
+  .placeholder-text { font-weight: 700; font-size: 13px; }
 
   .diff-placeholder-new {
     background: #F8FAFC;
-    border: 1px dashed #CBD5E1;
-    border-radius: 6px;
-    padding: 14px 16px;
+    border: 2px dashed #CBD5E1;
+    border-radius: 8px;
+    padding: 16px;
     color: #64748B;
-    font-size: 12.5px;
+    font-size: 13px;
   }
   .diff-block-new-wrap {
     background: #FAF5FF;
-    border-left: 3px solid #8B5CF6;
-    padding: 10px 12px;
-    border-radius: 4px;
+    border: 1.5px solid #DDD6FE;
+    border-left: 5px solid #7C3AED;
+    padding: 12px 16px;
+    border-radius: 6px;
   }
   .badge-new {
-    font-size: 11px; font-weight: 700; color: #7C3AED; margin-bottom: 4px; display: block;
-  }
-
-  /* 修订高亮 */
-  .diff-del {
-    background: #FECACA;
-    color: #991B1B;
-    text-decoration: line-through;
-    padding: 1px 3px;
-    border-radius: 2px;
-  }
-  .diff-ins {
-    background: #BBF7D0;
-    color: #14532D;
-    font-weight: 600;
-    padding: 1px 3px;
-    border-radius: 2px;
-  }
-  .diff-ins-number {
-    background: #FDE68A !important;
-    color: #92400E !important;
-    font-weight: 700 !important;
-    border-bottom: 2px solid #D97706;
-    padding: 1px 4px;
-    border-radius: 3px;
-  }
-
-  /* 行内批注定位锚点药丸标签 */
-  .ann-anchor-bar {
-    margin-top: 8px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .ann-pill {
+    background: #7C3AED;
+    color: #FFF;
     font-size: 11px;
     font-weight: 700;
-    padding: 3px 9px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
-  }
-  .ann-pill:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.12);
-  }
-  .ann-pill.danger {
-    background: #FEE2E2; color: #991B1B; border: 1px solid #FCA5A5;
-  }
-  .ann-pill.warning {
-    background: #FEF3C7; color: #92400E; border: 1px solid #FCD34D;
-  }
-  .ann-pill.info {
-    background: #EFF6FF; color: #1E40AF; border: 1px solid #BFDBFE;
-  }
-  .ann-pill.purple {
-    background: #F3E8FF; color: #6B21A8; border: 1px solid #D8B4FE;
+    padding: 2px 8px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-bottom: 8px;
   }
 
-  /* ==================== 右侧：智能法务审阅批注栏 ==================== */
-  .annotations-sidebar {
-    background: #FFFFFF;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.03);
-    position: sticky;
-    top: 114px;
-    max-height: calc(100vh - 130px);
+  /* ==================== 条款内嵌法务批注卡片 (Inline Annotation Callout) ==================== */
+  .inline-ann-container {
+    margin-top: 14px;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    gap: 10px;
   }
-  .sidebar-header {
+  .inline-ann-card {
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-left: 4px solid #2563EB;
+    border-radius: 8px;
     padding: 12px 16px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .inline-ann-card:hover {
+    border-color: #93C5FD;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.12);
+  }
+  .inline-ann-card.HIGH { border-left-color: #DC2626; background: #FFFDFD; }
+  .inline-ann-card.MEDIUM { border-left-color: #D97706; background: #FFFDF8; }
+  .inline-ann-card.LOW { border-left-color: #64748B; background: #F8FAFC; }
+  .inline-ann-card.active { box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.4), 0 4px 12px rgba(0,0,0,0.08); }
+
+  .inline-ann-card.status-ACCEPTED { border-left-color: #16A34A !important; background: #F0FDF4 !important; }
+  .inline-ann-card.status-QUESTIONED { border-left-color: #D97706 !important; background: #FFFBEB !important; }
+  .inline-ann-card.status-OVERRULED { border-left-color: #94A3B8 !important; background: #F8FAFC !important; opacity: 0.85; }
+
+  .inline-ann-top {
+    display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 8px;
+  }
+  .inline-ann-tag {
+    font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+  }
+  .inline-ann-tag.HIGH { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+  .inline-ann-tag.MEDIUM { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
+  .inline-ann-tag.LOW { background: #F1F5F9; color: #475569; }
+
+  .inline-ann-title { font-size: 13px; font-weight: 700; color: #1E293B; flex: 1; }
+  .inline-status-badge {
+    font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+    background: #E2E8F0; color: #475569;
+  }
+  .inline-status-badge.ACCEPTED { background: #DCFCE7; color: #15803D; border: 1px solid #BBF7D0; }
+  .inline-status-badge.QUESTIONED { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
+  .inline-status-badge.OVERRULED { background: #F1F5F9; color: #64748B; border: 1px solid #CBD5E1; }
+
+  .inline-ann-diff-summary {
+    background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;
+    padding: 6px 10px; font-size: 12px; margin-bottom: 8px; display: flex;
+    align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .comp-std { color: #64748B; }
+  .comp-std del { color: #B91C1C; background: #FEE2E2; text-decoration: line-through 1.5px #DC2626; padding: 0 4px; border-radius: 2px; }
+  .comp-arrow { font-weight: bold; color: #94A3B8; }
+  .comp-rev { color: #0F172A; }
+  .comp-rev ins { color: #15803D; background: #DCFCE7; text-decoration: underline 1.5px #16A34A; padding: 0 4px; border-radius: 2px; }
+  .mode-pure-redline .comp-rev ins { color: #B91C1C !important; background: #FEF2F2 !important; text-decoration: underline 1.5px #DC2626 !important; }
+
+  .inline-ann-desc { font-size: 12.5px; color: #334155; margin-bottom: 6px; line-height: 1.55; }
+  .inline-ann-advice {
+    font-size: 12px; color: #1E40AF; background: #EFF6FF; border-left: 3px solid #2563EB;
+    padding: 7px 10px; border-radius: 0 4px 4px 0; margin-bottom: 8px; line-height: 1.5;
+  }
+
+  .inline-ann-actions {
+    display: flex; align-items: center; gap: 8px; padding-top: 8px;
+    border-top: 1px dashed #E2E8F0; margin-top: 6px;
+  }
+  .inline-actions-label { font-size: 11px; color: #64748B; font-weight: 700; }
+  .inline-action-btn {
+    font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 5px;
+    border: 1px solid var(--border); background: #FFFFFF; color: #334155; cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .inline-action-btn:hover { background: #F1F5F9; }
+  .inline-action-btn.accept:hover { background: #DCFCE7; color: #15803D; border-color: #86EFAC; }
+  .inline-action-btn.question:hover { background: #FEF3C7; color: #92400E; border-color: #FCD34D; }
+  .inline-action-btn.overrule:hover { background: #F1F5F9; color: #64748B; border-color: #94A3B8; }
+
+  /* ==================== 滑出式法务批注抽屉 (Slide-out Drawer) ==================== */
+  .annotations-drawer {
+    position: fixed;
+    top: 0;
+    right: -500px;
+    width: 480px;
+    height: 100vh;
+    background: #FFFFFF;
+    box-shadow: -6px 0 28px rgba(0,0,0,0.16);
+    z-index: 1000;
+    transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    display: flex;
+    flex-direction: column;
+  }
+  .annotations-drawer.open {
+    right: 0;
+  }
+  .drawer-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(15, 23, 42, 0.45);
+    backdrop-filter: blur(2px);
+    z-index: 999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+  }
+  .drawer-backdrop.open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* 当用户选择固定侧边栏时，取消 fixed 抽屉，变为标准 grid 侧栏 */
+  .workspace-layout.sidebar-pinned .annotations-drawer {
+    position: sticky;
+    top: 114px;
+    right: auto;
+    width: 100%;
+    max-height: calc(100vh - 130px);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.03);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    z-index: 85;
+  }
+  .workspace-layout.sidebar-pinned + .drawer-backdrop {
+    display: none !important;
+  }
+
+  .sidebar-header {
+    padding: 14px 18px;
     border-bottom: 1px solid var(--border);
     background: #F8FAFC;
     display: flex;
     justify-content: space-between;
     align-items: center;
   }
-  .sidebar-title { font-size: 13.5px; font-weight: 700; color: #1E293B; display: flex; align-items: center; gap: 6px; }
+  .sidebar-title { font-size: 14px; font-weight: 700; color: #1E293B; display: flex; align-items: center; gap: 8px; }
   .sidebar-count-badge {
-    background: #1E293B; color: #FFF; font-size: 11px; padding: 1px 6px; border-radius: 999px;
+    background: #1E293B; color: #FFF; font-size: 11px; padding: 1px 7px; border-radius: 999px; font-weight: 800;
   }
+  .mini-tool-btn {
+    font-size: 11px; font-weight: 600; padding: 4px 8px; border-radius: 4px;
+    border: 1px solid var(--border); background: #FFF; color: #475569; cursor: pointer;
+  }
+  .mini-tool-btn:hover { background: #F1F5F9; color: #0F172A; }
+  .mini-tool-btn.close-btn { font-size: 14px; font-weight: 800; padding: 2px 7px; color: #64748B; }
 
   .annotations-list {
     overflow-y: auto;
-    padding: 12px;
+    padding: 14px;
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -642,16 +824,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   /* 打印样式适配 */
   @media print {
-    .header, .controls-bar, .upload-panel, .header-actions, .card-actions { display: none !important; }
+    .header, .controls-bar, .upload-panel, .header-actions, .card-actions, .annotations-drawer, .drawer-backdrop { display: none !important; }
     body { background: #FFF; }
     .main-wrapper { max-width: 100%; margin: 0; padding: 0; }
     .workspace-layout { display: block; }
-    .annotations-sidebar { position: static; max-height: none; margin-top: 30px; }
     .aligned-row { page-break-inside: avoid; }
   }
 </style>
 </head>
-<body>
+<body class="mode-pure-redline">
 
 <header class="header">
   <div class="brand">
@@ -753,18 +934,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="control-left-group">
       <!-- 视图模式切换 -->
       <div class="view-switch">
-        <button class="view-btn active" id="btnModeSide" onclick="setViewMode('side')">📑 整版双栏对照 + 批注</button>
-        <button class="view-btn" id="btnModeSingle" onclick="setViewMode('single')">📄 单版正文修订 + 侧边批注</button>
+        <button class="view-btn active" id="btnModeSide" onclick="setViewMode('side')">📖 左右纯双栏标红 (50/50 宽屏)</button>
+        <button class="view-btn" id="btnModeSingle" onclick="setViewMode('single')">📄 单版正文修订</button>
         <button class="view-btn" id="btnModeDiff" onclick="setViewMode('diff')">🎯 仅看变更条款</button>
+      </div>
+
+      <!-- 标红版式风格切换 -->
+      <div class="style-switch">
+        <button class="style-btn active" id="btnStyleRedline" onclick="setRedlineMode(true)">🔴 经典法务纯标红</button>
+        <button class="style-btn" id="btnStyleColor" onclick="setRedlineMode(false)">🎨 红绿对照</button>
       </div>
 
       <!-- 上下批注快速定位 -->
       <div class="nav-group">
-        <button class="nav-btn" onclick="prevAnnotation()" title="快捷键: [ 或 Alt+↑">⬅️ 上一处批注</button>
+        <button class="nav-btn" onclick="prevAnnotation()" title="快捷键: [ 或 Alt+↑">⬅️ 上一处</button>
         <span class="nav-indicator" id="navIndicator">批注 0 / 0</span>
-        <button class="nav-btn" onclick="nextAnnotation()" title="快捷键: ] 或 Alt+↓">下一处批注 ➡️</button>
+        <button class="nav-btn" onclick="nextAnnotation()" title="快捷键: ] 或 Alt+↓">下一处 ➡️</button>
       </div>
+    </div>
 
+    <div class="control-right-group">
       <!-- 分类过滤标签 -->
       <div class="filter-chips">
         <button class="filter-chip active" onclick="setFilter('ALL')">全部 (<span id="filterAllCount">0</span>)</button>
@@ -773,19 +962,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <button class="filter-chip" onclick="setFilter('NEW')">➕ 客户新增 (<span id="filterNewCount">0</span>)</button>
         <button class="filter-chip" onclick="setFilter('WARNING')">🟠 期限/主体 (<span id="filterWarnCount">0</span>)</button>
       </div>
-    </div>
 
-    <div class="control-right-group">
+      <button class="btn btn-drawer" id="btnToggleDrawer" onclick="toggleDrawer()">
+        <span>📋 审查批注抽屉</span>
+        <span class="drawer-count-badge" id="btnDrawerCount">0</span>
+      </button>
+      <button class="btn" id="btnPinSidebar" onclick="toggleSidebarPin()" title="在超宽显示器上固定侧边栏">📌 固定侧栏</button>
       <label class="sync-toggle-label">
         <input type="checkbox" id="syncScrollCheckbox" checked onchange="toggleSyncScroll(this.checked)">
-        <span>🔗 双栏同步滚动</span>
+        <span>🔗 同步滚动</span>
       </label>
     </div>
   </div>
 
-  <!-- 核心对比主工作区 -->
+  <!-- 核心对比主工作区：纯 50/50 宽幅双栏 -->
   <div class="workspace-layout" id="workspaceLayout">
-    <!-- 左侧/中间：整版合同对照区 -->
+    <!-- 整版合同左右双栏对照区 -->
     <div class="document-grid-container" id="documentGridContainer">
       <div class="document-grid-header">
         <div class="grid-header-col standard">
@@ -793,7 +985,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           <span style="font-size:11px; opacity:0.8;" id="headerStdName">母本库</span>
         </div>
         <div class="grid-header-col reviewed">
-          <span>✏️ 送审合同文本（送审修改版）</span>
+          <span>✏️ 送审合同文本（待审稿·标红对照）</span>
           <span style="font-size:11px; opacity:0.8;" id="headerRevName">待审稿</span>
         </div>
       </div>
@@ -802,19 +994,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <div id="alignedRowsContainer"></div>
     </div>
 
-    <!-- 右侧：智能法务审阅批注栏 -->
-    <div class="annotations-sidebar">
+    <!-- 智能法务审阅批注抽屉 / 可固定侧边栏 -->
+    <div class="annotations-drawer" id="annotationsDrawer">
       <div class="sidebar-header">
         <div class="sidebar-title">
           <span>📋 智能法务审阅批注</span>
           <span class="sidebar-count-badge" id="sidebarCount">0</span>
         </div>
-        <span style="font-size:11px; color:#64748B;">点击直达正文对应行</span>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <button class="mini-tool-btn" id="btnDrawerPin" onclick="toggleSidebarPin()" title="切换固定为侧边栏或浮动抽屉">📌 固定</button>
+          <button class="mini-tool-btn close-btn" onclick="toggleDrawer(false)" title="关闭抽屉">✕</button>
+        </div>
       </div>
 
       <div class="annotations-list" id="annotationsList"></div>
     </div>
   </div>
+
+  <!-- 抽屉遮罩背景 -->
+  <div class="drawer-backdrop" id="drawerBackdrop" onclick="toggleDrawer(false)"></div>
 
 </main>
 
@@ -904,7 +1102,10 @@ function renderFullDiff(data) {
   document.getElementById('statMissingClauses').innerText = stats.missing_clauses || 0;
   document.getElementById('statNewClauses').innerText = stats.new_clauses || 0;
   document.getElementById('statMediumRisk').innerText = (stats.medium_risk || 0);
-  document.getElementById('sidebarCount').innerText = (data.annotations || []).length;
+  const annCount = (data.annotations || []).length;
+  document.getElementById('sidebarCount').innerText = annCount;
+  const btnDrawerEl = document.getElementById('btnDrawerCount');
+  if (btnDrawerEl) btnDrawerEl.innerText = annCount;
 
   // 综合判定 Banner
   const verdictEl = document.getElementById('verdictBanner');
@@ -941,7 +1142,7 @@ function updateProgressDisplay() {
   document.getElementById('statProgress').innerText = `${handled} / ${total}`;
 }
 
-// 渲染整版行对齐合同内容
+// 渲染整版行对齐合同内容（左右纯双栏 50/50 宽屏）
 function renderAlignedRows() {
   const container = document.getElementById('alignedRowsContainer');
   container.innerHTML = '';
@@ -958,19 +1159,38 @@ function renderAlignedRows() {
     row.className = 'aligned-row';
     row.id = block.block_id;
 
-    // 左侧（母本）
+    // 状态标签
+    let statusText = '完全一致';
+    let statusClass = 'status-match';
+    if (block.status === 'DIFF') {
+      statusText = '存在修订';
+      statusClass = 'status-diff';
+    } else if (block.status === 'MISSING_IN_REVIEWED') {
+      statusText = '母本条款被删';
+      statusClass = 'status-missing';
+    } else if (block.status === 'NEW_IN_REVIEWED') {
+      statusText = '客户非标新增';
+      statusClass = 'status-new';
+    }
+
+    // 左侧（母本基准正文）
     const paneStd = document.createElement('div');
     paneStd.className = 'pane-standard';
     paneStd.innerHTML = `
-      <span class="clause-tag">${escapeHtml(block.clause_title)}</span>
+      <div class="clause-header-row">
+        <span class="clause-tag std">🏛️ 标准参考母本 · ${escapeHtml(block.clause_title)}</span>
+      </div>
       ${block.standard_html || '<div style="color:#94A3B8;">（无）</div>'}
     `;
 
-    // 右侧（送审修改版）
+    // 右侧（送审修改版，改变处就地内嵌批注卡片）
     const paneRev = document.createElement('div');
     paneRev.className = 'pane-reviewed';
     paneRev.innerHTML = `
-      <span class="clause-tag" style="background:#E0E7FF; color:#3730A3;">${escapeHtml(block.clause_title)}</span>
+      <div class="clause-header-row">
+        <span class="clause-tag rev">✏️ 送审修改版 · ${escapeHtml(block.clause_title)}</span>
+        <span class="clause-status-pill ${statusClass}">${statusText}</span>
+      </div>
       ${block.reviewed_html || '<div style="color:#94A3B8;">（无）</div>'}
     `;
 
@@ -1062,7 +1282,7 @@ function selectAnnotation(annId) {
   activeAnnotationIndex = annIdx;
   const ann = currentData.annotations[annIdx];
 
-  // 1. 高亮右侧批注卡片
+  // 1. 高亮抽屉中的对应批注卡片
   document.querySelectorAll('.annotation-card').forEach(c => c.classList.remove('active'));
   const card = document.getElementById(`card-${annId}`);
   if (card) {
@@ -1070,7 +1290,14 @@ function selectAnnotation(annId) {
     card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
-  // 2. 定位正文行并播放发光脉冲动画
+  // 2. 高亮正文行内的内嵌卡片
+  document.querySelectorAll('.inline-ann-card').forEach(c => c.classList.remove('active'));
+  const inlineCard = document.getElementById(`inline-${annId}`);
+  if (inlineCard) {
+    inlineCard.classList.add('active');
+  }
+
+  // 3. 定位正文条款行并播放发光脉冲动画
   const targetRow = document.getElementById(ann.block_id);
   if (targetRow) {
     document.querySelectorAll('.aligned-row').forEach(r => r.classList.remove('row-flash'));
@@ -1078,7 +1305,7 @@ function selectAnnotation(annId) {
     targetRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
-  // 3. 更新导航指示器
+  // 4. 更新导航指示器
   const total = currentData.annotations.length;
   document.getElementById('navIndicator').innerText = `批注 ${ann.index} / ${total}`;
 }
@@ -1097,16 +1324,67 @@ function prevAnnotation() {
   selectAnnotation(currentData.annotations[prevIdx].id);
 }
 
-// 设置审阅状态
+// 设置审阅状态并同步更新抽屉与正文内嵌卡片
 function setAnnotationStatus(annId, status) {
   const ann = (currentData.annotations || []).find(a => a.id === annId);
   if (!ann) return;
   ann.review_status = (ann.review_status === status) ? 'PENDING' : status;
+
+  // 1. 刷新抽屉列表并保持激活
   renderAnnotationsSidebar();
-  // 保持当前高亮
   const card = document.getElementById(`card-${annId}`);
   if (card) card.classList.add('active');
+
+  // 2. 同步就地更新正文行内嵌入的卡片
+  const inlineCard = document.getElementById(`inline-${annId}`);
+  if (inlineCard) {
+    inlineCard.classList.remove('status-ACCEPTED', 'status-QUESTIONED', 'status-OVERRULED');
+    if (ann.review_status !== 'PENDING') {
+      inlineCard.classList.add(`status-${ann.review_status}`);
+    }
+  }
+  const statusBadge = document.getElementById(`status-badge-${annId}`);
+  if (statusBadge) {
+    statusBadge.className = 'inline-status-badge ' + (ann.review_status || 'PENDING');
+    if (ann.review_status === 'ACCEPTED') statusBadge.innerText = '✅ 已接受';
+    else if (ann.review_status === 'QUESTIONED') statusBadge.innerText = '⚠️ 存疑';
+    else if (ann.review_status === 'OVERRULED') statusBadge.innerText = '❌ 已驳回';
+    else statusBadge.innerText = '待审阅';
+  }
+
   updateProgressDisplay();
+}
+
+// 抽屉展开/关闭切换
+function toggleDrawer(forceState) {
+  const drawer = document.getElementById('annotationsDrawer');
+  const backdrop = document.getElementById('drawerBackdrop');
+  const isOpen = (typeof forceState === 'boolean') ? forceState : !drawer.classList.contains('open');
+  drawer.classList.toggle('open', isOpen);
+  backdrop.classList.toggle('open', isOpen);
+}
+
+// 宽屏模式下固定为右侧栏 / 浮动抽屉切换
+function toggleSidebarPin() {
+  const layout = document.getElementById('workspaceLayout');
+  const drawer = document.getElementById('annotationsDrawer');
+  const backdrop = document.getElementById('drawerBackdrop');
+  const isPinned = layout.classList.toggle('sidebar-pinned');
+  drawer.classList.toggle('open', false);
+  backdrop.classList.toggle('open', false);
+
+  const pinBtn = document.getElementById('btnPinSidebar');
+  const drawerPinBtn = document.getElementById('btnDrawerPin');
+  const label = isPinned ? '🔓 浮动抽屉' : '📌 固定侧栏';
+  if (pinBtn) pinBtn.innerText = label;
+  if (drawerPinBtn) drawerPinBtn.innerText = label;
+}
+
+// 标红风格切换：经典法务纯标红 vs 红绿对照
+function setRedlineMode(isPureRedline) {
+  document.body.classList.toggle('mode-pure-redline', isPureRedline);
+  document.getElementById('btnStyleRedline').classList.toggle('active', isPureRedline);
+  document.getElementById('btnStyleColor').classList.toggle('active', !isPureRedline);
 }
 
 // 视图切换
@@ -1134,7 +1412,7 @@ function toggleSyncScroll(enabled) {
   syncScrollEnabled = enabled;
 }
 
-// 键盘快捷键支持：[ 上一个，] 下一个
+// 键盘快捷键支持：[ 上一个，] 下一个，Esc 关闭抽屉
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   if (e.key === '[' || (e.altKey && e.key === 'ArrowUp')) {
@@ -1143,6 +1421,8 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key === ']' || (e.altKey && e.key === 'ArrowDown')) {
     e.preventDefault();
     nextAnnotation();
+  } else if (e.key === 'Escape') {
+    toggleDrawer(false);
   }
 });
 

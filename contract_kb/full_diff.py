@@ -1,21 +1,23 @@
 # -*- coding: utf-8 -*-
 """整版合同双栏对照与条款级法务批注生成引擎（Full-Document Diff & Annotation Engine）。
 
-功能：
+核心能力：
 1. 提取送审合同与标准母本全部条款/段落，按自然阅读顺序（从标题、卷头、各条款至签署页）进行整版对齐；
 2. 采用动态规划（Needleman-Wunsch/LCS）算法完成条款级别行对齐，准确识别：
    - MATCH（完全一致）
    - DIFF（条款被修改，精细定位数值、期限、主体、否定词、义务动词、措辞）
    - MISSING_IN_REVIEWED（母本包含但送审合同整段删除）
    - NEW_IN_REVIEWED（送审合同单方新增非标条款）
-3. 生成字符/词级精细修订高亮 HTML（<del> 划线删除与 <ins> 突出修订）；
-4. 为每一处变动自动生成专业的 AI 法务审阅批注卡片（包含风险等级、条款定位、修改对比、法律风险剖析与处置建议）；
-5. 输出适用于整版双栏对照与边距批注阅读的结构化数据。
+3. 采用正则中英文分词（Tokenized Diff），数值、金额、百分比、标点及汉字保持语义完整；
+4. 生成字符/词级精准标红高亮（<del> 显眼标红删除线与 <ins> 突出修订）；
+5. 每一个变动条款就地内嵌 AI 法务审阅批注卡片（包含风险等级、条款定位、修改对比、法律风险剖析与处置建议）；
+6. 输出专为“左右对照·标红版式”优化的双栏结构化数据。
 """
 
 from __future__ import annotations
 
 import difflib
+import re
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +40,11 @@ CATEGORY_TITLES = {
     "OTHER": "其他约定条款",
 }
 
+# 中英文、数字、比率与标点混合分词正则
+TOKEN_RE = re.compile(
+    r"\d+(?:,\d{3})*(?:\.\d+)?(?:‰|%|万元|元|个工作日|日)?|[\u4e00-\u9fa5]|[a-zA-Z0-9_]+|\s+|[^\s\w\u4e00-\u9fa5]"
+)
+
 
 def escape_html(text: str) -> str:
     """HTML 转义。"""
@@ -52,20 +59,24 @@ def escape_html(text: str) -> str:
 
 
 def generate_word_diff_html(std_text: str, rev_text: str) -> tuple[str, str]:
-    """生成词/字符级别的精准划线与插入高亮 HTML。"""
-    sm = difflib.SequenceMatcher(None, std_text, rev_text)
+    """生成词元级别的精准标红划线与插入高亮 HTML。"""
+    std_tokens = TOKEN_RE.findall(std_text)
+    rev_tokens = TOKEN_RE.findall(rev_text)
+    sm = difflib.SequenceMatcher(None, std_tokens, rev_tokens)
+
     std_parts: list[str] = []
     rev_parts: list[str] = []
 
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
-        s_chunk = std_text[i1:i2]
-        r_chunk = rev_text[j1:j2]
+        s_chunk = "".join(std_tokens[i1:i2])
+        r_chunk = "".join(rev_tokens[j1:j2])
+
         if tag == "equal":
             std_parts.append(escape_html(s_chunk))
             rev_parts.append(escape_html(r_chunk))
         elif tag == "delete":
             std_parts.append(
-                f'<del class="diff-del" title="标准母本原文字句（待审已删除）">{escape_html(s_chunk)}</del>'
+                f'<del class="diff-del" title="标准母本原文字句（送审已删除）">{escape_html(s_chunk)}</del>'
             )
         elif tag == "insert":
             is_num = any(c.isdigit() for c in r_chunk) or any(
@@ -93,7 +104,7 @@ def generate_word_diff_html(std_text: str, rev_text: str) -> tuple[str, str]:
 def build_full_contract_diff(
     docx_path: str | Path, forced_template_id: str | None = None
 ) -> dict[str, Any]:
-    """执行整版合同对齐，生成双栏对照与全量法务批注数据。"""
+    """执行整版合同对齐，生成左右对比标红与全量法务批注数据。"""
     docx_path = Path(docx_path)
     if not docx_path.exists():
         raise FileNotFoundError(f"文件不存在: {docx_path}")
@@ -207,6 +218,9 @@ def build_full_contract_diff(
             risk_level = "HIGH" if is_core else "MEDIUM"
             risk_label = "核心条款缺失" if is_core else "条款整段删除"
 
+            analysis = f"待审合同整段删除了母本中的【{clause_title}】。将导致我方在履约与追偿过程中失去合同明文保护，造成权利救济空白与实质性失衡。"
+            advice = "【法务处置建议】坚决要求对方恢复母本标准条款。若为商业实质妥协，须由业务主管与法务负责人提级审批。"
+
             annotations.append(
                 {
                     "id": ann_id,
@@ -225,24 +239,36 @@ def build_full_contract_diff(
                     "reviewed_span": "（送审修改版已删除整段内容）",
                     "quote_standard": s_text,
                     "quote_reviewed": "",
-                    "ai_analysis": f"待审合同整段删除了母本中的【{clause_title}】。此举将导致我方在履约与追偿过程中失去合同明文保护，造成权利救济空白与实质性失衡。",
-                    "action_advice": "【法务处置建议】坚决要求对方恢复母本标准条款。若为商业实质妥协，须由业务主管与法务负责人提级审批。",
+                    "ai_analysis": analysis,
+                    "action_advice": advice,
                     "review_status": "PENDING",
                 }
             )
 
             s_html = (
                 f'<div class="diff-block-missing-wrap">'
-                f'<span class="badge-missing">母本原版条款（送审稿已删除）</span>'
+                f'<span class="badge-missing">❌【母本原版条款·送审稿已删除】</span>'
                 f'<div class="missing-text">{escape_html(s_text)}</div>'
                 f"</div>"
             )
             r_html = (
                 f'<div class="diff-placeholder-missing">'
-                f'<span class="placeholder-icon">⚠️</span>'
-                f'<span class="placeholder-text">此处母本条款在送审版中已被整段删除</span>'
-                f'<span class="ann-pill danger" data-ann-id="{ann_id}" onclick="selectAnnotation(\'{ann_id}\')">'
-                f"🏷️ 批注 #{ann_counter:02d} · {risk_label}</span>"
+                f'<div class="placeholder-notice"><span class="placeholder-icon">⚠️</span><span>此处母本条款在送审版中已被整段删除</span></div>'
+                f'<div class="inline-ann-card {risk_level}" id="inline-{ann_id}" onclick="selectAnnotation(\'{ann_id}\')">'
+                f'  <div class="inline-ann-top">'
+                f'    <span class="inline-ann-tag {risk_level}">🚩 批注 #{ann_counter:02d} · {risk_label}</span>'
+                f'    <span class="inline-ann-title">{escape_html(clause_title)}</span>'
+                f'    <span class="inline-status-badge" id="status-badge-{ann_id}">待审阅</span>'
+                f"  </div>"
+                f'  <div class="inline-ann-desc">💡 <strong>风险剖析：</strong>{escape_html(analysis)}</div>'
+                f'  <div class="inline-ann-advice">⚖️ <strong>处置建议：</strong>{escape_html(advice)}</div>'
+                f'  <div class="inline-ann-actions">'
+                f'    <span class="inline-actions-label">审阅处置:</span>'
+                f'    <button type="button" class="inline-action-btn accept" onclick="event.stopPropagation(); setAnnotationStatus(\'{ann_id}\', \'ACCEPTED\')">✅ 确认接受</button>'
+                f'    <button type="button" class="inline-action-btn question" onclick="event.stopPropagation(); setAnnotationStatus(\'{ann_id}\', \'QUESTIONED\')">⚠️ 存疑待核</button>'
+                f'    <button type="button" class="inline-action-btn overrule" onclick="event.stopPropagation(); setAnnotationStatus(\'{ann_id}\', \'OVERRULED\')">❌ 坚决驳回</button>'
+                f'  </div>'
+                f"</div>"
                 f"</div>"
             )
 
@@ -269,6 +295,9 @@ def build_full_contract_diff(
             ann_id = f"ann-{ann_counter}"
             block_ann_ids.append(ann_id)
 
+            analysis = "送审稿包含了标准母本库中不存在的自定义非标条款。非标约定常附带对方单方免责、排他性义务或单方解约权，需严格把关。"
+            advice = "【法务处置建议】严审此项非标约定的合规性与执行风险，确认是否已获得业务主管授权，必要时增加对等反制条款或要求删除。"
+
             annotations.append(
                 {
                     "id": ann_id,
@@ -287,8 +316,8 @@ def build_full_contract_diff(
                     + ("..." if len(r_text) > 120 else ""),
                     "quote_standard": "",
                     "quote_reviewed": r_text,
-                    "ai_analysis": "送审稿包含了标准母本库中不存在的自定义非标条款。非标约定常附带对方单方免责、排他性义务或单方解约权，需严格把关。",
-                    "action_advice": "【法务处置建议】严审此项非标约定的合规性与执行风险，确认是否已获得业务主管授权，必要时增加对等反制条款或要求删除。",
+                    "ai_analysis": analysis,
+                    "action_advice": advice,
                     "review_status": "PENDING",
                 }
             )
@@ -301,11 +330,22 @@ def build_full_contract_diff(
             )
             r_html = (
                 f'<div class="diff-block-new-wrap">'
-                f'<span class="badge-new">送审非标新增条款</span>'
+                f'<span class="badge-new">➕【送审非标新增条款】</span>'
                 f'<div class="new-text">{escape_html(r_text)}</div>'
-                f'<div class="ann-anchor-bar">'
-                f'<span class="ann-pill purple" data-ann-id="{ann_id}" onclick="selectAnnotation(\'{ann_id}\')">'
-                f"🏷️ 批注 #{ann_counter:02d} · 客户新增非标</span>"
+                f'<div class="inline-ann-card MEDIUM" id="inline-{ann_id}" onclick="selectAnnotation(\'{ann_id}\')">'
+                f'  <div class="inline-ann-top">'
+                f'    <span class="inline-ann-tag MEDIUM">➕ 批注 #{ann_counter:02d} · 客户新增非标</span>'
+                f'    <span class="inline-ann-title">{escape_html(clause_title)}</span>'
+                f'    <span class="inline-status-badge" id="status-badge-{ann_id}">待审阅</span>'
+                f"  </div>"
+                f'  <div class="inline-ann-desc">💡 <strong>风险剖析：</strong>{escape_html(analysis)}</div>'
+                f'  <div class="inline-ann-advice">⚖️ <strong>处置建议：</strong>{escape_html(advice)}</div>'
+                f'  <div class="inline-ann-actions">'
+                f'    <span class="inline-actions-label">审阅处置:</span>'
+                f'    <button type="button" class="inline-action-btn accept" onclick="event.stopPropagation(); setAnnotationStatus(\'{ann_id}\', \'ACCEPTED\')">✅ 确认接受</button>'
+                f'    <button type="button" class="inline-action-btn question" onclick="event.stopPropagation(); setAnnotationStatus(\'{ann_id}\', \'QUESTIONED\')">⚠️ 存疑待核</button>'
+                f'    <button type="button" class="inline-action-btn overrule" onclick="event.stopPropagation(); setAnnotationStatus(\'{ann_id}\', \'OVERRULED\')">❌ 坚决驳回</button>'
+                f'  </div>'
                 f"</div></div>"
             )
 
@@ -355,7 +395,7 @@ def build_full_contract_diff(
 
                 s_diff_html, r_diff_html = generate_word_diff_html(s_text, r_text)
 
-                ann_pills_html: list[str] = []
+                inline_ann_cards: list[str] = []
                 for d in active_deltas:
                     ann_counter += 1
                     ann_id = f"ann-{ann_counter}"
@@ -436,20 +476,32 @@ def build_full_contract_diff(
                         }
                     )
 
-                    pill_class = (
-                        "danger"
-                        if r_level == "HIGH"
-                        else ("warning" if r_level == "MEDIUM" else "info")
-                    )
-                    ann_pills_html.append(
-                        f'<span class="ann-pill {pill_class}" data-ann-id="{ann_id}" onclick="selectAnnotation(\'{ann_id}\')">'
-                        f"🏷️ 批注 #{ann_counter:02d} · {r_label}"
-                        f"</span>"
+                    inline_ann_cards.append(
+                        f'<div class="inline-ann-card {r_level}" id="inline-{ann_id}" onclick="selectAnnotation(\'{ann_id}\')">'
+                        f'  <div class="inline-ann-top">'
+                        f'    <span class="inline-ann-tag {r_level}">🏷️ 批注 #{ann_counter:02d} · {r_label}</span>'
+                        f'    <span class="inline-ann-title">{escape_html(clause_title)}</span>'
+                        f'    <span class="inline-status-badge" id="status-badge-{ann_id}">待审阅</span>'
+                        f"  </div>"
+                        f'  <div class="inline-ann-diff-summary">'
+                        f'    <span class="comp-std">🏛️ 母本: <del>{escape_html(d.standard_span or s_text[:60])}</del></span>'
+                        f'    <span class="comp-arrow">➔</span>'
+                        f'    <span class="comp-rev">✏️ 送审: <ins>{escape_html(d.reviewed_span or r_text[:60])}</ins></span>'
+                        f"  </div>"
+                        f'  <div class="inline-ann-desc">💡 <strong>风险剖析：</strong>{escape_html(analysis)}</div>'
+                        f'  <div class="inline-ann-advice">⚖️ <strong>处置建议：</strong>{escape_html(advice)}</div>'
+                        f'  <div class="inline-ann-actions">'
+                        f'    <span class="inline-actions-label">审阅处置:</span>'
+                        f'    <button type="button" class="inline-action-btn accept" onclick="event.stopPropagation(); setAnnotationStatus(\'{ann_id}\', \'ACCEPTED\')">✅ 确认接受</button>'
+                        f'    <button type="button" class="inline-action-btn question" onclick="event.stopPropagation(); setAnnotationStatus(\'{ann_id}\', \'QUESTIONED\')">⚠️ 存疑待核</button>'
+                        f'    <button type="button" class="inline-action-btn overrule" onclick="event.stopPropagation(); setAnnotationStatus(\'{ann_id}\', \'OVERRULED\')">❌ 坚决驳回</button>'
+                        f'  </div>'
+                        f"</div>"
                     )
 
-                pills_bar = (
-                    f'<div class="ann-anchor-bar">{" ".join(ann_pills_html)}</div>'
-                    if ann_pills_html
+                ann_cards_html = (
+                    f'<div class="inline-ann-container">{"".join(inline_ann_cards)}</div>'
+                    if inline_ann_cards
                     else ""
                 )
 
@@ -465,7 +517,7 @@ def build_full_contract_diff(
                         "standard_text": s_text,
                         "reviewed_text": r_text,
                         "standard_html": f'<div class="diff-text-std">{s_diff_html}</div>',
-                        "reviewed_html": f'<div class="diff-text-rev">{r_diff_html}{pills_bar}</div>',
+                        "reviewed_html": f'<div class="diff-text-rev">{r_diff_html}{ann_cards_html}</div>',
                         "annotation_ids": block_ann_ids,
                     }
                 )
