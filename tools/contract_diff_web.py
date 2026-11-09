@@ -1,25 +1,25 @@
 # -*- coding: utf-8 -*-
 """合同比对与条款级 Diff 前端可视化服务（Contract Diff Web Visualizer）。
 
-全新升级：
-1. 整版双栏对照（Full-Document Side-by-Side Comparison）：
-   从合同卷头、事项、各条款直到尾部签署页，完整呈现整篇合同阅读排版（A4 纸质排版风格），
-   条款逐行精准水平对齐，支持双栏同步滚动。
-2. 改变的地方加批注（Legal Review Annotations & Margin Callouts）：
-   对所有修改、篡改、删除、新增条款建立独立法务批注卡片；
-   正文中以互动标签 [批注 #XX] 锚定，右侧批注栏同步展现风险等级、母本对比、法律风险剖析与处置建议；
-   支持正文与批注卡片双向点击对焦、高亮脉冲动画与快捷键定位。
-3. 三种视图自由切换：
-   - 整版双栏对照 + 侧边批注（Side-by-Side + Annotations）
-   - 单版正文修订 + 批注引导（Word/WPS 经典审阅模式）
-   - 仅看变更条款（Diff Only Focus）
-4. 交互式审阅流程：
-   支持标记“确认接受”、“存疑待核”、“驳回修改”，实时统计审阅处理进度；
-   支持拖拽上传 DOCX 与快速加载高危实测用例；
-   支持独立离线 HTML 导出与开箱即用。
+核心体验升级：
+1. 整版整页 A4 原格式对照（Continuous Full-Page Side-by-Side Comparison）：
+   彻底摒弃死板表格与条款卡片框，完整还原真实合同纸质排版（大标题、副标题、合同编号、双方信息、
+   鉴于条款、条款标题、缩进正文、尾部签署页）。左右两栏基于 CSS contents 水平对准，行云流水。
+2. 经典法务审阅批注放右边（Dedicated Review Annotations Sidebar）：
+   正文段落仅保留精美标签锚点（如 🏷️ [批注 #01]），所有法务风险卡片、母本对比片段、AI 风险剖析、
+   处置建议与接受/存疑/驳回决策按钮统一收纳在右侧审阅专栏，支持双向对焦与平滑高光脉冲联动。
+3. 多视图自由切换：
+   - 📖 整版原格式双栏对照（50/50 宽屏基准）
+   - 📄 送审单版标红审阅（Word/WPS 经典修订视图）
+   - 🎯 仅看变更条款（高危聚焦视图）
+4. 标红版式风格自由切换：
+   - 🔴 经典法务纯标红（删除线标红 + 双下划线标红 + 关键数值强提醒）
+   - 🎨 红绿差异对照（红删绿增经典版）
+5. 独立离线 HTML 导出：开箱即用，双击即可在任意浏览器独立浏览。
 
 用法：
   python tools/contract_diff_web.py [--port 8772]
+  python tools/contract_diff_web.py --export-only
 """
 
 from __future__ import annotations
@@ -50,10 +50,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI 合同审查 · 条款级 Diff 与整版比对工作台</title>
+<title>AI 合同审查 · 整版原格式比对与法务审阅工作台</title>
 <style>
   :root {
     --bg: #F1F5F9;
+    --stage-bg: #E2E8F0;
     --card-bg: #FFFFFF;
     --border: #E2E8F0;
     --border-dark: #CBD5E1;
@@ -127,7 +128,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .btn-primary:hover { background: #1D4ED8; }
 
-  /* 主容器（宽幅双栏优先） */
+  /* 主容器 */
   .main-wrapper {
     max-width: 100%;
     margin: 16px auto;
@@ -191,7 +192,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .badge-tag.warning { background: #FEF3C7; color: #92400E; }
   .badge-tag.success { background: #DCFCE7; color: #15803D; }
 
-  /* 状态概览卡片 */
+  /* 状态概览看板 */
   .meta-dashboard {
     background: #FFFFFF;
     border: 1px solid var(--border);
@@ -279,175 +280,241 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .nav-btn:hover { background: #F1F5F9; border-color: var(--border-dark); }
   .nav-indicator { font-size: 12px; font-weight: 700; color: #0F172A; min-width: 90px; text-align: center; }
 
-  .filter-chips { display: flex; gap: 6px; }
-  .filter-chip {
-    padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border);
-    background: #FFF; font-size: 11px; font-weight: 600; color: #475569;
-    cursor: pointer; transition: all 0.15s ease; white-space: nowrap;
-  }
-  .filter-chip.active {
-    background: #1E293B; color: #FFF; border-color: #1E293B;
-  }
-
   .control-right-group { display: flex; align-items: center; gap: 10px; }
-  .btn-drawer {
+  .btn-toggle-sidebar {
     background: #1E293B !important; color: #FFF !important; border-color: #1E293B !important;
   }
-  .btn-drawer:hover { background: #334155 !important; }
-  .drawer-count-badge {
+  .btn-toggle-sidebar:hover { background: #334155 !important; }
+  .sidebar-badge-count {
     background: #EF4444; color: #FFF; font-size: 10.5px; padding: 1px 6px; border-radius: 999px; font-weight: 800;
   }
-  .sync-toggle-label {
-    font-size: 12px; font-weight: 600; color: #475569; display: flex; align-items: center; gap: 6px;
-    cursor: pointer;
-  }
 
-  /* ==================== 核心工作区：左右 50/50 纯双栏对齐 ==================== */
-  .workspace-layout {
-    display: block;
-    width: 100%;
-    position: relative;
-    transition: all 0.2s ease;
-  }
-
-  /* 宽屏固定侧栏模式 */
-  .workspace-layout.sidebar-pinned {
+  /* ==================== 核心工作区：整版对照 + 批注放右边 ==================== */
+  .review-workspace {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 440px;
-    gap: 18px;
+    grid-template-columns: minmax(0, 1fr) 420px;
+    gap: 20px;
     align-items: start;
-  }
-
-  /* 单版正文修订模式 */
-  .workspace-layout.mode-single {
-    display: block;
     width: 100%;
+    transition: grid-template-columns 0.25s ease;
   }
-
-  /* 整版合同双栏对照容器（A4纸张风格） */
-  .document-grid-container {
-    background: #FFFFFF;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.03);
-    overflow: hidden;
-    width: 100%;
+  .review-workspace.sidebar-collapsed {
+    grid-template-columns: minmax(0, 1fr) 0px;
+    gap: 0;
   }
-  .document-grid-header {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    background: #F8FAFC;
-    border-bottom: 2px solid #CBD5E1;
-    position: sticky;
-    top: 114px;
-    z-index: 80;
-  }
-  .mode-single .document-grid-header {
-    grid-template-columns: 1fr;
-  }
-  .grid-header-col {
-    padding: 12px 24px;
-    font-size: 14px;
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .grid-header-col.standard {
-    border-right: 2px solid #CBD5E1;
-    background: #F8FAFC;
-    color: #475569;
-  }
-  .grid-header-col.reviewed {
-    background: #EFF6FF;
-    color: #1E40AF;
-  }
-
-  /* 条款行（整版行对齐） */
-  .aligned-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    border-bottom: 1px solid #E2E8F0;
-    position: relative;
-    transition: background 0.15s ease, box-shadow 0.15s ease;
-  }
-  .mode-single .aligned-row {
-    grid-template-columns: 1fr;
-  }
-  .mode-single .pane-standard {
+  .review-workspace.sidebar-collapsed .annotations-sidebar-panel {
     display: none !important;
   }
 
-  .aligned-row:hover {
-    background: #F8FAFC;
+  /* 单版正文修订模式 */
+  .mode-single .review-workspace {
+    grid-template-columns: minmax(0, 1fr) 420px;
   }
-  .aligned-row.row-flash {
-    animation: rowPulse 1.8s ease-in-out;
-  }
-  @keyframes rowPulse {
-    0% { background: #FEF08A; box-shadow: 0 0 0 2px #EAB308 inset; }
-    50% { background: #FEF9C3; }
-    100% { background: transparent; }
+  .mode-single.sidebar-collapsed .review-workspace {
+    grid-template-columns: minmax(0, 1fr) 0px;
   }
 
-  /* 左右两栏单元格（A4质感排版） */
-  .pane-standard, .pane-reviewed {
-    padding: 18px 24px;
-    font-size: 14px;
-    line-height: 1.85;
-    position: relative;
-    word-break: break-all;
-    white-space: pre-wrap;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
-  }
-  .pane-standard {
-    border-right: 2px solid #E2E8F0;
-    color: #334155;
-    background: #FAFAFC;
-  }
-  .pane-reviewed {
-    color: #0F172A;
-    background: #FFFFFF;
+  /* ==================== A4 连续整版纸质工作台 ==================== */
+  .document-dual-stage-wrapper {
+    background: var(--stage-bg);
+    padding: 24px;
+    border-radius: 12px;
+    box-shadow: inset 0 2px 6px rgba(0,0,0,0.06);
+    overflow-x: auto;
   }
 
-  /* 条款顶栏标签条 */
-  .clause-header-row {
+  .stage-headers {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 36px;
+    margin-bottom: 12px;
+    padding: 0 44px;
+    position: sticky;
+    top: 114px;
+    z-index: 50;
+  }
+  .mode-single .stage-headers {
+    grid-template-columns: 1fr;
+    padding: 0;
+  }
+  .mode-single .stage-col-header.standard {
+    display: none !important;
+  }
+
+  .stage-col-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 8px;
-    padding-bottom: 6px;
-    border-bottom: 1px dashed #E2E8F0;
-  }
-  .clause-tag {
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 4px;
-    display: inline-block;
-  }
-  .clause-tag.std {
-    background: #EEF2F6;
-    color: #475569;
+    padding: 9px 16px;
+    border-radius: 8px;
+    background: #FFFFFF;
     border: 1px solid #CBD5E1;
-  }
-  .clause-tag.rev {
-    background: #E0E7FF;
-    color: #3730A3;
-    border: 1px solid #C7D2FE;
-  }
-  .clause-status-pill {
-    font-size: 10.5px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.04);
+    font-size: 13.5px;
     font-weight: 700;
-    padding: 1px 7px;
-    border-radius: 4px;
   }
-  .clause-status-pill.status-match { background: #DCFCE7; color: #15803D; }
-  .clause-status-pill.status-diff { background: #FEF3C7; color: #92400E; }
-  .clause-status-pill.status-missing { background: #FEE2E2; color: #991B1B; }
-  .clause-status-pill.status-new { background: #F3E8FF; color: #7C3AED; }
+  .stage-col-header.standard {
+    border-left: 4px solid #64748B;
+    color: #334155;
+  }
+  .stage-col-header.reviewed {
+    border-left: 4px solid #2563EB;
+    color: #1E40AF;
+    background: #F8FAFC;
+  }
+  .stage-header-sub {
+    font-size: 11px;
+    color: #64748B;
+    font-weight: 600;
+  }
 
-  /* ==================== 标红 (Redline) 核心视觉规范 ==================== */
+  /* 连续整版 A4 纸张排版容器（杜绝表格卡片感） */
+  .contract-continuous-stage {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 36px;
+    background: #FFFFFF;
+    padding: 44px 48px;
+    border-radius: 8px;
+    box-shadow: 0 4px 24px rgba(15, 23, 42, 0.08);
+    position: relative;
+    min-height: 800px;
+  }
+  /* 左右版面中央书脊微线 */
+  .contract-continuous-stage::after {
+    content: "";
+    position: absolute;
+    top: 36px;
+    bottom: 36px;
+    left: 50%;
+    width: 1px;
+    background: #E2E8F0;
+    pointer-events: none;
+  }
+  .mode-single .contract-continuous-stage {
+    grid-template-columns: 1fr;
+    padding: 44px 56px;
+  }
+  .mode-single .contract-continuous-stage::after {
+    display: none !important;
+  }
+  .mode-single .doc-col-std {
+    display: none !important;
+  }
+
+  /* 条款段落行：采用 display: contents 保持左右严格自然对齐，绝不增加外部方框或表格线 */
+  .doc-section-row {
+    display: contents;
+  }
+  .doc-col-std {
+    grid-column: 1;
+    position: relative;
+    padding-right: 14px;
+    transition: background 0.3s ease;
+  }
+  .doc-col-rev {
+    grid-column: 2;
+    position: relative;
+    padding-left: 14px;
+    transition: background 0.3s ease;
+  }
+  .mode-single .doc-col-rev {
+    grid-column: 1;
+    padding-left: 0;
+  }
+
+  /* 点击批注后对齐正文段落的高光脉冲动画 */
+  .pulse-active {
+    background: #FEF9C3 !important;
+    border-radius: 6px;
+    box-shadow: 0 0 0 2px #EAB308;
+    animation: pulseGlow 2.2s ease-in-out;
+  }
+  @keyframes pulseGlow {
+    0% { background: #FEF08A; box-shadow: 0 0 0 3px #EAB308; }
+    50% { background: #FEF9C3; }
+    100% { background: transparent; box-shadow: none; }
+  }
+
+  /* ==================== 真实合同原格式排版规范 ==================== */
+  .contract-doc-title {
+    font-size: 22px;
+    font-weight: 800;
+    text-align: center;
+    color: #0F172A;
+    margin: 12px 0 8px 0;
+    letter-spacing: 1px;
+  }
+  .contract-doc-subtitle {
+    font-size: 14px;
+    font-weight: 500;
+    text-align: center;
+    color: #64748B;
+    margin-bottom: 18px;
+  }
+  .contract-doc-meta {
+    font-size: 13px;
+    color: #64748B;
+    text-align: right;
+    margin-bottom: 18px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .contract-doc-parties {
+    font-size: 13.5px;
+    line-height: 1.85;
+    color: #1E293B;
+    margin-bottom: 20px;
+    padding: 12px 16px;
+    background: #F8FAFC;
+    border-radius: 6px;
+    border-left: 3px solid #CBD5E1;
+    white-space: pre-wrap;
+  }
+  .contract-doc-preamble {
+    font-size: 14px;
+    line-height: 1.9;
+    color: #334155;
+    text-indent: 2em;
+    margin-bottom: 22px;
+    text-align: justify;
+  }
+  .contract-article-heading {
+    font-size: 15.5px;
+    font-weight: 700;
+    color: #0F172A;
+    margin-top: 24px;
+    margin-bottom: 10px;
+    letter-spacing: 0.2px;
+  }
+  .contract-article-section {
+    font-size: 14px;
+    line-height: 1.88;
+    color: #1E293B;
+    margin-top: 18px;
+    margin-bottom: 12px;
+    white-space: pre-wrap;
+    text-align: justify;
+  }
+  .contract-doc-p {
+    font-size: 14px;
+    line-height: 1.88;
+    color: #1E293B;
+    text-indent: 2em;
+    margin-bottom: 10px;
+    text-align: justify;
+    word-break: break-all;
+    white-space: pre-wrap;
+  }
+  .contract-doc-signatures {
+    margin-top: 36px;
+    padding-top: 20px;
+    border-top: 1px dashed #CBD5E1;
+    font-size: 13.5px;
+    line-height: 1.9;
+    white-space: pre-wrap;
+  }
+
+  /* ==================== 标红 (Redline) 视觉规范 ==================== */
   /* 1. 删除文本标红 */
   .diff-del, del {
     background: #FEE2E2 !important;
@@ -460,31 +527,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     display: inline !important;
   }
 
-  /* 2. 插入文本（红绿对比模式） */
-  .diff-ins, ins {
-    background: #DCFCE7;
-    color: #15803D;
-    text-decoration: underline 2px #16A34A;
-    border: 1px solid #BBF7D0;
-    font-weight: 700;
-    padding: 1px 4px;
-    border-radius: 3px;
-    display: inline;
-  }
-
-  /* 3. 高危数值/比率/期限修改特别标红醒目徽章 */
-  .diff-ins-number {
-    background: #FEF08A !important;
-    color: #991B1B !important;
-    border: 2px solid #EF4444 !important;
-    font-weight: 900 !important;
-    padding: 2px 6px !important;
-    border-radius: 4px !important;
-    box-shadow: 0 1px 4px rgba(220, 38, 38, 0.25) !important;
-    letter-spacing: 0.5px !important;
-  }
-
-  /* 4. 【经典法务纯标红模式】：所有插入文本改为双红下划线/红字标红 */
+  /* 2. 插入文本：经典法务纯标红模式（默认） */
   .mode-pure-redline .diff-ins,
   .mode-pure-redline ins {
     background: #FEF2F2 !important;
@@ -496,207 +539,165 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     border-radius: 3px !important;
     display: inline !important;
   }
-  .mode-pure-redline .diff-ins-number {
-    background: #FEF08A !important;
-    color: #7F1D1D !important;
-    border: 2px solid #DC2626 !important;
-    font-weight: 900 !important;
-    box-shadow: 0 2px 6px rgba(220, 38, 38, 0.3) !important;
+
+  /* 3. 插入文本：红绿对照模式 */
+  body:not(.mode-pure-redline) .diff-ins,
+  body:not(.mode-pure-redline) ins {
+    background: #DCFCE7 !important;
+    color: #15803D !important;
+    text-decoration: underline 2px #16A34A !important;
+    border: 1px solid #BBF7D0 !important;
+    font-weight: 700 !important;
+    padding: 1px 4px !important;
+    border-radius: 3px !important;
+    display: inline !important;
   }
 
-  /* 缺失与新增条款整块样式 */
-  .diff-block-missing-wrap {
-    background: #FFF5F5;
-    border: 1.5px solid #FECACA;
-    border-left: 5px solid #DC2626;
-    padding: 12px 16px;
-    border-radius: 6px;
+  /* 4. 高危违约金比例/期限偷改醒目徽章 */
+  .diff-ins-number {
+    background: #FEF08A !important;
+    color: #991B1B !important;
+    border: 2px solid #EF4444 !important;
+    font-weight: 900 !important;
+    padding: 2px 6px !important;
+    border-radius: 4px !important;
+    box-shadow: 0 1px 4px rgba(220, 38, 38, 0.25) !important;
+    letter-spacing: 0.5px !important;
   }
-  .badge-missing {
-    background: #DC2626;
-    color: #FFF;
+
+  /* 5. 正文轻量级法务批注引用锚点（不污染正文排版，点击联动右侧专栏） */
+  .ann-ref-anchor {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
     font-size: 11px;
     font-weight: 700;
-    padding: 2px 8px;
+    color: #2563EB;
+    background: #EFF6FF;
+    border: 1px solid #BFDBFE;
     border-radius: 4px;
-    display: inline-block;
-    margin-bottom: 8px;
+    padding: 1px 6px;
+    margin: 0 4px;
+    cursor: pointer;
+    vertical-align: middle;
+    user-select: none;
+    transition: all 0.15s ease;
   }
-  .diff-placeholder-missing {
-    background: #FEF2F2;
-    border: 2px dashed #F87171;
-    border-radius: 8px;
-    padding: 16px;
-    color: #991B1B;
-    font-size: 13.5px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    align-items: stretch;
+  .ann-ref-anchor:hover {
+    background: #2563EB;
+    color: #FFFFFF;
+    border-color: #2563EB;
+    box-shadow: 0 2px 6px rgba(37,99,235,0.3);
   }
-  .placeholder-icon { font-size: 16px; margin-right: 4px; }
-  .placeholder-text { font-weight: 700; font-size: 13px; }
+  .ann-pills-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
 
-  .diff-placeholder-new {
+  /* ==================== 缺失条款与新增条款整块排版 ==================== */
+  .doc-block-missing-std {
+    background: #FFF5F5;
+    border: 1px solid #FECACA;
+    border-left: 4px solid #DC2626;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+  }
+  .doc-badge-missing {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #DC2626;
+    margin-bottom: 6px;
+  }
+  .doc-missing-text {
+    font-size: 13.5px;
+    line-height: 1.85;
+    color: #7F1D1D;
+    text-indent: 2em;
+    text-align: justify;
+  }
+
+  .doc-block-missing-slot {
+    background: #FEF2F2;
+    border: 1.5px dashed #F87171;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .doc-block-missing-slot:hover {
+    background: #FEE2E2;
+    border-color: #DC2626;
+  }
+  .slot-icon { font-size: 16px; }
+  .slot-text {
+    font-size: 13px;
+    font-weight: 600;
+    color: #991B1B;
+    flex: 1;
+  }
+
+  .doc-block-blank-slot {
     background: #F8FAFC;
-    border: 2px dashed #CBD5E1;
-    border-radius: 8px;
-    padding: 16px;
+    border: 1.5px dashed #CBD5E1;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     color: #64748B;
     font-size: 13px;
   }
-  .diff-block-new-wrap {
+
+  .doc-block-new-rev {
     background: #FAF5FF;
-    border: 1.5px solid #DDD6FE;
-    border-left: 5px solid #7C3AED;
-    padding: 12px 16px;
+    border: 1px solid #DDD6FE;
+    border-left: 4px solid #7C3AED;
     border-radius: 6px;
-  }
-  .badge-new {
-    background: #7C3AED;
-    color: #FFF;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 4px;
-    display: inline-block;
-    margin-bottom: 8px;
-  }
-
-  /* ==================== 条款内嵌法务批注卡片 (Inline Annotation Callout) ==================== */
-  .inline-ann-container {
-    margin-top: 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .inline-ann-card {
-    background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-left: 4px solid #2563EB;
-    border-radius: 8px;
     padding: 12px 16px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+    margin-bottom: 12px;
     cursor: pointer;
-    transition: all 0.2s ease;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
   }
-  .inline-ann-card:hover {
-    border-color: #93C5FD;
-    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.12);
-  }
-  .inline-ann-card.HIGH { border-left-color: #DC2626; background: #FFFDFD; }
-  .inline-ann-card.MEDIUM { border-left-color: #D97706; background: #FFFDF8; }
-  .inline-ann-card.LOW { border-left-color: #64748B; background: #F8FAFC; }
-  .inline-ann-card.active { box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.4), 0 4px 12px rgba(0,0,0,0.08); }
-
-  .inline-ann-card.status-ACCEPTED { border-left-color: #16A34A !important; background: #F0FDF4 !important; }
-  .inline-ann-card.status-QUESTIONED { border-left-color: #D97706 !important; background: #FFFBEB !important; }
-  .inline-ann-card.status-OVERRULED { border-left-color: #94A3B8 !important; background: #F8FAFC !important; opacity: 0.85; }
-
-  .inline-ann-top {
-    display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 8px;
-  }
-  .inline-ann-tag {
-    font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
-  }
-  .inline-ann-tag.HIGH { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
-  .inline-ann-tag.MEDIUM { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
-  .inline-ann-tag.LOW { background: #F1F5F9; color: #475569; }
-
-  .inline-ann-title { font-size: 13px; font-weight: 700; color: #1E293B; flex: 1; }
-  .inline-status-badge {
-    font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
-    background: #E2E8F0; color: #475569;
-  }
-  .inline-status-badge.ACCEPTED { background: #DCFCE7; color: #15803D; border: 1px solid #BBF7D0; }
-  .inline-status-badge.QUESTIONED { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
-  .inline-status-badge.OVERRULED { background: #F1F5F9; color: #64748B; border: 1px solid #CBD5E1; }
-
-  .inline-ann-diff-summary {
-    background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;
-    padding: 6px 10px; font-size: 12px; margin-bottom: 8px; display: flex;
-    align-items: center; gap: 8px; flex-wrap: wrap;
-  }
-  .comp-std { color: #64748B; }
-  .comp-std del { color: #B91C1C; background: #FEE2E2; text-decoration: line-through 1.5px #DC2626; padding: 0 4px; border-radius: 2px; }
-  .comp-arrow { font-weight: bold; color: #94A3B8; }
-  .comp-rev { color: #0F172A; }
-  .comp-rev ins { color: #15803D; background: #DCFCE7; text-decoration: underline 1.5px #16A34A; padding: 0 4px; border-radius: 2px; }
-  .mode-pure-redline .comp-rev ins { color: #B91C1C !important; background: #FEF2F2 !important; text-decoration: underline 1.5px #DC2626 !important; }
-
-  .inline-ann-desc { font-size: 12.5px; color: #334155; margin-bottom: 6px; line-height: 1.55; }
-  .inline-ann-advice {
-    font-size: 12px; color: #1E40AF; background: #EFF6FF; border-left: 3px solid #2563EB;
-    padding: 7px 10px; border-radius: 0 4px 4px 0; margin-bottom: 8px; line-height: 1.5;
-  }
-
-  .inline-ann-actions {
-    display: flex; align-items: center; gap: 8px; padding-top: 8px;
-    border-top: 1px dashed #E2E8F0; margin-top: 6px;
-  }
-  .inline-actions-label { font-size: 11px; color: #64748B; font-weight: 700; }
-  .inline-action-btn {
-    font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 5px;
-    border: 1px solid var(--border); background: #FFFFFF; color: #334155; cursor: pointer;
-    transition: all 0.15s ease;
-  }
-  .inline-action-btn:hover { background: #F1F5F9; }
-  .inline-action-btn.accept:hover { background: #DCFCE7; color: #15803D; border-color: #86EFAC; }
-  .inline-action-btn.question:hover { background: #FEF3C7; color: #92400E; border-color: #FCD34D; }
-  .inline-action-btn.overrule:hover { background: #F1F5F9; color: #64748B; border-color: #94A3B8; }
-
-  /* ==================== 滑出式法务批注抽屉 (Slide-out Drawer) ==================== */
-  .annotations-drawer {
-    position: fixed;
-    top: 0;
-    right: -500px;
-    width: 480px;
-    height: 100vh;
-    background: #FFFFFF;
-    box-shadow: -6px 0 28px rgba(0,0,0,0.16);
-    z-index: 1000;
-    transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  .doc-badge-new {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #6D28D9;
+    margin-bottom: 6px;
     display: flex;
-    flex-direction: column;
+    justify-content: space-between;
+    align-items: center;
   }
-  .annotations-drawer.open {
-    right: 0;
-  }
-  .drawer-backdrop {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh;
-    background: rgba(15, 23, 42, 0.45);
-    backdrop-filter: blur(2px);
-    z-index: 999;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.25s ease;
-  }
-  .drawer-backdrop.open {
-    opacity: 1;
-    pointer-events: auto;
+  .doc-new-text {
+    font-size: 14px;
+    line-height: 1.85;
+    color: #4C1D95;
+    text-indent: 2em;
+    text-align: justify;
   }
 
-  /* 当用户选择固定侧边栏时，取消 fixed 抽屉，变为标准 grid 侧栏 */
-  .workspace-layout.sidebar-pinned .annotations-drawer {
+  /* ==================== 右侧法务审阅批注专栏 (Annotations Sidebar) ==================== */
+  .annotations-sidebar-panel {
     position: sticky;
     top: 114px;
-    right: auto;
-    width: 100%;
     max-height: calc(100vh - 130px);
-    box-shadow: 0 1px 4px rgba(0,0,0,0.03);
+    background: #FFFFFF;
     border: 1px solid var(--border);
     border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     z-index: 85;
   }
-  .workspace-layout.sidebar-pinned + .drawer-backdrop {
-    display: none !important;
-  }
-
   .sidebar-header {
     padding: 14px 18px;
     border-bottom: 1px solid var(--border);
@@ -705,27 +706,70 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     justify-content: space-between;
     align-items: center;
   }
-  .sidebar-title { font-size: 14px; font-weight: 700; color: #1E293B; display: flex; align-items: center; gap: 8px; }
+  .sidebar-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #1E293B;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
   .sidebar-count-badge {
-    background: #1E293B; color: #FFF; font-size: 11px; padding: 1px 7px; border-radius: 999px; font-weight: 800;
+    background: #1E293B;
+    color: #FFF;
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-weight: 800;
   }
   .mini-tool-btn {
-    font-size: 11px; font-weight: 600; padding: 4px 8px; border-radius: 4px;
-    border: 1px solid var(--border); background: #FFF; color: #475569; cursor: pointer;
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: #FFF;
+    color: #475569;
+    cursor: pointer;
   }
   .mini-tool-btn:hover { background: #F1F5F9; color: #0F172A; }
-  .mini-tool-btn.close-btn { font-size: 14px; font-weight: 800; padding: 2px 7px; color: #64748B; }
+
+  .sidebar-filter-strip {
+    padding: 8px 12px;
+    border-bottom: 1px solid #F1F5F9;
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+    background: #FFFFFF;
+  }
+  .filter-chip {
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: #FFF;
+    font-size: 11px;
+    font-weight: 600;
+    color: #475569;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+  .filter-chip.active {
+    background: #1E293B;
+    color: #FFF;
+    border-color: #1E293B;
+  }
 
   .annotations-list {
     overflow-y: auto;
-    padding: 14px;
+    padding: 12px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
     flex: 1;
   }
 
-  /* 独立批注卡片 */
+  /* 独立审阅批注卡片 */
   .annotation-card {
     background: #FFFFFF;
     border: 1px solid var(--border);
@@ -747,17 +791,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .annotation-card.status-ACCEPTED {
     border-left: 4px solid #16A34A;
+    background: #F0FDF4;
   }
   .annotation-card.status-QUESTIONED {
     border-left: 4px solid #D97706;
+    background: #FFFBEB;
   }
   .annotation-card.status-OVERRULED {
     border-left: 4px solid #94A3B8;
-    opacity: 0.8;
+    background: #F8FAFC;
+    opacity: 0.88;
   }
 
   .card-top {
-    display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;
+    display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;
   }
   .card-index {
     font-size: 11px; font-weight: 800; color: #64748B; background: #F1F5F9;
@@ -771,20 +818,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .card-risk-pill.LOW { background: #F1F5F9; color: #475569; }
 
   .card-clause-name {
-    font-size: 13px; font-weight: 700; color: #0F172A; margin-bottom: 6px;
+    font-size: 12.5px; font-weight: 700; color: #0F172A; margin-bottom: 6px;
   }
 
   /* 卡片内修改对比 */
   .card-comparison-box {
     background: #F8FAFC;
     border-radius: 6px;
-    padding: 8px 10px;
+    padding: 7px 9px;
     font-size: 11.5px;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
     border: 1px solid #EDF2F7;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 3px;
   }
   .comp-row { display: flex; gap: 6px; }
   .comp-label { font-weight: 700; color: #64748B; min-width: 44px; }
@@ -798,13 +845,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .card-advice {
     font-size: 11.5px; color: #1E40AF; background: #EFF6FF; border-left: 3px solid var(--primary);
-    padding: 6px 8px; border-radius: 0 4px 4px 0; margin-bottom: 10px; line-height: 1.45;
+    padding: 6px 8px; border-radius: 0 4px 4px 0; margin-bottom: 8px; line-height: 1.45;
   }
 
   /* 审阅处置按钮栏 */
   .card-actions {
     display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #F1F5F9;
-    padding-top: 8px; margin-top: 4px;
+    padding-top: 6px; margin-top: 2px;
   }
   .card-action-btn-group { display: flex; gap: 4px; }
   .mini-btn {
@@ -824,11 +871,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   /* 打印样式适配 */
   @media print {
-    .header, .controls-bar, .upload-panel, .header-actions, .card-actions, .annotations-drawer, .drawer-backdrop { display: none !important; }
+    .header, .controls-bar, .upload-panel, .header-actions, .card-actions, .annotations-sidebar-panel { display: none !important; }
     body { background: #FFF; }
     .main-wrapper { max-width: 100%; margin: 0; padding: 0; }
-    .workspace-layout { display: block; }
-    .aligned-row { page-break-inside: avoid; }
+    .review-workspace { display: block; }
+    .document-dual-stage-wrapper { background: #FFF; padding: 0; }
+    .contract-continuous-stage { box-shadow: none; padding: 0; }
   }
 </style>
 </head>
@@ -839,10 +887,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="brand-logo">Δ</div>
     <div>
       <div style="display:flex; align-items:center; gap:8px;">
-        <span class="brand-title">AI 合同审查 · 条款级 Diff 与整版比对工作台</span>
+        <span class="brand-title">AI 合同审查 · 整版原格式比对与法务审阅工作台</span>
         <span class="brand-tag">78 套标准母本库接入版</span>
       </div>
-      <div class="brand-sub">双栏整版阅读 · 字符级微观对齐 · 智能法务审阅批注</div>
+      <div class="brand-sub">双栏整版阅读 · 字符级微观对齐 · 智能法务审阅批注专栏</div>
     </div>
   </div>
   <div class="header-actions">
@@ -859,7 +907,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <input type="file" id="fileInput" accept=".docx" style="display:none;" onchange="handleFileSelect(event)">
       <div class="drop-icon">📄</div>
       <div class="drop-title">点击或拖拽修改后的 DOCX 送审合同至此</div>
-      <div class="drop-desc">无需人工匹配模板：系统自动解析正文结构，秒级定位 78 套标准母本并出具整版比对与批注</div>
+      <div class="drop-desc">无需人工选择母本：自动结构解构并秒级匹配 78 套标准母本库，出具整版原格式比对</div>
     </div>
 
     <div class="preset-section">
@@ -869,7 +917,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </div>
       <div class="preset-grid">
         <button class="preset-btn" onclick="loadSample('prescreen_tampered')">
-          <span>🚨 快速预审 (违约金被偷改)</span>
+          <span>🚨 快速预审 (违约金偷降千分之一)</span>
           <span class="badge-tag danger">高危篡改</span>
         </button>
         <button class="preset-btn" onclick="loadSample('missing_confidential')">
@@ -919,7 +967,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <span class="stat-card-val" id="statNewClauses">0</span>
       </div>
       <div class="stat-card warning">
-        <span class="stat-card-title">🟠 期限/主体/弱化</span>
+        <span class="stat-card-title">🟠 期限/违约微调</span>
         <span class="stat-card-val" id="statMediumRisk">0</span>
       </div>
       <div class="stat-card progress">
@@ -934,8 +982,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="control-left-group">
       <!-- 视图模式切换 -->
       <div class="view-switch">
-        <button class="view-btn active" id="btnModeSide" onclick="setViewMode('side')">📖 左右纯双栏标红 (50/50 宽屏)</button>
-        <button class="view-btn" id="btnModeSingle" onclick="setViewMode('single')">📄 单版正文修订</button>
+        <button class="view-btn active" id="btnModeSide" onclick="setViewMode('side')">📖 整版原格式双栏对照</button>
+        <button class="view-btn" id="btnModeSingle" onclick="setViewMode('single')">📄 送审单版标红审阅</button>
         <button class="view-btn" id="btnModeDiff" onclick="setViewMode('diff')">🎯 仅看变更条款</button>
       </div>
 
@@ -954,65 +1002,56 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
 
     <div class="control-right-group">
-      <!-- 分类过滤标签 -->
-      <div class="filter-chips">
-        <button class="filter-chip active" onclick="setFilter('ALL')">全部 (<span id="filterAllCount">0</span>)</button>
-        <button class="filter-chip" onclick="setFilter('HIGH')">🔴 高危篡改 (<span id="filterHighCount">0</span>)</button>
-        <button class="filter-chip" onclick="setFilter('MISSING')">🚩 缺失条款 (<span id="filterMissingCount">0</span>)</button>
-        <button class="filter-chip" onclick="setFilter('NEW')">➕ 客户新增 (<span id="filterNewCount">0</span>)</button>
-        <button class="filter-chip" onclick="setFilter('WARNING')">🟠 期限/主体 (<span id="filterWarnCount">0</span>)</button>
-      </div>
-
-      <button class="btn btn-drawer" id="btnToggleDrawer" onclick="toggleDrawer()">
-        <span>📋 审查批注抽屉</span>
-        <span class="drawer-count-badge" id="btnDrawerCount">0</span>
+      <button class="btn btn-toggle-sidebar" id="btnToggleSidebar" onclick="toggleSidebarCollapse()">
+        <span>📋 审阅批注专栏</span>
+        <span class="sidebar-badge-count" id="btnSidebarCount">0</span>
       </button>
-      <button class="btn" id="btnPinSidebar" onclick="toggleSidebarPin()" title="在超宽显示器上固定侧边栏">📌 固定侧栏</button>
-      <label class="sync-toggle-label">
-        <input type="checkbox" id="syncScrollCheckbox" checked onchange="toggleSyncScroll(this.checked)">
-        <span>🔗 同步滚动</span>
-      </label>
     </div>
   </div>
 
-  <!-- 核心对比主工作区：纯 50/50 宽幅双栏 -->
-  <div class="workspace-layout" id="workspaceLayout">
-    <!-- 整版合同左右双栏对照区 -->
-    <div class="document-grid-container" id="documentGridContainer">
-      <div class="document-grid-header">
-        <div class="grid-header-col standard">
+  <!-- ==================== 核心对比工作区：整版原格式对照 + 批注专栏 ==================== -->
+  <div class="review-workspace" id="reviewWorkspace">
+
+    <!-- 左/中：整版原格式连续 A4 纸质对照画布 -->
+    <div class="document-dual-stage-wrapper" id="documentStageWrapper">
+      <div class="stage-headers" id="stageHeaders">
+        <div class="stage-col-header standard">
           <span>🏛️ 知识库标准参考母本（基准正文）</span>
-          <span style="font-size:11px; opacity:0.8;" id="headerStdName">母本库</span>
+          <span class="stage-header-sub" id="headerStdName">母本库</span>
         </div>
-        <div class="grid-header-col reviewed">
+        <div class="stage-col-header reviewed">
           <span>✏️ 送审合同文本（待审稿·标红对照）</span>
-          <span style="font-size:11px; opacity:0.8;" id="headerRevName">待审稿</span>
+          <span class="stage-header-sub" id="headerRevName">待审稿</span>
         </div>
       </div>
 
-      <!-- 整版行对齐主列表 -->
-      <div id="alignedRowsContainer"></div>
+      <!-- 连续整版合同页面（基于 display: contents 水平对齐） -->
+      <div class="contract-continuous-stage" id="contractContinuousStage"></div>
     </div>
 
-    <!-- 智能法务审阅批注抽屉 / 可固定侧边栏 -->
-    <div class="annotations-drawer" id="annotationsDrawer">
+    <!-- 右：专享法务审阅批注栏 (批注项放右边) -->
+    <aside class="annotations-sidebar-panel" id="annotationsSidebar">
       <div class="sidebar-header">
         <div class="sidebar-title">
           <span>📋 智能法务审阅批注</span>
           <span class="sidebar-count-badge" id="sidebarCount">0</span>
         </div>
-        <div style="display:flex; align-items:center; gap:6px;">
-          <button class="mini-tool-btn" id="btnDrawerPin" onclick="toggleSidebarPin()" title="切换固定为侧边栏或浮动抽屉">📌 固定</button>
-          <button class="mini-tool-btn close-btn" onclick="toggleDrawer(false)" title="关闭抽屉">✕</button>
-        </div>
+        <button class="mini-tool-btn" onclick="toggleSidebarCollapse()" title="收起批注专栏">◀ 收起</button>
+      </div>
+
+      <!-- 分类筛选标签 -->
+      <div class="sidebar-filter-strip">
+        <button class="filter-chip active" onclick="setFilter('ALL')">全部 (<span id="filterAllCount">0</span>)</button>
+        <button class="filter-chip" onclick="setFilter('HIGH')">🔴 高危 (<span id="filterHighCount">0</span>)</button>
+        <button class="filter-chip" onclick="setFilter('MISSING')">🚩 缺失 (<span id="filterMissingCount">0</span>)</button>
+        <button class="filter-chip" onclick="setFilter('NEW')">➕ 新增 (<span id="filterNewCount">0</span>)</button>
+        <button class="filter-chip" onclick="setFilter('WARNING')">🟠 违约/期限 (<span id="filterWarnCount">0</span>)</button>
       </div>
 
       <div class="annotations-list" id="annotationsList"></div>
-    </div>
-  </div>
+    </aside>
 
-  <!-- 抽屉遮罩背景 -->
-  <div class="drawer-backdrop" id="drawerBackdrop" onclick="toggleDrawer(false)"></div>
+  </div>
 
 </main>
 
@@ -1022,7 +1061,6 @@ let currentData = null;
 let currentViewMode = 'side'; // 'side' | 'single' | 'diff'
 let currentFilter = 'ALL';
 let activeAnnotationIndex = -1;
-let syncScrollEnabled = true;
 
 // 预置默认数据占位符
 window.INITIAL_DATA = __INITIAL_DATA_PLACEHOLDER__;
@@ -1077,7 +1115,89 @@ async function loadSample(sampleKey) {
   }
 }
 
-// 渲染整版对比与批注
+// 格式判定：识别正文节点原排版角色
+function detectBlockCategory(title, text, idx) {
+  const cleaned = (text || '').trim();
+  if (idx === 0 && (cleaned.includes('合同') || cleaned.includes('协议'))) {
+    return 'TITLE';
+  }
+  if (idx === 1 && (cleaned.startsWith('(') || cleaned.startsWith('（') || cleaned.includes('年费') || cleaned.includes('委托'))) {
+    return 'SUBTITLE';
+  }
+  if (cleaned.startsWith('合同编号') || cleaned.startsWith('编号:')) {
+    return 'META';
+  }
+  if (title === '双方主体与基本信息' || (cleaned.includes('甲方') && cleaned.includes('乙方') && (cleaned.includes('地址') || cleaned.includes('法定代表人') || cleaned.includes('统一社会信用代码')))) {
+    return 'PARTIES';
+  }
+  if (cleaned.includes('达成如下协议') || cleaned.includes('鉴于') || cleaned.includes('特订立本合同')) {
+    return 'PREAMBLE';
+  }
+  if (/^第[一二三四五六七八九十百]+条/.test(cleaned)) {
+    const lines = cleaned.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length === 1 && cleaned.length < 35) {
+      return 'ARTICLE_HEADING';
+    }
+    return 'ARTICLE_SECTION';
+  }
+  if (cleaned.includes('（以下无正文）') || (cleaned.includes('甲方') && cleaned.includes('乙方') && (cleaned.includes('盖章') || cleaned.includes('签字')))) {
+    return 'SIGNATURE';
+  }
+  if (/^\d+\.\d+/.test(cleaned)) {
+    return 'SUBCLAUSE';
+  }
+  return 'PARAGRAPH';
+}
+
+// 格式化输出为纯正合同排版 HTML
+function formatContractHtml(html, rawText, category, colType) {
+  if (!html) return '<div class="empty-placeholder"></div>';
+
+  // 已由后端结构化包装的特殊插槽（如缺失整块、新增整块）
+  if (html.includes('doc-block-missing-') || html.includes('doc-block-blank-') || html.includes('doc-block-new-')) {
+    return html;
+  }
+
+  // 条款混合节点（条标题 + 条正文段落）精细化分层
+  if (category === 'ARTICLE_SECTION') {
+    // 检查是否包含 "第X条 事项\n正文..."
+    const headingMatch = html.match(/^(<div class="[^"]*">)?(第[一二三四五六七八九十百]+条[^\n<]*)\n([\s\S]*)$/);
+    if (headingMatch) {
+      const prefix = headingMatch[1] || '';
+      const headingText = headingMatch[2];
+      const bodyText = headingMatch[3];
+      return `${prefix}<div class="contract-article-heading">${headingText}</div><div class="contract-doc-p">${bodyText}</div>${prefix ? '</div>' : ''}`;
+    }
+    return `<div class="contract-article-section">${html}</div>`;
+  }
+
+  if (category === 'TITLE') {
+    return `<h1 class="contract-doc-title">${html}</h1>`;
+  }
+  if (category === 'SUBTITLE') {
+    return `<div class="contract-doc-subtitle">${html}</div>`;
+  }
+  if (category === 'META') {
+    return `<div class="contract-doc-meta">${html}</div>`;
+  }
+  if (category === 'PARTIES') {
+    return `<div class="contract-doc-parties">${html}</div>`;
+  }
+  if (category === 'PREAMBLE') {
+    return `<div class="contract-doc-preamble">${html}</div>`;
+  }
+  if (category === 'ARTICLE_HEADING') {
+    return `<div class="contract-article-heading">${html}</div>`;
+  }
+  if (category === 'SIGNATURE') {
+    return `<div class="contract-doc-signatures">${html}</div>`;
+  }
+
+  // 标准条款段落
+  return `<div class="contract-doc-p">${html}</div>`;
+}
+
+// 渲染整版原格式比对与批注
 function renderFullDiff(data) {
   currentData = data;
   activeAnnotationIndex = -1;
@@ -1097,22 +1217,23 @@ function renderFullDiff(data) {
 
   // 统计数据
   const stats = data.stats || {};
-  document.getElementById('statTotalAnnotations').innerText = stats.total_annotations || (data.annotations ? data.annotations.length : 0);
+  const annCount = (data.annotations || []).length;
+  document.getElementById('statTotalAnnotations').innerText = stats.total_annotations || annCount;
   document.getElementById('statHighRisk').innerText = stats.high_risk || 0;
   document.getElementById('statMissingClauses').innerText = stats.missing_clauses || 0;
   document.getElementById('statNewClauses').innerText = stats.new_clauses || 0;
   document.getElementById('statMediumRisk').innerText = (stats.medium_risk || 0);
-  const annCount = (data.annotations || []).length;
+
   document.getElementById('sidebarCount').innerText = annCount;
-  const btnDrawerEl = document.getElementById('btnDrawerCount');
-  if (btnDrawerEl) btnDrawerEl.innerText = annCount;
+  const btnSidebarCountEl = document.getElementById('btnSidebarCount');
+  if (btnSidebarCountEl) btnSidebarCountEl.innerText = annCount;
 
   // 综合判定 Banner
   const verdictEl = document.getElementById('verdictBanner');
   if (stats.high_risk > 0 || stats.missing_clauses > 0) {
     verdictEl.className = 'verdict-banner danger';
-    verdictEl.innerText = `🚨 发现 ${stats.high_risk} 处高危数值篡改与 ${stats.missing_clauses} 处核心条款缺失，建议重点复核并驳回修改`;
-  } else if ((data.annotations || []).length > 0) {
+    verdictEl.innerText = `🚨 发现 ${stats.high_risk} 处高危条款篡改与 ${stats.missing_clauses} 处核心条款缺失，建议重点复核并驳回修改`;
+  } else if (annCount > 0) {
     verdictEl.className = 'verdict-banner';
     verdictEl.style.background = '#FEF3C7';
     verdictEl.style.color = '#92400E';
@@ -1131,7 +1252,7 @@ function renderFullDiff(data) {
   document.getElementById('filterWarnCount').innerText = anns.filter(a => a.risk_level === 'MEDIUM' && a.delta_type !== 'NEW_CLAUSE').length;
 
   updateProgressDisplay();
-  renderAlignedRows();
+  renderContinuousContract();
   renderAnnotationsSidebar();
 }
 
@@ -1142,80 +1263,56 @@ function updateProgressDisplay() {
   document.getElementById('statProgress').innerText = `${handled} / ${total}`;
 }
 
-// 渲染整版行对齐合同内容（左右纯双栏 50/50 宽屏）
-function renderAlignedRows() {
-  const container = document.getElementById('alignedRowsContainer');
-  container.innerHTML = '';
+// 核心渲染：整版整页 A4 原格式对照排版（杜绝表格卡片感）
+function renderContinuousContract() {
+  const stage = document.getElementById('contractContinuousStage');
+  stage.innerHTML = '';
 
   const blocks = currentData.aligned_blocks || [];
-  blocks.forEach((block, bIdx) => {
-    // 过滤逻辑
+  blocks.forEach((block, idx) => {
     const isMatch = block.status === 'MATCH';
     if (currentViewMode === 'diff' && isMatch) {
-      return; // 仅看变更模式下跳过完全一致项
+      return; // 仅看变更条款模式下跳过完全一致项
     }
 
+    const txt = block.standard_text || block.reviewed_text || '';
+    const category = detectBlockCategory(block.clause_title, txt, idx);
+
+    // 虚拟行容器（基于 display: contents 保持左右两栏平滑网格对齐，不渲染任何边框或表格线）
     const row = document.createElement('div');
-    row.className = 'aligned-row';
+    row.className = 'doc-section-row';
     row.id = block.block_id;
 
-    // 状态标签
-    let statusText = '完全一致';
-    let statusClass = 'status-match';
-    if (block.status === 'DIFF') {
-      statusText = '存在修订';
-      statusClass = 'status-diff';
-    } else if (block.status === 'MISSING_IN_REVIEWED') {
-      statusText = '母本条款被删';
-      statusClass = 'status-missing';
-    } else if (block.status === 'NEW_IN_REVIEWED') {
-      statusText = '客户非标新增';
-      statusClass = 'status-new';
-    }
+    // 左侧（标准参考母本基准正文）
+    const colStd = document.createElement('div');
+    colStd.className = `doc-col-std ${block.status.toLowerCase()}`;
+    colStd.id = `std-${block.block_id}`;
+    colStd.innerHTML = formatContractHtml(block.standard_html || escapeHtml(block.standard_text), block.standard_text, category, 'STD');
 
-    // 左侧（母本基准正文）
-    const paneStd = document.createElement('div');
-    paneStd.className = 'pane-standard';
-    paneStd.innerHTML = `
-      <div class="clause-header-row">
-        <span class="clause-tag std">🏛️ 标准参考母本 · ${escapeHtml(block.clause_title)}</span>
-      </div>
-      ${block.standard_html || '<div style="color:#94A3B8;">（无）</div>'}
-    `;
+    // 右侧（送审待审修改版，标红排版 + 批注锚点）
+    const colRev = document.createElement('div');
+    colRev.className = `doc-col-rev ${block.status.toLowerCase()}`;
+    colRev.id = `rev-${block.block_id}`;
+    colRev.innerHTML = formatContractHtml(block.reviewed_html || escapeHtml(block.reviewed_text), block.reviewed_text, category, 'REV');
 
-    // 右侧（送审修改版，改变处就地内嵌批注卡片）
-    const paneRev = document.createElement('div');
-    paneRev.className = 'pane-reviewed';
-    paneRev.innerHTML = `
-      <div class="clause-header-row">
-        <span class="clause-tag rev">✏️ 送审修改版 · ${escapeHtml(block.clause_title)}</span>
-        <span class="clause-status-pill ${statusClass}">${statusText}</span>
-      </div>
-      ${block.reviewed_html || '<div style="color:#94A3B8;">（无）</div>'}
-    `;
-
-    row.appendChild(paneStd);
-    row.appendChild(paneRev);
-    container.appendChild(row);
+    row.appendChild(colStd);
+    row.appendChild(colRev);
+    stage.appendChild(row);
   });
 }
 
-// 渲染右侧审阅批注卡片列表
+// 渲染右侧法务审阅批注专栏卡片列表
 function renderAnnotationsSidebar() {
   const container = document.getElementById('annotationsList');
   container.innerHTML = '';
 
   const anns = currentData.annotations || [];
-  let visibleIndex = 0;
-
-  anns.forEach((ann, aIdx) => {
-    // 批注筛选
+  anns.forEach((ann) => {
+    // 批注类型过滤
     if (currentFilter === 'HIGH' && (ann.risk_level !== 'HIGH' || ann.delta_type === 'MISSING_CLAUSE')) return;
     if (currentFilter === 'MISSING' && ann.delta_type !== 'MISSING_CLAUSE') return;
     if (currentFilter === 'NEW' && ann.delta_type !== 'NEW_CLAUSE') return;
     if (currentFilter === 'WARNING' && (ann.risk_level !== 'MEDIUM' || ann.delta_type === 'NEW_CLAUSE')) return;
-
-    visibleIndex++;
 
     const card = document.createElement('div');
     card.className = `annotation-card status-${ann.review_status || 'PENDING'}`;
@@ -1273,7 +1370,7 @@ function renderAnnotationsSidebar() {
   });
 }
 
-// 选中某个批注并实现正文与卡片双向对齐平滑滚动与高光脉冲
+// 选中某个批注并实现正文与右侧卡片双向对齐平滑滚动与高光脉冲
 function selectAnnotation(annId) {
   if (!currentData || !currentData.annotations) return;
 
@@ -1282,7 +1379,7 @@ function selectAnnotation(annId) {
   activeAnnotationIndex = annIdx;
   const ann = currentData.annotations[annIdx];
 
-  // 1. 高亮抽屉中的对应批注卡片
+  // 1. 高亮右侧专栏中的对应批注卡片
   document.querySelectorAll('.annotation-card').forEach(c => c.classList.remove('active'));
   const card = document.getElementById(`card-${annId}`);
   if (card) {
@@ -1290,24 +1387,22 @@ function selectAnnotation(annId) {
     card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
-  // 2. 高亮正文行内的内嵌卡片
-  document.querySelectorAll('.inline-ann-card').forEach(c => c.classList.remove('active'));
-  const inlineCard = document.getElementById(`inline-${annId}`);
-  if (inlineCard) {
-    inlineCard.classList.add('active');
+  // 2. 定位正文条款段落并播放发光脉冲动画
+  document.querySelectorAll('.doc-col-std, .doc-col-rev').forEach(el => el.classList.remove('pulse-active'));
+  const revCol = document.getElementById(`rev-${ann.block_id}`);
+  const stdCol = document.getElementById(`std-${ann.block_id}`);
+  if (revCol) {
+    revCol.classList.add('pulse-active');
+    revCol.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } else if (stdCol) {
+    stdCol.classList.add('pulse-active');
+    stdCol.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
-  // 3. 定位正文条款行并播放发光脉冲动画
-  const targetRow = document.getElementById(ann.block_id);
-  if (targetRow) {
-    document.querySelectorAll('.aligned-row').forEach(r => r.classList.remove('row-flash'));
-    targetRow.classList.add('row-flash');
-    targetRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-
-  // 4. 更新导航指示器
+  // 3. 更新导航指示器
   const total = currentData.annotations.length;
-  document.getElementById('navIndicator').innerText = `批注 ${ann.index} / ${total}`;
+  const ind = document.getElementById('navIndicator');
+  if (ind) ind.innerText = `批注 ${ann.index} / ${total}`;
 }
 
 function nextAnnotation() {
@@ -1324,60 +1419,29 @@ function prevAnnotation() {
   selectAnnotation(currentData.annotations[prevIdx].id);
 }
 
-// 设置审阅状态并同步更新抽屉与正文内嵌卡片
+// 设置审阅状态
 function setAnnotationStatus(annId, status) {
   const ann = (currentData.annotations || []).find(a => a.id === annId);
   if (!ann) return;
   ann.review_status = (ann.review_status === status) ? 'PENDING' : status;
 
-  // 1. 刷新抽屉列表并保持激活
   renderAnnotationsSidebar();
   const card = document.getElementById(`card-${annId}`);
   if (card) card.classList.add('active');
 
-  // 2. 同步就地更新正文行内嵌入的卡片
-  const inlineCard = document.getElementById(`inline-${annId}`);
-  if (inlineCard) {
-    inlineCard.classList.remove('status-ACCEPTED', 'status-QUESTIONED', 'status-OVERRULED');
-    if (ann.review_status !== 'PENDING') {
-      inlineCard.classList.add(`status-${ann.review_status}`);
-    }
-  }
-  const statusBadge = document.getElementById(`status-badge-${annId}`);
-  if (statusBadge) {
-    statusBadge.className = 'inline-status-badge ' + (ann.review_status || 'PENDING');
-    if (ann.review_status === 'ACCEPTED') statusBadge.innerText = '✅ 已接受';
-    else if (ann.review_status === 'QUESTIONED') statusBadge.innerText = '⚠️ 存疑';
-    else if (ann.review_status === 'OVERRULED') statusBadge.innerText = '❌ 已驳回';
-    else statusBadge.innerText = '待审阅';
-  }
-
   updateProgressDisplay();
 }
 
-// 抽屉展开/关闭切换
-function toggleDrawer(forceState) {
-  const drawer = document.getElementById('annotationsDrawer');
-  const backdrop = document.getElementById('drawerBackdrop');
-  const isOpen = (typeof forceState === 'boolean') ? forceState : !drawer.classList.contains('open');
-  drawer.classList.toggle('open', isOpen);
-  backdrop.classList.toggle('open', isOpen);
-}
-
-// 宽屏模式下固定为右侧栏 / 浮动抽屉切换
-function toggleSidebarPin() {
-  const layout = document.getElementById('workspaceLayout');
-  const drawer = document.getElementById('annotationsDrawer');
-  const backdrop = document.getElementById('drawerBackdrop');
-  const isPinned = layout.classList.toggle('sidebar-pinned');
-  drawer.classList.toggle('open', false);
-  backdrop.classList.toggle('open', false);
-
-  const pinBtn = document.getElementById('btnPinSidebar');
-  const drawerPinBtn = document.getElementById('btnDrawerPin');
-  const label = isPinned ? '🔓 浮动抽屉' : '📌 固定侧栏';
-  if (pinBtn) pinBtn.innerText = label;
-  if (drawerPinBtn) drawerPinBtn.innerText = label;
+// 右侧批注专栏收起/展开
+function toggleSidebarCollapse() {
+  const workspace = document.getElementById('reviewWorkspace');
+  const isCollapsed = workspace.classList.toggle('sidebar-collapsed');
+  const btn = document.getElementById('btnToggleSidebar');
+  if (btn) {
+    btn.innerHTML = isCollapsed
+      ? `<span>▶ 展开批注专栏</span> <span class="sidebar-badge-count">${(currentData.annotations || []).length}</span>`
+      : `<span>📋 审阅批注专栏</span> <span class="sidebar-badge-count">${(currentData.annotations || []).length}</span>`;
+  }
 }
 
 // 标红风格切换：经典法务纯标红 vs 红绿对照
@@ -1394,10 +1458,8 @@ function setViewMode(mode) {
   document.getElementById('btnModeSingle').classList.toggle('active', mode === 'single');
   document.getElementById('btnModeDiff').classList.toggle('active', mode === 'diff');
 
-  const layout = document.getElementById('workspaceLayout');
-  layout.classList.toggle('mode-single', mode === 'single');
-
-  renderAlignedRows();
+  document.body.classList.toggle('mode-single', mode === 'single');
+  renderContinuousContract();
 }
 
 // 分类筛选
@@ -1408,11 +1470,7 @@ function setFilter(filterType) {
   renderAnnotationsSidebar();
 }
 
-function toggleSyncScroll(enabled) {
-  syncScrollEnabled = enabled;
-}
-
-// 键盘快捷键支持：[ 上一个，] 下一个，Esc 关闭抽屉
+// 键盘快捷键支持：[ 上一个，] 下一个
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   if (e.key === '[' || (e.altKey && e.key === 'ArrowUp')) {
@@ -1421,8 +1479,6 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key === ']' || (e.altKey && e.key === 'ArrowDown')) {
     e.preventDefault();
     nextAnnotation();
-  } else if (e.key === 'Escape') {
-    toggleDrawer(false);
   }
 });
 
@@ -1452,7 +1508,6 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/" or parsed.path == "/index.html":
-            # 渲染并提供页面
             html_content = generate_rendered_html()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1578,12 +1633,12 @@ def export_standalone_html():
     out_path.parent.mkdir(parents=True, exist_ok=True)
     html_content = generate_rendered_html()
     out_path.write_text(html_content, encoding="utf-8")
-    print(f"[已生成独立整版对照与批注网页] {out_path}")
+    print(f"[已生成独立整版原格式对照与右侧批注网页] {out_path}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="合同整版对照与条款批注前端服务"
+        description="合同整版原格式对照与右侧批注前端服务"
     )
     parser.add_argument(
         "--port", type=int, default=8772, help="Web 端口（默认 8772）"
@@ -1599,10 +1654,10 @@ def main():
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), DiffVisualizerHandler)
     print(
-        f"\n🚀 AI 合同审查 · 条款级 Diff 与整版比对工作台已启动: http://127.0.0.1:{args.port}"
+        f"\n🚀 AI 合同审查 · 条款级 Diff 与整版原格式比对工作台已启动: http://127.0.0.1:{args.port}"
     )
     print(
-        "👉 请在浏览器中打开上方网址，即可体验整版双栏对照与智能法务审阅批注！\n"
+        "👉 请在浏览器中打开上方网址，即可体验整版双栏原格式对照与右侧智能法务审阅批注！\n"
     )
     try:
         server.serve_forever()
