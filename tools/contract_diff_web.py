@@ -946,6 +946,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <span>识别业务子类: <strong id="detectedSubtype">-</strong></span>
       <span>母本匹配置信度: <strong id="confidenceRate">-</strong></span>
       <span>基准母本文件: <strong id="matchedTemplateName">-</strong></span>
+      <span>母本底层哈希: <strong id="matchedTemplateId" style="font-family:monospace; font-size:11px; color:#64748B;">-</strong></span>
       <span>条款规模: 母本 <strong id="stdCount">-</strong> 条 vs 送审 <strong id="revCount">-</strong> 条</span>
     </div>
 
@@ -1203,15 +1204,52 @@ function renderFullDiff(data) {
   activeAnnotationIndex = -1;
 
   // 1. 顶部元信息与审查看板
-  const fileName = (data.uploaded_file || '待审合同.docx').split(/[\/\\]/).pop();
-  document.getElementById('docFileName').innerText = fileName;
-  document.getElementById('headerRevName').innerText = fileName;
-  document.getElementById('matchedTemplateTag').innerText = '🎯 已锁定母本: ' + data.matched_template_id;
-  document.getElementById('headerStdName').innerText = data.matched_template_id;
+  const rawFileName = (data.uploaded_file || '待审合同.docx').split(/[\/\\]/).pop();
+  let friendlyDocTitle = rawFileName;
+  if (rawFileName.includes('mut_11_late_fee_change')) {
+    friendlyDocTitle = '《国内专利服务合同（年费缴纳）》送审修改稿';
+  } else if (rawFileName.includes('mut_06_missing_confidentiality')) {
+    friendlyDocTitle = '《国内专利服务合同（年费缴纳）》送审修改稿（保密义务被删）';
+  } else if (rawFileName.includes('驳回复审')) {
+    friendlyDocTitle = '《商标驳回复审代理协议》送审原稿';
+  }
 
-  document.getElementById('detectedSubtype').innerText = data.detected_subtype || '-';
+  // 待审文档标题展示（如果是测试样本，附加原文件名灰色徽章以便追溯）
+  const docFileEl = document.getElementById('docFileName');
+  if (friendlyDocTitle !== rawFileName) {
+    docFileEl.innerHTML = `${escapeHtml(friendlyDocTitle)} <span style="font-size:11.5px; color:#64748B; background:#F1F5F9; border:1px solid #E2E8F0; padding:2px 7px; border-radius:4px; font-weight:normal; vertical-align:middle; margin-left:6px;">${escapeHtml(rawFileName)}</span>`;
+  } else {
+    docFileEl.innerText = rawFileName;
+  }
+
+  // 母本文件名称展示（杜绝显示 16 位底层十六进制 Hash 码，展示真实母本文档名）
+  const tplFileName = data.matched_template_name || '标准母本.docx';
+  const tplCleanName = tplFileName.replace(/\.docx?$/i, '');
+  const matchedTagEl = document.getElementById('matchedTemplateTag');
+  matchedTagEl.innerText = '🎯 已锁定母本: ' + tplCleanName;
+  matchedTagEl.title = `基准文档: ${tplFileName} (母本库底层哈希: ${data.matched_template_id || '-'})`;
+
+  // 双栏纸张列标题
+  document.getElementById('headerStdName').innerText = tplCleanName;
+  document.getElementById('headerRevName').innerText = friendlyDocTitle;
+
+  // 业务子类中文映射字典（避免显示未翻译的英文枚举代码）
+  const SUBTYPE_NAMES = {
+    'PATENT_ANNUAL_FEE': '国内专利服务（年费缴纳）',
+    'TRADEMARK_REJECTION': '商标驳回复审代理',
+    'PATENT_AGENT': '国内专利代理委托',
+    'PATENT_FAST_PRESCREEN': '国内专利快速预审服务',
+    'PURCHASE_AGREEMENT': '设备与材料采购合同',
+    'LABOR_CONTRACT': '劳动用工合同',
+    'NDA': '商业秘密保密协议 (NDA)',
+    'SERVICE_AGREEMENT': '技术咨询与专业服务合同'
+  };
+  const subtypeCn = SUBTYPE_NAMES[data.detected_subtype] || data.detected_subtype || '-';
+  document.getElementById('detectedSubtype').innerText = subtypeCn;
   document.getElementById('confidenceRate').innerText = ((data.classification_confidence || 1.0) * 100).toFixed(1) + '%';
-  document.getElementById('matchedTemplateName').innerText = data.matched_template_name || '-';
+  document.getElementById('matchedTemplateName').innerText = tplFileName;
+  const tplIdEl = document.getElementById('matchedTemplateId');
+  if (tplIdEl) tplIdEl.innerText = data.matched_template_id || '-';
   document.getElementById('stdCount').innerText = data.standard_clause_count || 0;
   document.getElementById('revCount').innerText = data.uploaded_clause_count || 0;
 
