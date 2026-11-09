@@ -14,6 +14,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 from .docx_parser import parse_docx, ParsedDocument
+from .document_parser import parse_document
 from .classifier import classify
 from .clause_extractor import extract_clauses, extract_table_schemas
 
@@ -40,6 +41,80 @@ def security_check_file(path: Path) -> SecurityCheckResult:
         res.passed = False
         res.rejected_reason = "file_too_large"
         return res
+
+    ext = path.suffix.lower()
+    allowed_exts = (".docx", ".doc", ".pdf")
+    res.checks.append(
+        {
+            "check": "extension",
+            "value": ext,
+            "passed": ext in allowed_exts,
+        }
+    )
+    if ext not in allowed_exts:
+        res.passed = False
+        res.rejected_reason = "bad_extension"
+        return res
+
+    with open(path, "rb") as _fh:
+        head = _fh.read(4)
+
+    if ext == ".docx":
+        magic_ok = (head == b"PK\x03\x04")
+        res.checks.append({"check": "magic_bytes", "value": head.hex(), "passed": magic_ok})
+        if not magic_ok:
+            res.passed = False
+            res.rejected_reason = "bad_magic"
+            return res
+        try:
+            with zipfile.ZipFile(path) as z:
+                names = z.namelist()
+                res.checks.append(
+                    {
+                        "check": "zip_entry_count",
+                        "value": len(names),
+                        "limit": 500,
+                        "passed": len(names) <= 500,
+                    }
+                )
+                total_c = sum(i.compress_size for i in z.infolist()) or 1
+                total_u = sum(i.file_size for i in z.infolist())
+                ratio = total_u / total_c
+                res.checks.append(
+                    {
+                        "check": "zip_compression_ratio",
+                        "value": round(ratio, 2),
+                        "limit": 200,
+                        "passed": ratio <= 200,
+                    }
+                )
+                traversal = [n for n in names if n.startswith("/") or ".." in Path(n).parts]
+                res.checks.append(
+                    {
+                        "check": "zip_path_traversal",
+                        "value": traversal,
+                        "passed": not traversal,
+                    }
+                )
+                if len(names) > 500 or ratio > 200 or traversal:
+                    res.passed = False
+                    res.rejected_reason = "zip_boundary_violation"
+        except zipfile.BadZipFile:
+            res.passed = False
+            res.rejected_reason = "bad_zip"
+    elif ext == ".doc":
+        magic_ok = (head == b"\xd0\xcf\x11\xe0")
+        res.checks.append({"check": "magic_bytes", "value": head.hex(), "passed": magic_ok})
+        if not magic_ok:
+            res.passed = False
+            res.rejected_reason = "bad_magic"
+    elif ext == ".pdf":
+        magic_ok = (head == b"%PDF")
+        res.checks.append({"check": "magic_bytes", "value": head.hex(), "passed": magic_ok})
+        if not magic_ok:
+            res.passed = False
+            res.rejected_reason = "bad_magic"
+    return res
     res.checks.append(
         {
             "check": "extension",
@@ -168,7 +243,7 @@ def import_template_file(path: Path) -> tuple[ImportedDoc | None, str | None]:
     try:
         tcode_m = re.search(r"MB\d{11}", path.name)
         doc_id = tcode_m.group(0) if tcode_m else None
-        parsed = parse_docx(path, document_id=doc_id)
+        parsed = parse_document(path, document_id=doc_id)
     except Exception as e:  # 解析失败不静默丢弃
         return None, f"parse_error: {type(e).__name__}: {e}"
 

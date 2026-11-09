@@ -1,22 +1,26 @@
 # -*- coding: utf-8 -*-
 """合同比对与条款级 Diff 前端可视化服务（Contract Diff Web Visualizer）。
 
-高管/法务级全案重构：
-1. 文档第一（Document-First Layout）：
-   彻底移除首屏顶部占据大半屏幕的上传框与巨型统计卡片。顶部精简为 48px 导航栏 + 38px 工具条，
-   首屏 90%+ 空间立即完整呈现两页 A4 真实合同排版。
-2. 纯正合同原排版（Authentic Contract Typography）：
-   大标题居中大字、副标题居中、合同编号右上右对齐、双方主体信息、鉴于条款首行缩进两字符、
-   条款标题粗体、正文首行缩进 2em、尾部双栏签署盖章。
-3. 优雅法律红线对照（Refined Legal Redline Flow）：
-   删除条款在母本端以优雅红删除线呈现，送审端以柔和单行槽位指示，彻底摒弃丑陋的 23 个红色报错大框！
-   修改字句高危数值（如违约金 3‰ ➔ 1‰）突出金黄高危徽章。
-4. 批注专栏放右侧（Review Annotations Sidebar）：
-   正文段落仅保留轻量微标（如 🏷️ [批注 #01]），所有对比片段、AI 法律风险剖析、处置建议与
-   审阅决策按钮（接受/存疑/驳回）统一收纳在右侧 420px 专栏，双向丝滑对焦与高光脉冲联动。
-5. 模态框上传（Modal Uploader）：
-   上传新合同和切换实测高危用例改为轻量弹出窗口，不占用阅读视线。
-6. 原生 CDP 调试与自动化验证集成。
+高管/法务级全案设计：
+1. 源文件以原格式高保真渲染（支持 docx, doc, pdf 等特别处理）：
+   大标题居中大字、副标题居中、合同编号右对齐、双方主体与鉴于条款、条款条标题加粗左对齐、
+   段落正文首行缩进 2 字符、两端对齐、尾部双方签署盖章区。真实 A4 纸张质感。
+2. 左右对比两版纯净聚焦增删（去冗余批注徽标）：
+   正文段落彻底摒弃密密麻麻的小药丸徽标（如 🏷️ [批注 #XX]），纯粹聚焦 Word/PDF 审阅级法律标红：
+   - 删除文本：<del class="diff-del">红字删除线</del>
+   - 新增/修改：<ins class="diff-ins">下划线新增</ins>
+   - 高危数值篡改：金黄高危底色醒目下划线
+   - 母本被整段删除的条款：母本端整段优雅标红删除线，送审端呈现极简平齐占位槽（不插大标签）
+   - 送审稿新增非标条款：送审端优雅新增标红，母本端平齐占位槽
+3. 三栏双向协同联动滚动（Three-Way Synchronized Scrolling）：
+   - 左栏：标准参考母本（独立滚动）
+   - 中栏：送审修改稿（独立滚动）
+   - 右栏：法务审查详情与批注专栏（自适应独立滚动）
+   - 上下滑动左右严格对齐（条款高度自动等高平衡计算）
+   - 三个栏只要滑动其中任意一个，都会平滑且相对应地滑动对应的另外两个，无死循环抖动
+4. 最右侧详情栏自适应（Responsive Sidebar）：
+   - 弹性自适应宽度，卡片流式排版无文字截断，支持一键折叠/展开
+5. 原生 CDP 调试与自动化验证集成。
 
 用法：
   python tools/contract_diff_web.py [--port 8089]
@@ -27,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import tempfile
 import urllib.parse
@@ -51,7 +56,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI 合同审查 · 整版原格式比对与法务审阅工作台</title>
+<title>AI 合同审查 · 条款级 Diff 与整版原格式比对工作台</title>
 <style>
   :root {
     --bg-canvas: #E2E8F0;
@@ -77,7 +82,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   html, body {
     height: 100vh;
     overflow: hidden;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "SimSun", "STSong", serif;
     background: var(--bg-canvas);
     color: var(--text-main);
     line-height: 1.6;
@@ -100,12 +105,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     width: 28px; height: 28px; border-radius: 7px;
     background: linear-gradient(135deg, #1E40AF 0%, #3B82F6 100%);
     color: #fff; display: flex; align-items: center; justify-content: center;
-    font-weight: 800; font-size: 15px;
+    font-weight: 800; font-size: 15px; font-family: sans-serif;
   }
-  .brand-title { font-size: 15px; font-weight: 700; color: #1E293B; letter-spacing: -0.2px; }
+  .brand-title { font-size: 15px; font-weight: 700; color: #1E293B; letter-spacing: -0.2px; font-family: sans-serif; }
 
   .header-meta-group {
-    display: flex; align-items: center; gap: 12px; font-size: 12.5px;
+    display: flex; align-items: center; gap: 12px; font-size: 12.5px; font-family: sans-serif;
   }
   .meta-tag {
     display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px;
@@ -118,12 +123,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     background: #EFF6FF; color: #1E40AF; border: 1px solid #BFDBFE;
   }
 
-  .header-actions { display: flex; align-items: center; gap: 8px; }
+  .header-actions { display: flex; align-items: center; gap: 8px; font-family: sans-serif; }
   .btn {
     padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;
     cursor: pointer; transition: all 0.15s ease; display: inline-flex;
     align-items: center; gap: 5px; border: 1px solid var(--border-light);
-    background: #FFFFFF; color: #334155;
+    background: #FFFFFF; color: #334155; font-family: sans-serif;
   }
   .btn:hover { background: #F8FAFC; border-color: var(--border); }
   .btn-primary { background: var(--primary); color: #FFF; border-color: var(--primary); }
@@ -139,6 +144,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     justify-content: space-between;
     align-items: center;
     z-index: 90;
+    font-family: sans-serif;
   }
   .tool-left { display: flex; align-items: center; gap: 12px; }
   .segmented-control {
@@ -147,7 +153,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .seg-btn {
     padding: 3px 10px; font-size: 11.5px; font-weight: 600; border-radius: 4px;
     border: none; background: transparent; color: #64748B; cursor: pointer;
-    transition: all 0.15s ease; white-space: nowrap;
+    transition: all 0.15s ease; white-space: nowrap; font-family: sans-serif;
   }
   .seg-btn.active {
     background: #FFF; color: #0F172A; box-shadow: 0 1px 2px rgba(0,0,0,0.06);
@@ -157,14 +163,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .nav-arrow-btn {
     padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border-light);
     background: #FFF; font-size: 11.5px; font-weight: 600; color: #334155;
-    cursor: pointer;
+    cursor: pointer; font-family: sans-serif;
   }
   .nav-arrow-btn:hover { background: #F1F5F9; }
   .nav-indicator-pill {
     font-size: 11.5px; font-weight: 700; color: #0F172A; min-width: 80px; text-align: center;
   }
 
-  .tool-right { display: flex; align-items: center; gap: 10px; }
+  .tool-right { display: flex; align-items: center; gap: 10px; font-family: sans-serif; }
   .stat-pill {
     font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
     display: inline-flex; align-items: center; gap: 4px; border: 1px solid transparent;
@@ -177,7 +183,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .btn-toggle-sidebar {
     background: #1E293B; color: #FFF; border: 1px solid #1E293B;
     padding: 3px 10px; border-radius: 6px; font-size: 11.5px; font-weight: 600;
-    cursor: pointer; display: flex; align-items: center; gap: 6px;
+    cursor: pointer; display: flex; align-items: center; gap: 6px; font-family: sans-serif;
   }
   .btn-toggle-sidebar:hover { background: #334155; }
   .sidebar-badge {
@@ -185,301 +191,197 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     border-radius: 999px; font-weight: 800;
   }
 
-  /* ==================== 3. 核心工作台：整版对照 + 批注专栏 ==================== */
+  /* ==================== 3. 核心工作区：三栏布局 (左母本 / 中送审 / 右详情自适应) ==================== */
   .review-workspace {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 420px;
+    grid-template-columns: 1fr 1fr minmax(320px, 420px);
     height: calc(100vh - 88px);
     width: 100%;
     overflow: hidden;
+    position: relative;
+    background: #E2E8F0;
     transition: grid-template-columns 0.25s ease;
   }
   .review-workspace.sidebar-collapsed {
-    grid-template-columns: minmax(0, 1fr) 0px;
+    grid-template-columns: 1fr 1fr 0px !important;
   }
   .review-workspace.sidebar-collapsed .annotations-sidebar-panel {
     display: none !important;
   }
+  .mode-single .review-workspace {
+    grid-template-columns: 0px 1fr minmax(320px, 420px);
+  }
+  .mode-single #colStandardPane {
+    display: none !important;
+  }
 
-  /* ==================== 4. A4 纸张质感连续合同画布 ==================== */
-  .document-canvas-scroll-area {
-    overflow-y: auto;
-    padding: 24px 32px 60px 32px;
-    height: 100%;
+  /* 独立列面板 */
+  .contract-column {
     display: flex;
     flex-direction: column;
-    align-items: center;
+    height: 100%;
+    max-height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    min-width: 0;
+    position: relative;
+    border-right: 1px solid #CBD5E1;
+    background: #E2E8F0;
   }
 
-  .paper-column-headers {
-    width: 100%;
-    max-width: 1360px;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    column-gap: 40px;
-    margin-bottom: 12px;
+  .column-sticky-header {
+    height: 38px;
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #FFFFFF;
+    border-bottom: 1px solid #CBD5E1;
+    z-index: 10;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: sans-serif;
+    flex-shrink: 0;
   }
-  .mode-single .paper-column-headers {
-    grid-template-columns: 1fr;
-  }
-  .mode-single .col-header.standard {
-    display: none !important;
-  }
-  .col-header {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 8px 14px; border-radius: 6px; background: #FFFFFF;
-    border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.03);
-    font-size: 12.5px; font-weight: 700;
-  }
-  .col-header.standard { border-left: 4px solid #64748B; color: #334155; }
-  .col-header.reviewed { border-left: 4px solid #2563EB; color: #1E40AF; background: #F8FAFC; }
+  .column-sticky-header.standard { border-top: 3px solid #64748B; color: #334155; }
+  .column-sticky-header.reviewed { border-top: 3px solid #2563EB; color: #1E40AF; background: #F8FAFC; }
+  .col-header-info { display: flex; align-items: center; gap: 6px; }
   .col-header-sub { font-size: 11px; color: #64748B; font-weight: 500; }
 
-  /* 真实 A4 双页连续纸张（杜绝表格卡片感） */
-  .contract-continuous-stage {
-    width: 100%;
-    max-width: 1360px;
+  /* 独立滚动视口 */
+  .contract-scroll-container {
+    flex: 1;
+    min-height: 0;
+    overflow-y: scroll;
+    overflow-x: hidden;
+    padding: 24px 28px 80px 28px;
+    scroll-behavior: auto;
+  }
+
+  /* A4 纸张质感画布 */
+  .contract-paper-canvas {
     background: #FFFFFF;
     border-radius: 6px;
-    box-shadow: 0 4px 20px rgba(15, 23, 42, 0.07);
-    padding: 44px 52px;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    column-gap: 40px;
-    position: relative;
+    box-shadow: 0 4px 20px rgba(15, 23, 42, 0.08);
+    border: 1px solid #CBD5E1;
+    padding: 40px 44px;
     min-height: 900px;
-  }
-  /* 双页中央装订脊线 */
-  .contract-continuous-stage::after {
-    content: "";
-    position: absolute;
-    top: 36px;
-    bottom: 36px;
-    left: 50%;
-    width: 1px;
-    background: #E2E8F0;
-    pointer-events: none;
-  }
-  .mode-single .contract-continuous-stage {
-    grid-template-columns: 1fr;
-    padding: 44px 64px;
-  }
-  .mode-single .contract-continuous-stage::after {
-    display: none !important;
-  }
-  .mode-single .doc-col-std {
-    display: none !important;
+    max-width: 780px;
+    margin: 0 auto;
   }
 
-  /* 条款段落行：基于 display: contents 保持自然阅读流水平严格平齐 */
-  .doc-section-row {
-    display: contents;
-  }
-  .doc-col-std {
-    grid-column: 1;
+  /* ==================== 4. 真实公文原格式排版 (Authentic Contract Typography) ==================== */
+  .clause-block {
     position: relative;
-    padding-right: 12px;
-    transition: background 0.3s ease;
-  }
-  .doc-col-rev {
-    grid-column: 2;
-    position: relative;
-    padding-left: 12px;
-    transition: background 0.3s ease;
-  }
-  .mode-single .doc-col-rev {
-    grid-column: 1;
-    padding-left: 0;
-  }
-
-  /* 点击批注后对齐正文段落的高光脉冲动画 */
-  .pulse-active {
-    background: #FEF9C3 !important;
+    margin-bottom: 10px;
+    transition: background 0.2s ease, outline 0.2s ease;
     border-radius: 4px;
-    outline: 2px solid #EAB308;
-    animation: pulseGlow 2.2s ease-in-out;
+    cursor: pointer;
   }
-  @keyframes pulseGlow {
-    0% { background: #FEF08A; outline-color: #CA8A04; }
-    50% { background: #FEF9C3; }
-    100% { background: transparent; outline-color: transparent; }
+  .clause-block.active-clause {
+    background: #FEF9C3 !important;
+    outline: 2px solid #EAB308;
   }
 
-  /* ==================== 5. 真实合同原格式排版规范 ==================== */
   .contract-doc-title {
-    font-size: 22px;
-    font-weight: 800;
+    font-size: 20px;
+    font-weight: 700;
     text-align: center;
-    color: #0F172A;
-    margin: 8px 0 6px 0;
+    margin: 10px 0 6px 0;
     letter-spacing: 1px;
+    color: #0F172A;
   }
   .contract-doc-subtitle {
     font-size: 13.5px;
-    font-weight: 500;
     text-align: center;
     color: #64748B;
     margin-bottom: 14px;
   }
   .contract-doc-meta {
-    font-size: 12.5px;
-    color: #64748B;
+    font-size: 12px;
     text-align: right;
-    margin-bottom: 16px;
+    color: #475569;
+    margin-bottom: 18px;
     font-family: monospace;
   }
   .contract-doc-parties {
-    font-size: 13px;
+    font-size: 13.5px;
     line-height: 1.8;
     color: #1E293B;
-    margin-bottom: 16px;
-    padding: 10px 14px;
-    background: #F8FAFC;
-    border-radius: 4px;
-    border-left: 3px solid #CBD5E1;
-    white-space: pre-wrap;
+    margin-bottom: 8px;
   }
   .contract-doc-preamble {
     font-size: 13.5px;
-    line-height: 1.9;
-    color: #334155;
+    line-height: 1.85;
     text-indent: 2em;
-    margin-bottom: 18px;
-    text-align: justify;
+    color: #1E293B;
+    margin-bottom: 12px;
   }
   .contract-article-heading {
-    font-size: 15px;
+    font-size: 14.5px;
     font-weight: 700;
     color: #0F172A;
-    margin-top: 20px;
-    margin-bottom: 8px;
-    letter-spacing: 0.2px;
-  }
-  .contract-article-section {
-    font-size: 13.5px;
-    line-height: 1.88;
-    color: #1E293B;
-    margin-top: 14px;
-    margin-bottom: 10px;
-    white-space: pre-wrap;
-    text-align: justify;
+    margin: 16px 0 6px 0;
+    border-left: 3px solid #2563EB;
+    padding-left: 8px;
   }
   .contract-doc-p {
     font-size: 13.5px;
-    line-height: 1.88;
-    color: #1E293B;
+    line-height: 1.85;
     text-indent: 2em;
-    margin-bottom: 8px;
     text-align: justify;
-    word-break: break-all;
-    white-space: pre-wrap;
+    color: #1E293B;
+    margin-bottom: 6px;
   }
   .contract-doc-signatures {
-    margin-top: 30px;
+    margin-top: 24px;
     padding-top: 16px;
     border-top: 1px dashed #CBD5E1;
     font-size: 13px;
-    line-height: 1.85;
-    white-space: pre-wrap;
+    line-height: 1.9;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
   }
 
-  /* ==================== 6. 标红 (Redline) 视觉规范 ==================== */
-  .diff-del, del {
-    background: #FEE2E2 !important;
-    color: #B91C1C !important;
-    text-decoration: line-through 2px #DC2626 !important;
-    border: 1px solid #FECACA !important;
-    font-weight: 700 !important;
-    padding: 1px 4px !important;
-    border-radius: 3px !important;
-    display: inline !important;
+  /* ==================== 5. 纯净增删标红（彻底去除正文内部密集小药丸徽标） ==================== */
+  .diff-del {
+    color: #DC2626;
+    text-decoration: line-through 1.5px #DC2626;
+    background: #FEF2F2;
+    padding: 0 2px;
+    border-radius: 2px;
   }
-  /* 纯标红模式 */
-  .mode-pure-redline .diff-ins,
-  .mode-pure-redline ins {
-    background: #FEF2F2 !important;
-    color: #B91C1C !important;
-    text-decoration: underline double 2px #DC2626 !important;
-    border: 1px solid #FECACA !important;
-    font-weight: 700 !important;
-    padding: 1px 4px !important;
-    border-radius: 3px !important;
-    display: inline !important;
-  }
-  /* 红绿对照模式 */
-  body:not(.mode-pure-redline) .diff-ins,
-  body:not(.mode-pure-redline) ins {
-    background: #DCFCE7 !important;
-    color: #15803D !important;
-    text-decoration: underline 2px #16A34A !important;
-    border: 1px solid #BBF7D0 !important;
-    font-weight: 700 !important;
-    padding: 1px 4px !important;
-    border-radius: 3px !important;
-    display: inline !important;
-  }
-  /* 高危数值篡改特别强化 */
-  .diff-ins-number {
-    background: #FEF08A !important;
-    color: #991B1B !important;
-    border: 2px solid #EF4444 !important;
-    font-weight: 900 !important;
-    padding: 1px 6px !important;
-    border-radius: 4px !important;
-    box-shadow: 0 1px 4px rgba(220, 38, 38, 0.2) !important;
-  }
-
-  /* 正文轻量级法务批注引用微标 */
-  .ann-ref-anchor {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    font-size: 11px;
-    font-weight: 700;
+  .diff-ins {
     color: #2563EB;
+    text-decoration: underline 1.5px #2563EB;
+    font-weight: 600;
     background: #EFF6FF;
-    border: 1px solid #BFDBFE;
-    border-radius: 4px;
-    padding: 1px 6px;
-    margin: 0 4px;
-    cursor: pointer;
-    vertical-align: middle;
-    user-select: none;
-    transition: all 0.15s ease;
+    padding: 0 2px;
+    border-radius: 2px;
   }
-  .ann-ref-anchor:hover {
-    background: #2563EB;
-    color: #FFFFFF;
-    border-color: #2563EB;
-    box-shadow: 0 2px 6px rgba(37,99,235,0.3);
+  .diff-ins-number {
+    color: #92400E;
+    text-decoration: underline 2px #D97706;
+    font-weight: 700;
+    background: #FEF3C7;
+    padding: 0 3px;
+    border-radius: 3px;
   }
-  .ann-pills-wrap {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin-left: 4px;
-    vertical-align: middle;
+  .mode-color-redgreen .diff-ins {
+    color: #15803D;
+    text-decoration: underline 1.5px #15803D;
+    background: #F0FDF4;
   }
 
-  /* 优雅的删除与新增段落排版（摒弃丑陋的大红警告框） */
+  /* 整段删除（母本端红删除线流） */
   .doc-text-deleted {
     background: #FFF5F5;
     border-left: 3px solid #F87171;
     padding: 8px 12px;
     border-radius: 4px;
-    margin-bottom: 8px;
-    font-size: 13.5px;
     line-height: 1.85;
-  }
-  .del-clause-pill {
-    font-size: 10.5px;
-    font-weight: 700;
-    color: #DC2626;
-    background: #FEE2E2;
-    padding: 1px 5px;
-    border-radius: 3px;
-    margin-right: 6px;
-    display: inline-block;
+    text-indent: 2em;
   }
   .diff-del-flow {
     color: #7F1D1D;
@@ -487,19 +389,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     white-space: pre-wrap;
   }
 
+  /* 送审稿删除本条款后的平齐占位槽（极简干净，无大红感叹号框） */
   .doc-slot-deleted {
     background: #FAF8F8;
     border: 1px dashed #CBD5E1;
     border-radius: 4px;
     padding: 8px 12px;
-    margin-bottom: 8px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    cursor: pointer;
+    justify-content: center;
     font-size: 12px;
     color: #94A3B8;
-    min-height: 38px;
     transition: all 0.15s ease;
   }
   .doc-slot-deleted:hover {
@@ -507,38 +407,29 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     border-color: #F87171;
     color: #DC2626;
   }
-  .del-slot-tag { font-weight: 600; }
+  .slot-placeholder-text { font-family: sans-serif; font-style: italic; }
 
+  /* 母本无此条款的平齐占位槽 */
   .doc-slot-blank {
     background: #FAFAFA;
     border: 1px dashed #E2E8F0;
     border-radius: 4px;
     padding: 8px 12px;
-    margin-bottom: 8px;
-    font-size: 12px;
-    color: #94A3B8;
     display: flex;
     align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: #94A3B8;
   }
+
+  /* 送审稿新增整段非标条款 */
   .doc-text-added {
     background: #FAF5FF;
     border-left: 3px solid #7C3AED;
     padding: 8px 12px;
     border-radius: 4px;
-    margin-bottom: 8px;
-    font-size: 13.5px;
     line-height: 1.85;
-    cursor: pointer;
-  }
-  .add-clause-pill {
-    font-size: 10.5px;
-    font-weight: 700;
-    color: #6D28D9;
-    background: #EDE9FE;
-    padding: 1px 5px;
-    border-radius: 3px;
-    margin-right: 6px;
-    display: inline-block;
+    text-indent: 2em;
   }
   .diff-ins-flow {
     color: #4C1D95;
@@ -546,7 +437,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     white-space: pre-wrap;
   }
 
-  /* ==================== 7. 右侧法务审阅批注专栏 ==================== */
+  /* ==================== 6. 右侧法务审阅详情与批注专栏 (自适应) ==================== */
   .annotations-sidebar-panel {
     background: #FFFFFF;
     border-left: 1px solid var(--border-light);
@@ -555,6 +446,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     height: 100%;
     overflow: hidden;
     z-index: 85;
+    font-family: sans-serif;
   }
   .sidebar-header {
     padding: 10px 14px;
@@ -563,6 +455,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-shrink: 0;
   }
   .sidebar-title {
     font-size: 13px; font-weight: 700; color: #1E293B; display: flex; align-items: center; gap: 6px;
@@ -583,6 +476,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     gap: 4px;
     flex-wrap: wrap;
     background: #FFFFFF;
+    flex-shrink: 0;
   }
   .filter-chip {
     padding: 2px 7px;
@@ -603,12 +497,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
 
   .annotations-list {
-    overflow-y: auto;
+    overflow-y: scroll;
     padding: 10px;
     display: flex;
     flex-direction: column;
     gap: 8px;
     flex: 1;
+    scroll-behavior: auto;
   }
 
   /* 独立审阅批注卡片 */
@@ -665,7 +560,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     gap: 3px;
   }
   .comp-row { display: flex; gap: 6px; }
-  .comp-label { font-weight: 700; color: #64748B; min-width: 44px; }
+  .comp-label { font-weight: 700; color: #64748B; min-width: 44px; flex-shrink: 0; }
   .comp-text { color: #1E293B; word-break: break-all; }
   .comp-text.del { color: #991B1B; text-decoration: line-through; }
   .comp-text.ins { color: #15803D; font-weight: 600; }
@@ -698,11 +593,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .locate-btn:hover { text-decoration: underline; }
 
-  /* ==================== 8. 上传模态窗 (Modal Dialog) ==================== */
+  /* ==================== 7. 上传模态窗 (DOCX/DOC/PDF) ==================== */
   .modal-overlay {
     position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
     background: rgba(15, 23, 42, 0.45); backdrop-filter: blur(2px);
     z-index: 1000; display: none; align-items: center; justify-content: center;
+    font-family: sans-serif;
   }
   .modal-overlay.open { display: flex; }
   .modal-card {
@@ -741,11 +637,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   /* 打印样式适配 */
   @media print {
-    .header, .toolbar-strip, .annotations-sidebar-panel, .modal-overlay { display: none !important; }
+    .header, .toolbar-strip, .annotations-sidebar-panel, .modal-overlay, .column-sticky-header { display: none !important; }
     html, body { height: auto; overflow: visible; background: #FFF; }
     .review-workspace { display: block; height: auto; }
-    .document-canvas-scroll-area { padding: 0; overflow: visible; }
-    .contract-continuous-stage { box-shadow: none; padding: 0; }
+    .contract-scroll-container { padding: 0; overflow: visible; }
+    .contract-paper-canvas { box-shadow: none; border: none; padding: 0; }
   }
 </style>
 </head>
@@ -755,7 +651,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <header class="header">
   <div class="brand">
     <div class="brand-logo">Δ</div>
-    <span class="brand-title">AI 合同审查 · 条款级 Diff 与整版比对</span>
+    <span class="brand-title">AI 合同审查 · 条款级 Diff 与整版原格式比对工作台</span>
   </div>
 
   <div class="header-meta-group">
@@ -764,7 +660,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 
   <div class="header-actions">
-    <button class="btn" onclick="openUploadModal()">📂 上传送审合同</button>
+    <button class="btn" onclick="openUploadModal()">📂 上传送审合同 (DOCX/DOC/PDF)</button>
     <button class="btn btn-primary" onclick="window.print()">🖨️ 导出对比单</button>
   </div>
 </header>
@@ -781,14 +677,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     <!-- 标红风格切换 -->
     <div class="segmented-control">
-      <button class="seg-btn active" id="btnStyleRedline" onclick="setRedlineMode(true)">🔴 纯标红</button>
+      <button class="seg-btn active" id="btnStyleRedline" onclick="setRedlineMode(true)">🔴 纯标红划线</button>
       <button class="seg-btn" id="btnStyleColor" onclick="setRedlineMode(false)">🎨 红绿对照</button>
     </div>
 
     <!-- 快速导航 -->
     <div class="nav-group">
       <button class="nav-arrow-btn" onclick="prevAnnotation()" title="快捷键: [ 或 Alt+↑">◀ 上一处</button>
-      <span class="nav-indicator-pill" id="navIndicator">批注 1 / 35</span>
+      <span class="nav-indicator-pill" id="navIndicator">批注 1 / 0</span>
       <button class="nav-arrow-btn" onclick="nextAnnotation()" title="快捷键: ] 或 Alt+↓">下一处 ▶</button>
     </div>
   </div>
@@ -801,40 +697,51 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <span class="stat-pill progress">⚖️ 核验进度 <b id="statProgress">0/0</b></span>
 
     <button class="btn-toggle-sidebar" id="btnToggleSidebar" onclick="toggleSidebarCollapse()">
-      <span>📋 批注专栏</span>
+      <span>📋 详情专栏</span>
       <span class="sidebar-badge" id="btnSidebarCount">0</span>
     </button>
   </div>
 </div>
 
-<!-- ==================== 核心工作区：首屏 100% 呈现真实合同排版 ==================== -->
+<!-- ==================== 核心工作区：三栏独立视口与双向联动 ==================== -->
 <div class="review-workspace" id="reviewWorkspace">
 
-  <!-- 左/中：整版原格式连续 A4 纸质画布 -->
-  <div class="document-canvas-scroll-area" id="documentCanvasArea">
-    <div class="paper-column-headers" id="paperHeaders">
-      <div class="col-header standard">
-        <span>🏛️ 知识库标准参考母本（基准正文）</span>
-        <span class="col-header-sub" id="headerStdName">母本库</span>
+  <!-- 1. 左栏：标准参考母本（基准条款） -->
+  <section class="contract-column pane-standard" id="colStandardPane">
+    <div class="column-sticky-header standard">
+      <div class="col-header-info">
+        <span class="col-icon">🏛️</span>
+        <span class="col-header-title">标准参考母本（基准正文）</span>
       </div>
-      <div class="col-header reviewed">
-        <span>✏️ 送审合同文本（待审稿·标红对照）</span>
-        <span class="col-header-sub" id="headerRevName">待审稿</span>
-      </div>
+      <span class="col-header-sub" id="headerStdName">母本库</span>
     </div>
+    <div class="contract-scroll-container" id="colStandardContainer">
+      <div class="contract-paper-canvas" id="paperStandard"></div>
+    </div>
+  </section>
 
-    <!-- 连续整版合同页面（基于 display: contents 水平对齐） -->
-    <div class="contract-continuous-stage" id="contractContinuousStage"></div>
-  </div>
+  <!-- 2. 中栏：送审修改稿（增删标红） -->
+  <section class="contract-column pane-reviewed" id="colReviewedPane">
+    <div class="column-sticky-header reviewed">
+      <div class="col-header-info">
+        <span class="col-icon">✏️</span>
+        <span class="col-header-title">送审合同（待审修改稿·增删对比）</span>
+      </div>
+      <span class="col-header-sub" id="headerRevName">待审稿</span>
+    </div>
+    <div class="contract-scroll-container" id="colReviewedContainer">
+      <div class="contract-paper-canvas" id="paperReviewed"></div>
+    </div>
+  </section>
 
-  <!-- 右：专享法务审阅批注栏 (批注项放右边) -->
+  <!-- 3. 右栏：法务审阅详情与批注专栏 (自适应) -->
   <aside class="annotations-sidebar-panel" id="annotationsSidebar">
     <div class="sidebar-header">
       <div class="sidebar-title">
-        <span>📋 智能法务审阅批注</span>
+        <span>📋 条款变动与法务详情</span>
         <span class="sidebar-count-badge" id="sidebarCount">0</span>
       </div>
-      <button class="mini-tool-btn" onclick="toggleSidebarCollapse()" title="收起批注专栏">◀ 收起</button>
+      <button class="mini-tool-btn" onclick="toggleSidebarCollapse()" title="收起详情专栏">◀ 收起</button>
     </div>
 
     <!-- 分类筛选标签 -->
@@ -851,19 +758,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 </div>
 
-<!-- 模态弹窗：上传送审合同与加载高危实测用例 -->
+<!-- 模态弹窗：上传送审合同 (DOCX/DOC/PDF) 与快速加载实测用例 -->
 <div class="modal-overlay" id="uploadModal" onclick="closeUploadModalOnBackdrop(event)">
   <div class="modal-card">
     <div class="modal-header">
-      <span class="modal-title">📂 上传送审合同 / 快速加载实测用例</span>
+      <span class="modal-title">📂 上传送审合同 (DOCX/DOC/PDF) / 快速加载用例</span>
       <button class="modal-close-btn" onclick="closeUploadModal()">✕</button>
     </div>
     <div class="modal-body">
       <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
-        <input type="file" id="fileInput" accept=".docx" style="display:none;" onchange="handleFileSelect(event)">
+        <input type="file" id="fileInput" accept=".docx,.doc,.pdf" style="display:none;" onchange="handleFileSelect(event)">
         <div class="drop-icon">📄</div>
-        <div class="drop-title">点击或拖拽修改后的 DOCX 送审合同至此</div>
-        <div class="drop-desc">自动结构解构并秒级匹配 78 套标准母本库，出具整版原格式比对</div>
+        <div class="drop-title">点击或拖拽 DOCX / DOC / PDF 送审合同至此</div>
+        <div class="drop-desc">自动高保真结构解析并秒级对齐母本库，出具原格式增删比对</div>
       </div>
 
       <div style="font-size:12px; font-weight:700; color:#475569; margin-top:6px;">⚡ 快速加载实测高危用例：</div>
@@ -906,7 +813,7 @@ function closeUploadModalOnBackdrop(e) {
   if (e.target.id === 'uploadModal') closeUploadModal();
 }
 
-// 拖拽上传支持
+// 拖拽上传支持 (DOCX / DOC / PDF)
 const dropZone = document.getElementById('dropZone');
 dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
@@ -914,19 +821,19 @@ dropZone.addEventListener('drop', (e) => {
   e.preventDefault();
   dropZone.classList.remove('dragover');
   if (e.dataTransfer.files.length > 0) {
-    uploadDocx(e.dataTransfer.files[0]);
+    uploadContractFile(e.dataTransfer.files[0]);
     closeUploadModal();
   }
 });
 
 function handleFileSelect(e) {
   if (e.target.files.length > 0) {
-    uploadDocx(e.target.files[0]);
+    uploadContractFile(e.target.files[0]);
     closeUploadModal();
   }
 }
 
-async function uploadDocx(file) {
+async function uploadContractFile(file) {
   const formData = new FormData();
   formData.append('file', file);
 
@@ -959,10 +866,10 @@ function detectBlockCategory(title, text, idx) {
   if (idx === 0 && (cleaned.includes('合同') || cleaned.includes('协议'))) {
     return 'TITLE';
   }
-  if (idx === 1 && (cleaned.startsWith('(') || cleaned.startsWith('（') || cleaned.includes('年费') || cleaned.includes('委托'))) {
+  if (idx === 1 && (cleaned.startsWith('(') || cleaned.startsWith('（') || cleaned.includes('年费') || cleaned.includes('委托') || cleaned.includes('申请'))) {
     return 'SUBTITLE';
   }
-  if (cleaned.startsWith('合同编号') || cleaned.startsWith('编号:')) {
+  if (cleaned.startsWith('合同编号') || cleaned.startsWith('编号:') || cleaned.startsWith('协议编号')) {
     return 'META';
   }
   if (title === '双方主体与基本信息' || (cleaned.includes('甲方') && cleaned.includes('乙方') && (cleaned.includes('地址') || cleaned.includes('法定代表人') || cleaned.includes('统一社会信用代码')))) {
@@ -988,15 +895,13 @@ function detectBlockCategory(title, text, idx) {
 }
 
 // 格式化输出为纯正合同排版 HTML
-function formatContractHtml(html, rawText, category, colType) {
+function formatContractHtml(html, rawText, category) {
   if (!html) return '<div class="empty-placeholder"></div>';
 
-  // 已由后端结构化包装的特殊插槽
   if (html.includes('doc-text-deleted') || html.includes('doc-slot-deleted') || html.includes('doc-slot-blank') || html.includes('doc-text-added')) {
     return html;
   }
 
-  // 条款混合节点（条标题 + 条正文段落）精细化分层
   if (category === 'ARTICLE_SECTION') {
     const headingMatch = html.match(/^(<div class="[^"]*">)?(第[一二三四五六七八九十百]+条[^\n<]*)\n([\s\S]*)$/);
     if (headingMatch) {
@@ -1030,8 +935,12 @@ function formatContractHtml(html, rawText, category, colType) {
     return `<div class="contract-doc-signatures">${html}</div>`;
   }
 
-  // 标准条款段落
   return `<div class="contract-doc-p">${html}</div>`;
+}
+
+function escapeHtml(text) {
+  if (!text) return '';
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // 渲染整版原格式比对与批注
@@ -1053,7 +962,7 @@ function renderFullDiff(data) {
   document.getElementById('docFileName').innerText = friendlyDocTitle;
 
   const tplFileName = data.matched_template_name || '标准母本.docx';
-  const tplCleanName = tplFileName.replace(/\.docx?$/i, '');
+  const tplCleanName = tplFileName.replace(/\.(docx?|pdf)$/i, '');
   const matchedTagEl = document.getElementById('matchedTemplateTag');
   matchedTagEl.innerText = '🎯 基准母本: ' + tplCleanName;
   matchedTagEl.title = `基准文档: ${tplFileName} (底层版本ID: ${data.matched_template_id || '-'})`;
@@ -1082,8 +991,14 @@ function renderFullDiff(data) {
   document.getElementById('filterWarnCount').innerText = anns.filter(a => a.risk_level === 'MEDIUM' && a.delta_type !== 'NEW_CLAUSE').length;
 
   updateProgressDisplay();
-  renderContinuousContract();
+  renderContractColumns();
   renderAnnotationsSidebar();
+
+  // 双栏渲染完毕后，同步左右每一行条款的高度，确保上下滑动严格对齐
+  requestAnimationFrame(() => {
+    syncClauseHeights();
+    setupThreeWaySyncScroll();
+  });
 }
 
 function updateProgressDisplay() {
@@ -1093,10 +1008,12 @@ function updateProgressDisplay() {
   document.getElementById('statProgress').innerText = `${handled}/${total}`;
 }
 
-// 核心渲染：整版整页 A4 原格式对照排版（杜绝表格卡片感）
-function renderContinuousContract() {
-  const stage = document.getElementById('contractContinuousStage');
-  stage.innerHTML = '';
+// 核心渲染：左右双栏分别渲染为完整连续 A4 纸张页面
+function renderContractColumns() {
+  const paperStd = document.getElementById('paperStandard');
+  const paperRev = document.getElementById('paperReviewed');
+  paperStd.innerHTML = '';
+  paperRev.innerHTML = '';
 
   const blocks = currentData.aligned_blocks || [];
   blocks.forEach((block, idx) => {
@@ -1108,27 +1025,193 @@ function renderContinuousContract() {
     const txt = block.standard_text || block.reviewed_text || '';
     const category = detectBlockCategory(block.clause_title, txt, idx);
 
-    // 虚拟行容器（基于 display: contents 保持左右两栏平滑网格对齐，不渲染任何边框或表格线）
-    const row = document.createElement('div');
-    row.className = 'doc-section-row';
-    row.id = block.block_id;
+    // 左侧母本条款块
+    const stdBlock = document.createElement('div');
+    stdBlock.className = `clause-block ${block.status.toLowerCase()}`;
+    stdBlock.id = `std-${block.block_id}`;
+    stdBlock.dataset.blockId = block.block_id;
+    if (block.annotation_ids && block.annotation_ids.length > 0) {
+      stdBlock.dataset.annId = block.annotation_ids[0];
+      stdBlock.onclick = () => selectAnnotation(block.annotation_ids[0]);
+    }
+    stdBlock.innerHTML = formatContractHtml(block.standard_html || escapeHtml(block.standard_text), block.standard_text, category);
+    paperStd.appendChild(stdBlock);
 
-    // 左侧（标准参考母本基准正文）
-    const colStd = document.createElement('div');
-    colStd.className = `doc-col-std ${block.status.toLowerCase()}`;
-    colStd.id = `std-${block.block_id}`;
-    colStd.innerHTML = formatContractHtml(block.standard_html || escapeHtml(block.standard_text), block.standard_text, category, 'STD');
-
-    // 右侧（送审待审修改版，标红排版 + 批注锚点）
-    const colRev = document.createElement('div');
-    colRev.className = `doc-col-rev ${block.status.toLowerCase()}`;
-    colRev.id = `rev-${block.block_id}`;
-    colRev.innerHTML = formatContractHtml(block.reviewed_html || escapeHtml(block.reviewed_text), block.reviewed_text, category, 'REV');
-
-    row.appendChild(colStd);
-    row.appendChild(colRev);
-    stage.appendChild(row);
+    // 右侧送审条款块
+    const revBlock = document.createElement('div');
+    revBlock.className = `clause-block ${block.status.toLowerCase()}`;
+    revBlock.id = `rev-${block.block_id}`;
+    revBlock.dataset.blockId = block.block_id;
+    if (block.annotation_ids && block.annotation_ids.length > 0) {
+      revBlock.dataset.annId = block.annotation_ids[0];
+      revBlock.onclick = () => selectAnnotation(block.annotation_ids[0]);
+    }
+    revBlock.innerHTML = formatContractHtml(block.reviewed_html || escapeHtml(block.reviewed_text), block.reviewed_text, category);
+    paperRev.appendChild(revBlock);
   });
+}
+
+// 左右条款高度等高自适应平衡算法（保证上下滑动左右始终绝对对齐）
+function syncClauseHeights() {
+  if (!currentData || !currentData.aligned_blocks) return;
+  const blocks = currentData.aligned_blocks;
+
+  // 1. 重置初始高度
+  blocks.forEach(b => {
+    const s = document.getElementById(`std-${b.block_id}`);
+    const r = document.getElementById(`rev-${b.block_id}`);
+    if (s) s.style.minHeight = '0px';
+    if (r) r.style.minHeight = '0px';
+  });
+
+  // 2. 测量并设置成两边最大值
+  blocks.forEach(b => {
+    const s = document.getElementById(`std-${b.block_id}`);
+    const r = document.getElementById(`rev-${b.block_id}`);
+    if (s && r) {
+      const h = Math.max(s.getBoundingClientRect().height, r.getBoundingClientRect().height);
+      s.style.minHeight = `${h}px`;
+      r.style.minHeight = `${h}px`;
+    }
+  });
+}
+
+window.addEventListener('resize', () => {
+  syncClauseHeights();
+});
+
+// ==================== 核心：三栏双向协同联动滚动 (Three-Way Sync Scrolling) ====================
+let activeDriver = null; // 'std' | 'rev' | 'detail' | null
+let driverReleaseTimer = null;
+let syncListenerAttached = false;
+
+function claimDriver(source) {
+  if (!activeDriver) {
+    activeDriver = source;
+  }
+  clearTimeout(driverReleaseTimer);
+  driverReleaseTimer = setTimeout(() => {
+    activeDriver = null;
+  }, 140);
+}
+
+function setupThreeWaySyncScroll() {
+  if (syncListenerAttached) return;
+  syncListenerAttached = true;
+
+  const colStd = document.getElementById('colStandardContainer');
+  const colRev = document.getElementById('colReviewedContainer');
+  const colDetail = document.getElementById('annotationsList');
+
+  // 提前通过鼠标手势/触摸捕获滚动主控权，杜绝死循环
+  colStd.addEventListener('wheel', () => claimDriver('std'), { passive: true });
+  colStd.addEventListener('touchstart', () => claimDriver('std'), { passive: true });
+  colRev.addEventListener('wheel', () => claimDriver('rev'), { passive: true });
+  colRev.addEventListener('touchstart', () => claimDriver('rev'), { passive: true });
+  colDetail.addEventListener('wheel', () => claimDriver('detail'), { passive: true });
+  colDetail.addEventListener('touchstart', () => claimDriver('detail'), { passive: true });
+
+  // 1. 左栏（母本）滑动 ➔ 驱动中栏（送审）完全平齐，且驱动右栏（详情）对齐对应条款
+  colStd.addEventListener('scroll', () => {
+    if (activeDriver && activeDriver !== 'std') return;
+    claimDriver('std');
+
+    // 中栏等距跟随
+    colRev.scrollTop = colStd.scrollTop;
+
+    // 驱动右侧详情专栏
+    syncRightDetailFromDoc(colStd.scrollTop);
+  }, { passive: true });
+
+  // 2. 中栏（送审）滑动 ➔ 驱动左栏（母本）完全平齐，且驱动右栏（详情）对齐对应条款
+  colRev.addEventListener('scroll', () => {
+    if (activeDriver && activeDriver !== 'rev') return;
+    claimDriver('rev');
+
+    // 左栏等距跟随
+    colStd.scrollTop = colRev.scrollTop;
+
+    // 驱动右侧详情专栏
+    syncRightDetailFromDoc(colRev.scrollTop);
+  }, { passive: true });
+
+  // 3. 右栏（详情专栏）滑动 ➔ 驱动左栏与中栏同步居中到该条款
+  colDetail.addEventListener('scroll', () => {
+    if (activeDriver && activeDriver !== 'detail') return;
+    claimDriver('detail');
+
+    syncDocFromRightDetail();
+  }, { passive: true });
+}
+
+// 文档滚动时同步右侧详情专栏可见卡片
+function syncRightDetailFromDoc(scrollTop) {
+  if (!currentData || !currentData.aligned_blocks) return;
+  const blocks = currentData.aligned_blocks;
+  const colDetail = document.getElementById('annotationsList');
+
+  // 寻找视口顶部最靠前的条款块
+  let visibleBlock = null;
+  for (let i = 0; i < blocks.length; i++) {
+    const el = document.getElementById(`std-${blocks[i].block_id}`) || document.getElementById(`rev-${blocks[i].block_id}`);
+    if (el) {
+      if (el.offsetTop >= scrollTop - 20) {
+        visibleBlock = blocks[i];
+        break;
+      }
+    }
+  }
+  if (!visibleBlock && blocks.length > 0) {
+    visibleBlock = blocks[blocks.length - 1];
+  }
+
+  if (visibleBlock && visibleBlock.annotation_ids && visibleBlock.annotation_ids.length > 0) {
+    const annId = visibleBlock.annotation_ids[0];
+    const card = document.getElementById(`card-${annId}`);
+    if (card) {
+      document.querySelectorAll('.annotation-card').forEach(c => c.classList.remove('active'));
+      card.classList.add('active');
+
+      const containerRect = colDetail.getBoundingClientRect();
+      const cardRect = card.getBoundingClientRect();
+      if (cardRect.top < containerRect.top || cardRect.bottom > containerRect.bottom) {
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+  }
+}
+
+// 右侧详情专栏滑动时驱动文档左右两栏对齐该条款
+function syncDocFromRightDetail() {
+  const colDetail = document.getElementById('annotationsList');
+  const cards = colDetail.querySelectorAll('.annotation-card');
+  if (cards.length === 0) return;
+
+  const detailCenter = colDetail.scrollTop + (colDetail.clientHeight / 2);
+  let closestCard = null;
+  let minDiff = 999999;
+
+  cards.forEach(card => {
+    const cardCenter = card.offsetTop + (card.offsetHeight / 2);
+    const diff = Math.abs(cardCenter - detailCenter);
+    if (diff < minDiff) {
+      minDiff = diff;
+      closestCard = card;
+    }
+  });
+
+  if (closestCard) {
+    const annId = closestCard.id.replace('card-', '');
+    const ann = (currentData.annotations || []).find(a => a.id === annId);
+    if (ann && ann.block_id) {
+      const targetEl = document.getElementById(`rev-${ann.block_id}`) || document.getElementById(`std-${ann.block_id}`);
+      if (targetEl) {
+        const targetTop = Math.max(0, targetEl.offsetTop - 30);
+        document.getElementById('colStandardContainer').scrollTop = targetTop;
+        document.getElementById('colReviewedContainer').scrollTop = targetTop;
+      }
+    }
+  }
 }
 
 // 渲染右侧法务审阅批注专栏卡片列表
@@ -1202,7 +1285,7 @@ function renderAnnotationsSidebar() {
   });
 }
 
-// 选中某个批注并实现正文与右侧卡片双向对齐平滑滚动与高光脉冲
+// 选中某个批注并实现三栏精确平滑对齐与高光
 function selectAnnotation(annId) {
   if (!currentData || !currentData.annotations) return;
 
@@ -1219,16 +1302,19 @@ function selectAnnotation(annId) {
     card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
-  // 2. 定位正文条款段落并播放发光脉冲动画
-  document.querySelectorAll('.doc-col-std, .doc-col-rev').forEach(el => el.classList.remove('pulse-active'));
-  const revCol = document.getElementById(`rev-${ann.block_id}`);
-  const stdCol = document.getElementById(`std-${ann.block_id}`);
-  if (revCol) {
-    revCol.classList.add('pulse-active');
-    revCol.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  } else if (stdCol) {
-    stdCol.classList.add('pulse-active');
-    stdCol.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // 2. 定位正文条款段落并播放发光动画
+  document.querySelectorAll('.clause-block').forEach(el => el.classList.remove('active-clause'));
+  const revBlock = document.getElementById(`rev-${ann.block_id}`);
+  const stdBlock = document.getElementById(`std-${ann.block_id}`);
+
+  if (revBlock) revBlock.classList.add('active-clause');
+  if (stdBlock) stdBlock.classList.add('active-clause');
+
+  const targetEl = revBlock || stdBlock;
+  if (targetEl) {
+    const targetTop = Math.max(0, targetEl.offsetTop - 30);
+    document.getElementById('colStandardContainer').scrollTo({ top: targetTop, behavior: 'smooth' });
+    document.getElementById('colReviewedContainer').scrollTo({ top: targetTop, behavior: 'smooth' });
   }
 
   // 3. 更新导航指示器
@@ -1251,39 +1337,23 @@ function prevAnnotation() {
   selectAnnotation(currentData.annotations[prevIdx].id);
 }
 
-// 设置审阅状态
 function setAnnotationStatus(annId, status) {
-  const ann = (currentData.annotations || []).find(a => a.id === annId);
+  if (!currentData || !currentData.annotations) return;
+  const ann = currentData.annotations.find(a => a.id === annId);
   if (!ann) return;
-  ann.review_status = (ann.review_status === status) ? 'PENDING' : status;
+  ann.review_status = status;
 
-  renderAnnotationsSidebar();
   const card = document.getElementById(`card-${annId}`);
-  if (card) card.classList.add('active');
-
+  if (card) {
+    card.className = `annotation-card status-${status} active`;
+    const btns = card.querySelectorAll('.mini-btn');
+    btns[0].className = `mini-btn ${status === 'ACCEPTED' ? 'active-accept' : ''}`;
+    btns[1].className = `mini-btn ${status === 'QUESTIONED' ? 'active-question' : ''}`;
+    btns[2].className = `mini-btn ${status === 'OVERRULED' ? 'active-overrule' : ''}`;
+  }
   updateProgressDisplay();
 }
 
-// 右侧批注专栏收起/展开
-function toggleSidebarCollapse() {
-  const workspace = document.getElementById('reviewWorkspace');
-  const isCollapsed = workspace.classList.toggle('sidebar-collapsed');
-  const btn = document.getElementById('btnToggleSidebar');
-  if (btn) {
-    btn.innerHTML = isCollapsed
-      ? `<span>▶ 展开批注</span> <span class="sidebar-badge">${(currentData.annotations || []).length}</span>`
-      : `<span>📋 批注专栏</span> <span class="sidebar-badge">${(currentData.annotations || []).length}</span>`;
-  }
-}
-
-// 标红风格切换：经典法务纯标红 vs 红绿对照
-function setRedlineMode(isPureRedline) {
-  document.body.classList.toggle('mode-pure-redline', isPureRedline);
-  document.getElementById('btnStyleRedline').classList.toggle('active', isPureRedline);
-  document.getElementById('btnStyleColor').classList.toggle('active', !isPureRedline);
-}
-
-// 视图切换
 function setViewMode(mode) {
   currentViewMode = mode;
   document.getElementById('btnModeSide').classList.toggle('active', mode === 'side');
@@ -1291,60 +1361,64 @@ function setViewMode(mode) {
   document.getElementById('btnModeDiff').classList.toggle('active', mode === 'diff');
 
   document.body.classList.toggle('mode-single', mode === 'single');
-  renderContinuousContract();
+  renderContractColumns();
+  syncClauseHeights();
 }
 
-// 分类筛选
-function setFilter(filterType) {
-  currentFilter = filterType;
+function setRedlineMode(isRedlineOnly) {
+  document.getElementById('btnStyleRedline').classList.toggle('active', isRedlineOnly);
+  document.getElementById('btnStyleColor').classList.toggle('active', !isRedlineOnly);
+  document.body.classList.toggle('mode-pure-redline', isRedlineOnly);
+  document.body.classList.toggle('mode-color-redgreen', !isRedlineOnly);
+}
+
+function setFilter(filter) {
+  currentFilter = filter;
   document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
   event.target.classList.add('active');
   renderAnnotationsSidebar();
 }
 
-// 键盘快捷键支持：[ 上一个，] 下一个
+function toggleSidebarCollapse() {
+  const ws = document.getElementById('reviewWorkspace');
+  ws.classList.toggle('sidebar-collapsed');
+}
+
+// 键盘快捷键支持：[ 上一处，] 下一处，Esc 关闭弹窗
 window.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   if (e.key === '[' || (e.altKey && e.key === 'ArrowUp')) {
-    e.preventDefault();
     prevAnnotation();
   } else if (e.key === ']' || (e.altKey && e.key === 'ArrowDown')) {
-    e.preventDefault();
     nextAnnotation();
+  } else if (e.key === 'Escape') {
+    closeUploadModal();
   }
 });
 
-function escapeHtml(text) {
-  if (!text) return '';
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-// 初始化加载
+// 页面初始化加载默认高危用例
 window.addEventListener('DOMContentLoaded', () => {
-  if (window.INITIAL_DATA && window.INITIAL_DATA.aligned_blocks) {
+  if (window.INITIAL_DATA) {
     renderFullDiff(window.INITIAL_DATA);
-  } else {
-    loadSample('prescreen_tampered');
   }
 });
 </script>
-
 </body>
 </html>
 """
 
 
 class DiffVisualizerHandler(BaseHTTPRequestHandler):
-    """HTTP 请求处理器。"""
+    """处理前端页面与比对 API 请求。"""
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path == "/" or parsed.path == "/index.html":
-            html_content = generate_rendered_html()
+
+        if parsed.path in ("/", "/index.html"):
+            html = generate_rendered_html()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(html_content.encode("utf-8"))
+            self.wfile.write(html.encode("utf-8"))
 
         elif parsed.path == "/api/diff/sample":
             qs = urllib.parse.parse_qs(parsed.query)
@@ -1403,8 +1477,16 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                 body = self.rfile.read(length)
                 parts = body.split(b"--" + boundary)
                 file_bytes = None
+                file_name = "uploaded_contract.docx"
                 for part in parts:
                     if b'name="file"' in part:
+                        # Extract filename if available
+                        fn_m = re.search(rb'filename="([^"]+)"', part)
+                        if fn_m:
+                            try:
+                                file_name = fn_m.group(1).decode("utf-8")
+                            except Exception:
+                                file_name = fn_m.group(1).decode("latin-1")
                         idx = part.find(b"\r\n\r\n")
                         if idx != -1:
                             file_bytes = part[idx + 4 :]
@@ -1413,13 +1495,15 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                             break
 
                 if file_bytes:
+                    suffix = Path(file_name).suffix or ".docx"
                     with tempfile.NamedTemporaryFile(
-                        suffix=".docx", delete=False
+                        suffix=suffix, delete=False
                     ) as tmp:
                         tmp.write(file_bytes)
                         tmp_path = Path(tmp.name)
                     try:
                         res = build_full_contract_diff(tmp_path)
+                        res["uploaded_file"] = file_name
                     finally:
                         try:
                             tmp_path.unlink()

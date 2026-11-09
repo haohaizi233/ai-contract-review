@@ -246,15 +246,13 @@ def build_full_contract_diff(
             )
 
             s_html = (
-                f'<div class="doc-text-deleted">'
-                f'<span class="del-clause-pill">【母本原款·送审已被整段删除】</span> '
+                f'<div class="doc-text-deleted" data-block-id="{block_id}" data-ann-id="{ann_id}" onclick="selectAnnotation(\'{ann_id}\')">'
                 f'<del class="diff-del-flow">{escape_html(s_text)}</del>'
                 f'</div>'
             )
             r_html = (
-                f'<div class="doc-slot-deleted" onclick="selectAnnotation(\'{ann_id}\')">'
-                f'<span class="del-slot-tag">⛔ 母本条款已整段删除</span> '
-                f'<span class="ann-ref-anchor" title="点击查看右侧法务批注详情">🏷️ [批注 #{ann_counter:02d} · {risk_label}]</span>'
+                f'<div class="doc-slot-deleted" data-block-id="{block_id}" data-ann-id="{ann_id}" onclick="selectAnnotation(\'{ann_id}\')">'
+                f'<span class="slot-placeholder-text">（送审稿删除本条款）</span>'
                 f'</div>'
             )
 
@@ -309,15 +307,13 @@ def build_full_contract_diff(
             )
 
             s_html = (
-                '<div class="doc-slot-blank">'
-                '<span class="blank-slot-text">（母本无此条款）</span>'
-                '</div>'
+                f'<div class="doc-slot-blank" data-block-id="{block_id}" data-ann-id="{ann_id}">'
+                f'<span class="slot-placeholder-text">（母本无此条款）</span>'
+                f'</div>'
             )
             r_html = (
-                f'<div class="doc-text-added" onclick="selectAnnotation(\'{ann_id}\')">'
-                f'<span class="add-clause-pill">➕【送审新增非标条款】</span> '
-                f'<ins class="diff-ins-flow">{escape_html(r_text)}</ins> '
-                f'<span class="ann-ref-anchor" title="点击查看右侧法务批注详情">🏷️ [批注 #{ann_counter:02d} · 客户新增]</span>'
+                f'<div class="doc-text-added" data-block-id="{block_id}" data-ann-id="{ann_id}" onclick="selectAnnotation(\'{ann_id}\')">'
+                f'<ins class="diff-ins-flow">{escape_html(r_text)}</ins>'
                 f'</div>'
             )
             aligned_blocks.append(
@@ -447,16 +443,7 @@ def build_full_contract_diff(
                         }
                     )
 
-                ann_pills = " ".join(
-                    f'<span class="ann-ref-anchor" onclick="selectAnnotation(\'{aid}\')" title="点击查看右侧第 #{annotations[int(aid.split("-")[1])-1]["index"]:02d} 项法务批注">🏷️ [批注 #{annotations[int(aid.split("-")[1])-1]["index"]:02d}]</span>'
-                    for aid in block_ann_ids
-                )
-                r_diff_with_pills = (
-                    f'{r_diff_html} <span class="ann-pills-wrap">{ann_pills}</span>'
-                    if ann_pills
-                    else r_diff_html
-                )
-
+                first_ann_id = block_ann_ids[0] if block_ann_ids else ""
                 aligned_blocks.append(
                     {
                         "block_id": block_id,
@@ -468,8 +455,8 @@ def build_full_contract_diff(
                         "status": "DIFF",
                         "standard_text": s_text,
                         "reviewed_text": r_text,
-                        "standard_html": f'<div class="doc-diff-std">{s_diff_html}</div>',
-                        "reviewed_html": f'<div class="doc-diff-rev">{r_diff_with_pills}</div>',
+                        "standard_html": f'<div class="doc-diff-std" data-block-id="{block_id}" data-ann-id="{first_ann_id}" onclick="selectAnnotation(\'{first_ann_id}\')">{s_diff_html}</div>',
+                        "reviewed_html": f'<div class="doc-diff-rev" data-block-id="{block_id}" data-ann-id="{first_ann_id}" onclick="selectAnnotation(\'{first_ann_id}\')">{r_diff_html}</div>',
                         "annotation_ids": block_ann_ids,
                     }
                 )
