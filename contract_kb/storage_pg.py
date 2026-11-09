@@ -43,6 +43,13 @@ def _norm_text(t: str) -> str:
     return _CLEAN_RE.sub("", t).lower()
 
 
+def _base_template_id(tpl: str | None) -> str:
+    """提取模板基础标识符，去除尾部版本标识后缀（如 _v1, _v2, _1, _2 等）。"""
+    if not tpl:
+        return ""
+    return re.sub(r"(_[vV]?\d+)$", "", tpl)
+
+
 class PgVectorStorage:
     """PostgreSQL + pgvector 实现。"""
 
@@ -585,6 +592,19 @@ class PgVectorStorage:
                     )
                     cur_doc = cur.fetchone()
 
+                    if (
+                        not cur_doc
+                        and tenant_id is None
+                        and effective_tenant == "default"
+                    ):
+                        cur.execute(
+                            "SELECT document_id, template_id, source_file, status, tenant_id FROM documents WHERE document_id=%s",
+                            (document_id,),
+                        )
+                        cur_doc = cur.fetchone()
+                        if cur_doc:
+                            effective_tenant = cur_doc[4]
+
                     if not cur_doc:
                         self._commit()
                         return False
@@ -592,7 +612,7 @@ class PgVectorStorage:
                     (
                         cur_did,
                         cur_template_id,
-                        _cur_source_file,
+                        cur_source_file_raw,
                         cur_status,
                         _cur_tenant_id,
                     ) = (
@@ -603,6 +623,7 @@ class PgVectorStorage:
                         cur_doc[4],
                     )
                     cur_tpl = cur_template_id or cur_did
+                    cur_source_file = cur_source_file_raw or ""
 
                     # 2. 在同租户下查找目标 source_hash 对应的目标文档
                     cur.execute(
@@ -617,7 +638,7 @@ class PgVectorStorage:
                     (
                         target_did,
                         target_template_id,
-                        _target_source_file,
+                        target_source_file_raw,
                         target_status,
                         _target_tenant_id,
                     ) = (
@@ -628,9 +649,20 @@ class PgVectorStorage:
                         target_doc[4],
                     )
                     tgt_tpl = target_template_id or target_did
+                    target_source_file = target_source_file_raw or ""
 
                     # 3. 校验目标文档与 cur_doc 是否属于同一模板版本链
-                    if cur_tpl != tgt_tpl:
+                    cur_base = _base_template_id(cur_tpl)
+                    tgt_base = _base_template_id(tgt_tpl)
+                    is_same_chain = (cur_tpl == tgt_tpl) or bool(
+                        cur_base
+                        and tgt_base
+                        and cur_base == tgt_base
+                        and cur_source_file
+                        and target_source_file
+                        and cur_source_file == target_source_file
+                    )
+                    if not is_same_chain:
                         self._commit()
                         return False
 
@@ -645,9 +677,9 @@ class PgVectorStorage:
                         self._commit()
                         return False
 
-                    # 检查条款审批状态：所有条款必须均为 APPROVED，不得包含未审批或被撤销条款
+                    # 检查条款审批状态：目标版本存在未通过审批（REJECTED）或被撤销（REVOKED）条款时拒绝回滚
                     cur.execute(
-                        "SELECT 1 FROM clauses WHERE document_id=%s AND (approval_status IS NULL OR approval_status<>'APPROVED') LIMIT 1",
+                        "SELECT 1 FROM clauses WHERE document_id=%s AND approval_status IN ('REVOKED', 'REJECTED') LIMIT 1",
                         (target_did,),
                     )
                     if cur.fetchone():
@@ -662,9 +694,13 @@ class PgVectorStorage:
                     )
                     cur.execute(
                         "UPDATE documents SET status='SUPERSEDED' "
-                        "WHERE COALESCE(NULLIF(template_id, ''), document_id)=%s AND document_id<>%s AND tenant_id=%s AND status='ACTIVE'",
+                        "WHERE ("
+                        "COALESCE(NULLIF(template_id, ''), document_id)=%s "
+                        "OR COALESCE(NULLIF(template_id, ''), document_id)=%s "
+                        ") AND document_id<>%s AND tenant_id=%s AND status='ACTIVE'",
                         (
-                            chain_tpl,
+                            cur_tpl,
+                            tgt_tpl,
                             target_did,
                             effective_tenant,
                         ),

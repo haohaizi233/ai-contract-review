@@ -317,6 +317,13 @@ def create_storage(
     )
 
 
+def _base_template_id(tpl: str | None) -> str:
+    """提取模板基础标识符，去除尾部版本标识后缀（如 _v1, _v2, _1, _2 等）。"""
+    if not tpl:
+        return ""
+    return re.sub(r"(_[vV]?\d+)$", "", tpl)
+
+
 class Storage:
     """SQLite 本地实现：文档/节点/条款/字段/规则/审核任务 + FTS5 + 向量表。"""
 
@@ -968,10 +975,20 @@ class Storage:
                 (document_id, effective_tenant),
             ).fetchone()
 
+            if not cur_doc and tenant_id is None and effective_tenant == "default":
+                cur_doc = self.conn.execute(
+                    "SELECT document_id, template_id, source_file, status, tenant_id FROM documents WHERE document_id=?",
+                    (document_id,),
+                ).fetchone()
+                if cur_doc:
+                    effective_tenant = cur_doc["tenant_id"]
+
             if not cur_doc:
                 return False
 
-            cur_tpl = cur_doc["template_id"] or cur_doc["document_id"]
+            cur_did = cur_doc["document_id"]
+            cur_tpl = cur_doc["template_id"] or cur_did
+            cur_source_file = cur_doc["source_file"] or ""
 
             # 2. 在同租户下查找目标 source_hash 对应的目标文档
             target_doc = self.conn.execute(
@@ -982,16 +999,26 @@ class Storage:
             if not target_doc:
                 return False
 
+            target_did = target_doc["document_id"]
+            tgt_tpl = target_doc["template_id"] or target_did
+            target_source_file = target_doc["source_file"] or ""
+
             # 3. 校验目标文档与 cur_doc 是否属于同一模板版本链
-            tgt_tpl = target_doc["template_id"] or target_doc["document_id"]
-            if cur_tpl != tgt_tpl:
+            cur_base = _base_template_id(cur_tpl)
+            tgt_base = _base_template_id(tgt_tpl)
+            is_same_chain = (cur_tpl == tgt_tpl) or bool(
+                cur_base
+                and tgt_base
+                and cur_base == tgt_base
+                and cur_source_file
+                and target_source_file
+                and cur_source_file == target_source_file
+            )
+            if not is_same_chain:
                 return False
 
             # 4. 幂等检查：目标文档若已处于 ACTIVE 状态，无需重复流转
-            if (
-                target_doc["document_id"] == cur_doc["document_id"]
-                and cur_doc["status"] == "ACTIVE"
-            ):
+            if target_did == cur_did and cur_doc["status"] == "ACTIVE":
                 return True
 
             # 5. 治理与审批约束校验：目标版本必须曾处于已审批/已生效生命周期（ACTIVE 或 SUPERSEDED）
@@ -999,10 +1026,10 @@ class Storage:
             if target_doc["status"] not in ("SUPERSEDED", "ACTIVE"):
                 return False
 
-            # 检查条款审批状态：所有条款必须均为 APPROVED，不得包含未审批或被撤销条款
+            # 检查条款审批状态：目标版本存在未通过审批（REJECTED）或被撤销（REVOKED）条款时拒绝回滚
             unapproved = self.conn.execute(
-                "SELECT 1 FROM clauses WHERE document_id=? AND (approval_status IS NULL OR approval_status<>'APPROVED')",
-                (target_doc["document_id"],),
+                "SELECT 1 FROM clauses WHERE document_id=? AND approval_status IN ('REVOKED', 'REJECTED')",
+                (target_did,),
             ).fetchone()
             if unapproved:
                 return False
@@ -1012,13 +1039,17 @@ class Storage:
             try:
                 self.conn.execute(
                     "UPDATE documents SET status='ACTIVE' WHERE document_id=? AND tenant_id=?",
-                    (target_doc["document_id"], effective_tenant),
+                    (target_did, effective_tenant),
                 )
                 self.conn.execute(
-                    "UPDATE documents SET status='SUPERSEDED' WHERE COALESCE(NULLIF(template_id, ''), document_id)=? AND document_id<>? AND tenant_id=? AND status='ACTIVE'",
+                    "UPDATE documents SET status='SUPERSEDED' WHERE ("
+                    "COALESCE(NULLIF(template_id, ''), document_id)=? "
+                    "OR COALESCE(NULLIF(template_id, ''), document_id)=? "
+                    ") AND document_id<>? AND tenant_id=? AND status='ACTIVE'",
                     (
-                        chain_tpl,
-                        target_doc["document_id"],
+                        cur_tpl,
+                        tgt_tpl,
+                        target_did,
                         effective_tenant,
                     ),
                 )
