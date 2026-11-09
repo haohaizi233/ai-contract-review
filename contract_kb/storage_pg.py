@@ -1159,7 +1159,7 @@ class PgVectorStorage:
                     if tenant_id is not None:
                         sql += " AND tenant_id=%s"
                         params.append(tenant_id)
-                    sql += " ORDER BY imported_at DESC LIMIT 1"
+                    sql += " ORDER BY CASE WHEN document_id LIKE 'MB%%' THEN 0 ELSE 1 END, imported_at DESC LIMIT 1"
                     cur.execute(sql, params)
                     row = cur.fetchone()
                     if row:
@@ -1176,7 +1176,7 @@ class PgVectorStorage:
                     if tenant_id is not None:
                         sql += " AND tenant_id=%s"
                         params.append(tenant_id)
-                    sql += " ORDER BY imported_at DESC LIMIT 1"
+                    sql += " ORDER BY CASE WHEN document_id LIKE 'MB%%' THEN 0 ELSE 1 END, imported_at DESC LIMIT 1"
                     cur.execute(sql, params)
                     row = cur.fetchone()
                     if row:

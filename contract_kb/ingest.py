@@ -13,7 +13,7 @@ import zipfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
-from .docx_parser import parse_docx, ParsedDocument
+from .docx_parser import ParsedDocument
 from .document_parser import parse_document
 from .classifier import classify
 from .clause_extractor import extract_clauses, extract_table_schemas
@@ -60,8 +60,10 @@ def security_check_file(path: Path) -> SecurityCheckResult:
         head = _fh.read(4)
 
     if ext == ".docx":
-        magic_ok = (head == b"PK\x03\x04")
-        res.checks.append({"check": "magic_bytes", "value": head.hex(), "passed": magic_ok})
+        magic_ok = head == b"PK\x03\x04"
+        res.checks.append(
+            {"check": "magic_bytes", "value": head.hex(), "passed": magic_ok}
+        )
         if not magic_ok:
             res.passed = False
             res.rejected_reason = "bad_magic"
@@ -88,7 +90,9 @@ def security_check_file(path: Path) -> SecurityCheckResult:
                         "passed": ratio <= 200,
                     }
                 )
-                traversal = [n for n in names if n.startswith("/") or ".." in Path(n).parts]
+                traversal = [
+                    n for n in names if n.startswith("/") or ".." in Path(n).parts
+                ]
                 res.checks.append(
                     {
                         "check": "zip_path_traversal",
@@ -103,14 +107,18 @@ def security_check_file(path: Path) -> SecurityCheckResult:
             res.passed = False
             res.rejected_reason = "bad_zip"
     elif ext == ".doc":
-        magic_ok = (head == b"\xd0\xcf\x11\xe0")
-        res.checks.append({"check": "magic_bytes", "value": head.hex(), "passed": magic_ok})
+        magic_ok = head == b"\xd0\xcf\x11\xe0"
+        res.checks.append(
+            {"check": "magic_bytes", "value": head.hex(), "passed": magic_ok}
+        )
         if not magic_ok:
             res.passed = False
             res.rejected_reason = "bad_magic"
     elif ext == ".pdf":
-        magic_ok = (head == b"%PDF")
-        res.checks.append({"check": "magic_bytes", "value": head.hex(), "passed": magic_ok})
+        magic_ok = head == b"%PDF"
+        res.checks.append(
+            {"check": "magic_bytes", "value": head.hex(), "passed": magic_ok}
+        )
         if not magic_ok:
             res.passed = False
             res.rejected_reason = "bad_magic"

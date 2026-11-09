@@ -95,13 +95,9 @@ def print_diff_report(res: dict):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="合同模板比对与整版对照批注工具"
-    )
+    parser = argparse.ArgumentParser(description="合同模板比对与整版对照批注工具")
     parser.add_argument("docx_path", help="待审合同 DOCX 文件路径")
-    parser.add_argument(
-        "--template-id", help="强制指定基准模板 ID (如 MB20251205012)"
-    )
+    parser.add_argument("--template-id", help="强制指定基准模板 ID (如 MB20251205012)")
     parser.add_argument(
         "--json", action="store_true", help="以 JSON 格式输出完整比对结构"
     )

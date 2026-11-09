@@ -2,14 +2,13 @@
 """测试整版合同双栏对照与法务批注生成引擎 (Full Diff & Annotation)。"""
 
 import pytest
-from pathlib import Path
 
 from contract_kb import config
 from contract_kb.full_diff import build_full_contract_diff
 
 
-def test_full_contract_diff_on_sample():
-    sample = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
+def test_full_contract_diff_on_sample(golden_samples):
+    sample = golden_samples["dir"] / "mut_11_late_fee_change.docx"
     assert sample.exists(), f"测试样本不存在: {sample}"
 
     res = build_full_contract_diff(sample)

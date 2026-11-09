@@ -45,7 +45,9 @@ class ProcessRunner:
     def run_commands_sequential(self, cmd_list: list[tuple[str, list[str]]]):
         """顺序执行一组命令"""
         if self._is_running:
-            messagebox.showwarning("提示", "当前已有命令正在执行中，请等待其完成或先点击【终止】。")
+            messagebox.showwarning(
+                "提示", "当前已有命令正在执行中，请等待其完成或先点击【终止】。"
+            )
             return
 
         self._is_running = True
@@ -68,14 +70,13 @@ class ProcessRunner:
 
             self.status_callback(f"[{idx}/{total}] 正在执行: {title} ...", is_busy=True)
             self.log_callback(
-                f"\n{'='*70}\n>>> [{idx}/{total}] 任务开始: {title}\n>>> 执行指令: {' '.join(str(c) for c in cmd)}\n{'='*70}\n",
+                f"\n{'=' * 70}\n>>> [{idx}/{total}] 任务开始: {title}\n>>> 执行指令: {' '.join(str(c) for c in cmd)}\n{'=' * 70}\n",
                 tag="header",
             )
 
             t0 = time.time()
             try:
                 # Windows 下隐藏窗口调用
-                startupinfo = None
                 creationflags = 0
                 if sys.platform == "win32":
                     creationflags = subprocess.CREATE_NO_WINDOW
@@ -117,7 +118,7 @@ class ProcessRunner:
                     # 多步执行遇错中断
                     if total > 1:
                         self.log_callback(
-                            f">>> [ABORT] 后续任务已取消执行。\n", tag="warning"
+                            ">>> [ABORT] 后续任务已取消执行。\n", tag="warning"
                         )
                         break
 
@@ -145,7 +146,9 @@ class ProcessRunner:
                         ["taskkill", "/F", "/T", "/PID", str(self.current_process.pid)],
                         capture_output=True,
                     )
-                self.log_callback("\n>>> [TERMINATED] 用户已手动终止当前任务。\n", tag="warning")
+                self.log_callback(
+                    "\n>>> [TERMINATED] 用户已手动终止当前任务。\n", tag="warning"
+                )
             except Exception as e:
                 self.log_callback(f"\n>>> 终止失败: {e}\n", tag="error")
         self._is_running = False
@@ -154,9 +157,14 @@ class ProcessRunner:
     @staticmethod
     def _categorize_line(line: str) -> str:
         lower = line.lower()
-        if any(w in lower for w in ["fail", "error", "traceback", "exception", "failed"]):
+        if any(
+            w in lower for w in ["fail", "error", "traceback", "exception", "failed"]
+        ):
             return "error"
-        if any(w in lower for w in ["[ok]", "pass", "success", "imported", "100%", "completed"]):
+        if any(
+            w in lower
+            for w in ["[ok]", "pass", "success", "imported", "100%", "completed"]
+        ):
             return "success"
         if any(w in lower for w in ["warn", "skipped", "pending"]):
             return "warning"
@@ -214,9 +222,19 @@ class StartGUI:
         except Exception:
             pass
 
-        style.configure("Title.TLabel", font=("Microsoft YaHei UI", 13, "bold"), foreground="#1E293B")
-        style.configure("Subtitle.TLabel", font=("Microsoft YaHei UI", 9), foreground="#64748B")
-        style.configure("Group.TLabelframe.Label", font=("Microsoft YaHei UI", 10, "bold"), foreground="#0F172A")
+        style.configure(
+            "Title.TLabel",
+            font=("Microsoft YaHei UI", 13, "bold"),
+            foreground="#1E293B",
+        )
+        style.configure(
+            "Subtitle.TLabel", font=("Microsoft YaHei UI", 9), foreground="#64748B"
+        )
+        style.configure(
+            "Group.TLabelframe.Label",
+            font=("Microsoft YaHei UI", 10, "bold"),
+            foreground="#0F172A",
+        )
         style.configure("Primary.TButton", font=("Microsoft YaHei UI", 9, "bold"))
         style.configure("Action.TButton", font=("Microsoft YaHei UI", 9))
         style.configure("Status.TLabel", font=("Microsoft YaHei UI", 9))
@@ -230,7 +248,9 @@ class StartGUI:
         header_frame = ttk.Frame(main_frame)
         header_frame.pack(fill=tk.X, pady=(0, 10))
 
-        title_lbl = ttk.Label(header_frame, text="AI合同审查与知识库智能运维控制台", style="Title.TLabel")
+        title_lbl = ttk.Label(
+            header_frame, text="AI合同审查与知识库智能运维控制台", style="Title.TLabel"
+        )
         title_lbl.pack(anchor=tk.W)
 
         desc_lbl = ttk.Label(
@@ -277,7 +297,11 @@ class StartGUI:
         status_bar = ttk.Frame(main_frame)
         status_bar.pack(fill=tk.X, pady=(8, 0))
 
-        self.status_lbl = ttk.Label(status_bar, text="就绪：选择上方功能卡片即可一键图形化调用。", style="Status.TLabel")
+        self.status_lbl = ttk.Label(
+            status_bar,
+            text="就绪：选择上方功能卡片即可一键图形化调用。",
+            style="Status.TLabel",
+        )
         self.status_lbl.pack(side=tk.LEFT)
 
         self.prog_bar = ttk.Progressbar(status_bar, mode="indeterminate", length=140)
@@ -358,7 +382,9 @@ class StartGUI:
         right_col = ttk.Frame(parent)
         right_col.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(6, 0))
 
-        grp_merged = ttk.LabelFrame(left_col, text="contract_merged 样本库复验", padding=10)
+        grp_merged = ttk.LabelFrame(
+            left_col, text="contract_merged 样本库复验", padding=10
+        )
         grp_merged.pack(fill=tk.BOTH, expand=True)
 
         self._create_btn(
@@ -383,7 +409,9 @@ class StartGUI:
             cmd=self._cmd_test_case_quality,
         )
 
-        grp_sys = ttk.LabelFrame(right_col, text="企业微盘与审查核心流水线回归", padding=10)
+        grp_sys = ttk.LabelFrame(
+            right_col, text="企业微盘与审查核心流水线回归", padding=10
+        )
         grp_sys.pack(fill=tk.BOTH, expand=True)
 
         self._create_btn(
@@ -409,22 +437,34 @@ class StartGUI:
 
     # ==================== Tab 3: 合同比对与 Diff ====================
     def _build_tab_diff(self, parent):
-        grp_single = ttk.LabelFrame(parent, text="单份送审合同微观条款 Diff 比对", padding=12)
+        grp_single = ttk.LabelFrame(
+            parent, text="单份送审合同微观条款 Diff 比对", padding=12
+        )
         grp_single.pack(fill=tk.X, pady=(0, 10))
 
         row1 = ttk.Frame(grp_single)
         row1.pack(fill=tk.X, pady=(0, 6))
 
-        ttk.Label(row1, text="待比对合同文件 (.docx):", font=("Microsoft YaHei UI", 9, "bold")).pack(side=tk.LEFT)
+        ttk.Label(
+            row1, text="待比对合同文件 (.docx):", font=("Microsoft YaHei UI", 9, "bold")
+        ).pack(side=tk.LEFT)
         self.entry_doc_path = ttk.Entry(row1)
         self.entry_doc_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
 
         # 默认填入一个已有样本
-        default_sample = PROJECT_ROOT / "tools" / "test_assets" / "verification_run" / "MB20261109001_知识产权代理框架协议.docx"
+        default_sample = (
+            PROJECT_ROOT
+            / "tools"
+            / "test_assets"
+            / "verification_run"
+            / "MB20261109001_知识产权代理框架协议.docx"
+        )
         if default_sample.exists():
             self.entry_doc_path.insert(0, str(default_sample))
 
-        ttk.Button(row1, text="📂 浏览选择...", command=self._browse_contract_file).pack(side=tk.RIGHT)
+        ttk.Button(
+            row1, text="📂 浏览选择...", command=self._browse_contract_file
+        ).pack(side=tk.RIGHT)
 
         row2 = ttk.Frame(grp_single)
         row2.pack(fill=tk.X, pady=(4, 0))
@@ -443,7 +483,9 @@ class StartGUI:
         ).pack(side=tk.LEFT)
 
         # Web 可视化服务
-        grp_web = ttk.LabelFrame(parent, text="条款比对可视化 Web 服务 (contract_diff_web)", padding=12)
+        grp_web = ttk.LabelFrame(
+            parent, text="条款比对可视化 Web 服务 (contract_diff_web)", padding=12
+        )
         grp_web.pack(fill=tk.BOTH, expand=True)
 
         w_row1 = ttk.Frame(grp_web)
@@ -455,12 +497,18 @@ class StartGUI:
         self.entry_web_port.pack(side=tk.LEFT, padx=6)
 
         self.btn_start_web = ttk.Button(
-            w_row1, text="🚀 启动 Diff Web 服务", command=self._cmd_start_diff_web, style="Primary.TButton"
+            w_row1,
+            text="🚀 启动 Diff Web 服务",
+            command=self._cmd_start_diff_web,
+            style="Primary.TButton",
         )
         self.btn_start_web.pack(side=tk.LEFT, padx=4)
 
         self.btn_stop_web = ttk.Button(
-            w_row1, text="⏹️ 停止服务", command=self._cmd_stop_diff_web, state=tk.DISABLED
+            w_row1,
+            text="⏹️ 停止服务",
+            command=self._cmd_stop_diff_web,
+            state=tk.DISABLED,
         )
         self.btn_stop_web.pack(side=tk.LEFT, padx=4)
 
@@ -469,7 +517,15 @@ class StartGUI:
         )
         self.btn_open_web.pack(side=tk.LEFT, padx=4)
 
-        info_box = tk.Text(grp_web, height=6, bg="#F8FAFC", relief=tk.FLAT, font=("Consolas", 9), padx=8, pady=8)
+        info_box = tk.Text(
+            grp_web,
+            height=6,
+            bg="#F8FAFC",
+            relief=tk.FLAT,
+            font=("Consolas", 9),
+            padx=8,
+            pady=8,
+        )
         info_box.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
         info_box.insert(
             tk.END,
@@ -490,49 +546,102 @@ class StartGUI:
         r_grid.pack(fill=tk.X)
 
         self._create_quick_link(
-            r_grid, 0, 0,
+            r_grid,
+            0,
+            0,
             text="📑 打开【源文件清单】 (source-inventory.md)",
             path=PROJECT_ROOT / "reports" / "contract-kb" / "source-inventory.md",
         )
         self._create_quick_link(
-            r_grid, 0, 1,
+            r_grid,
+            0,
+            1,
             text="📈 打开【RAG 检索评估报告】 (rag-retrieval-evaluation.md)",
-            path=PROJECT_ROOT / "reports" / "contract-kb" / "rag-retrieval-evaluation.md",
+            path=PROJECT_ROOT
+            / "reports"
+            / "contract-kb"
+            / "rag-retrieval-evaluation.md",
         )
         self._create_quick_link(
-            r_grid, 1, 0,
+            r_grid,
+            1,
+            0,
             text="📋 打开【合同审核质量评估】 (contract-review-evaluation.md)",
-            path=PROJECT_ROOT / "reports" / "contract-kb" / "contract-review-evaluation.md",
+            path=PROJECT_ROOT
+            / "reports"
+            / "contract-kb"
+            / "contract-review-evaluation.md",
         )
         self._create_quick_link(
-            r_grid, 1, 1,
+            r_grid,
+            1,
+            1,
             text="🌐 打开【五级知识图谱 HTML】 (合同分类与78套模板五级知识图谱.html)",
-            path=PROJECT_ROOT / "data" / "contract_merged" / "合同分类与78套模板五级知识图谱.html",
+            path=PROJECT_ROOT
+            / "data"
+            / "contract_merged"
+            / "合同分类与78套模板五级知识图谱.html",
         )
 
-        grp_dirs = ttk.LabelFrame(parent, text="核心目录直接在文件资源管理器中打开", padding=12)
+        grp_dirs = ttk.LabelFrame(
+            parent, text="核心目录直接在文件资源管理器中打开", padding=12
+        )
         grp_dirs.pack(fill=tk.BOTH, expand=True)
 
         d_grid = ttk.Frame(grp_dirs)
         d_grid.pack(fill=tk.X)
 
-        self._create_dir_link(d_grid, 0, 0, text="🗂️ 打开【参考/】标准模板源目录", path=PROJECT_ROOT / "参考")
-        self._create_dir_link(d_grid, 0, 1, text="🗂️ 打开【data/contract-kb/】数据库与向量目录", path=PROJECT_ROOT / "data" / "contract-kb")
-        self._create_dir_link(d_grid, 1, 0, text="🗂️ 打开【data/contract_merged/】资料合并目录", path=PROJECT_ROOT / "data" / "contract_merged")
-        self._create_dir_link(d_grid, 1, 1, text="🗂️ 打开【reports/】报告汇总目录", path=PROJECT_ROOT / "reports")
+        self._create_dir_link(
+            d_grid,
+            0,
+            0,
+            text="🗂️ 打开【参考/】标准模板源目录",
+            path=PROJECT_ROOT / "参考",
+        )
+        self._create_dir_link(
+            d_grid,
+            0,
+            1,
+            text="🗂️ 打开【data/contract-kb/】数据库与向量目录",
+            path=PROJECT_ROOT / "data" / "contract-kb",
+        )
+        self._create_dir_link(
+            d_grid,
+            1,
+            0,
+            text="🗂️ 打开【data/contract_merged/】资料合并目录",
+            path=PROJECT_ROOT / "data" / "contract_merged",
+        )
+        self._create_dir_link(
+            d_grid,
+            1,
+            1,
+            text="🗂️ 打开【reports/】报告汇总目录",
+            path=PROJECT_ROOT / "reports",
+        )
 
     # ==================== 下半部分：Console 控制台 ====================
     def _build_console(self, parent):
         ctrl_bar = ttk.Frame(parent)
         ctrl_bar.pack(fill=tk.X, pady=(0, 4))
 
-        ttk.Label(ctrl_bar, text="💻 运行日志与执行输出 (Console Output):", font=("Microsoft YaHei UI", 9, "bold")).pack(side=tk.LEFT)
+        ttk.Label(
+            ctrl_bar,
+            text="💻 运行日志与执行输出 (Console Output):",
+            font=("Microsoft YaHei UI", 9, "bold"),
+        ).pack(side=tk.LEFT)
 
-        self.btn_stop = ttk.Button(ctrl_bar, text="⏹️ 终止任务", command=self._cmd_terminate, state=tk.DISABLED)
+        self.btn_stop = ttk.Button(
+            ctrl_bar, text="⏹️ 终止任务", command=self._cmd_terminate, state=tk.DISABLED
+        )
         self.btn_stop.pack(side=tk.RIGHT, padx=(4, 0))
 
-        ttk.Button(ctrl_bar, text="📋 复制全部日志", command=self._cmd_copy_logs).pack(side=tk.RIGHT, padx=4)
-        ttk.Button(ctrl_bar, text="🧹 清空控制台", command=self._cmd_clear_logs).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(ctrl_bar, text="📋 复制全部日志", command=self._cmd_copy_logs).pack(
+            side=tk.RIGHT, padx=4
+        )
+        ttk.Button(ctrl_bar, text="🧹 清空控制台", command=self._cmd_clear_logs).pack(
+            side=tk.RIGHT, padx=4
+        )
 
         # 文本框与滚动条
         text_frame = ttk.Frame(parent)
@@ -556,9 +665,15 @@ class StartGUI:
         scrollbar.config(command=self.txt_console.yview)
 
         # 颜色高亮标签
-        self.txt_console.tag_config("header", foreground="#38BDF8", font=("Consolas", 10, "bold"))
-        self.txt_console.tag_config("success", foreground="#4ADE80", font=("Consolas", 10, "bold"))
-        self.txt_console.tag_config("error", foreground="#F87171", font=("Consolas", 10, "bold"))
+        self.txt_console.tag_config(
+            "header", foreground="#38BDF8", font=("Consolas", 10, "bold")
+        )
+        self.txt_console.tag_config(
+            "success", foreground="#4ADE80", font=("Consolas", 10, "bold")
+        )
+        self.txt_console.tag_config(
+            "error", foreground="#F87171", font=("Consolas", 10, "bold")
+        )
         self.txt_console.tag_config("warning", foreground="#FBBF24")
         self.txt_console.tag_config("normal", foreground="#E2E8F0")
 
@@ -587,7 +702,9 @@ class StartGUI:
             if path.exists():
                 webbrowser.open(str(path))
             else:
-                messagebox.showinfo("提示", f"该报告尚未生成，请先执行对应生成命令：\n{path.name}")
+                messagebox.showinfo(
+                    "提示", f"该报告尚未生成，请先执行对应生成命令：\n{path.name}"
+                )
 
         btn = ttk.Button(parent, text=text, command=_open)
         btn.grid(row=r, column=c, padx=6, pady=6, sticky="ew")
@@ -631,17 +748,32 @@ class StartGUI:
             self.btn_stop.config(state=tk.DISABLED)
 
     def _on_task_finished(self, success: bool):
-        self._set_status(f"完成: 上次任务已结束 (状态: {'成功' if success else '中断/异常'})", is_busy=False)
+        self._set_status(
+            f"完成: 上次任务已结束 (状态: {'成功' if success else '中断/异常'})",
+            is_busy=False,
+        )
 
     # ==================== 命令调用绑定 ====================
     def _cmd_full_pipeline(self):
         """一键全流程自动重跑"""
         cmds = [
             ("老旧 .doc 转为 .docx", self._get_convert_doc_cmd()),
-            ("全量扫描入库与向量构建", [str(PYTHON_EXE), "-m", "contract_kb.cli", "import"]),
-            ("存量分类与元数据刷新", [str(PYTHON_EXE), "-m", "contract_kb.cli", "refresh"]),
-            ("重新生成源文件清单", [str(PYTHON_EXE), "-m", "contract_kb.cli", "inventory"]),
-            ("RAG 检索对比评测基准实测", [str(PYTHON_EXE), "-m", "contract_kb.benchmark_retrieval"]),
+            (
+                "全量扫描入库与向量构建",
+                [str(PYTHON_EXE), "-m", "contract_kb.cli", "import"],
+            ),
+            (
+                "存量分类与元数据刷新",
+                [str(PYTHON_EXE), "-m", "contract_kb.cli", "refresh"],
+            ),
+            (
+                "重新生成源文件清单",
+                [str(PYTHON_EXE), "-m", "contract_kb.cli", "inventory"],
+            ),
+            (
+                "RAG 检索对比评测基准实测",
+                [str(PYTHON_EXE), "-m", "contract_kb.benchmark_retrieval"],
+            ),
             ("端到端审核质量评估", [str(PYTHON_EXE), "-m", "contract_kb.evaluate"]),
         ]
         self.runner.run_commands_sequential(cmds)
@@ -650,9 +782,11 @@ class StartGUI:
         cmd = [
             str(PYTHON_EXE),
             "tools/sync_wecom_wedrive.py",
-            "--local-dir", "参考",
+            "--local-dir",
+            "参考",
             "--sync-deletion",
-            "--grace-seconds", "60",
+            "--grace-seconds",
+            "60",
         ]
         self.runner.run_command("微盘增量 Diff 比对与软删除更新", cmd)
 
@@ -677,21 +811,36 @@ class StartGUI:
         return [str(PYTHON_EXE), "-c", code]
 
     def _cmd_cli_import(self):
-        self.runner.run_command("全量扫描导入并构建向量", [str(PYTHON_EXE), "-m", "contract_kb.cli", "import"])
+        self.runner.run_command(
+            "全量扫描导入并构建向量",
+            [str(PYTHON_EXE), "-m", "contract_kb.cli", "import"],
+        )
 
     def _cmd_cli_refresh(self):
-        self.runner.run_command("存量模板分类与元数据刷新", [str(PYTHON_EXE), "-m", "contract_kb.cli", "refresh"])
+        self.runner.run_command(
+            "存量模板分类与元数据刷新",
+            [str(PYTHON_EXE), "-m", "contract_kb.cli", "refresh"],
+        )
 
     def _cmd_rag_benchmark(self):
-        self.runner.run_command("RAG 检索对比评测基准实测", [str(PYTHON_EXE), "-m", "contract_kb.benchmark_retrieval"])
+        self.runner.run_command(
+            "RAG 检索对比评测基准实测",
+            [str(PYTHON_EXE), "-m", "contract_kb.benchmark_retrieval"],
+        )
 
     def _cmd_review_evaluate(self):
-        self.runner.run_command("端到端审核质量与延迟评估", [str(PYTHON_EXE), "-m", "contract_kb.evaluate"])
+        self.runner.run_command(
+            "端到端审核质量与延迟评估", [str(PYTHON_EXE), "-m", "contract_kb.evaluate"]
+        )
 
     def _cmd_validate_contract_merged(self):
         self.runner.run_command(
             "contract_merged 整库独立全量复验",
-            [str(PYTHON_EXE), "tools/validate_contract_merge_repair.py", "data/contract_merged"],
+            [
+                str(PYTHON_EXE),
+                "tools/validate_contract_merge_repair.py",
+                "data/contract_merged",
+            ],
         )
 
     def _cmd_test_merge_repair(self):
@@ -720,10 +869,22 @@ class StartGUI:
 
     def _cmd_test_all_core(self):
         cmds = [
-            ("两库合并逻辑回归", [str(PYTHON_EXE), "tests/test_contract_merge_repair.py"]),
-            ("三件套导出质量回归", [str(PYTEST_EXE), "tests/test_tender_case_quality.py", "-q"]),
-            ("企微同步 E01-E14 回归", [str(PYTEST_EXE), "tests/test_wedrive_rag_sync_e2e.py", "-q"]),
-            ("审查流水线算子回归", [str(PYTEST_EXE), "tests/unit/test_review_pipeline_stages.py", "-q"]),
+            (
+                "两库合并逻辑回归",
+                [str(PYTHON_EXE), "tests/test_contract_merge_repair.py"],
+            ),
+            (
+                "三件套导出质量回归",
+                [str(PYTEST_EXE), "tests/test_tender_case_quality.py", "-q"],
+            ),
+            (
+                "企微同步 E01-E14 回归",
+                [str(PYTEST_EXE), "tests/test_wedrive_rag_sync_e2e.py", "-q"],
+            ),
+            (
+                "审查流水线算子回归",
+                [str(PYTEST_EXE), "tests/unit/test_review_pipeline_stages.py", "-q"],
+            ),
         ]
         self.runner.run_commands_sequential(cmds)
 
@@ -767,7 +928,10 @@ class StartGUI:
             )
             self.btn_start_web.config(state=tk.DISABLED)
             self.btn_stop_web.config(state=tk.NORMAL)
-            self._queue_log(f">>> [WEB] 条款比对 Web 服务已启动，端口: {port}\n>>> 地址: http://localhost:{port}\n", tag="success")
+            self._queue_log(
+                f">>> [WEB] 条款比对 Web 服务已启动，端口: {port}\n>>> 地址: http://localhost:{port}\n",
+                tag="success",
+            )
             self._set_status(f"Diff Web 服务正在运行 (端口: {port})", is_busy=False)
         except Exception as e:
             messagebox.showerror("启动失败", f"无法启动 Web 服务: {e}")
@@ -807,7 +971,9 @@ def main():
 
     def on_closing():
         if app.runner.is_running:
-            if not messagebox.askyesno("确认退出", "当前仍有正在运行的任务，确认强制终止并退出吗？"):
+            if not messagebox.askyesno(
+                "确认退出", "当前仍有正在运行的任务，确认强制终止并退出吗？"
+            ):
                 return
             app.runner.terminate()
         if app.web_process:

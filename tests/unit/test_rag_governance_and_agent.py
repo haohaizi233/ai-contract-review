@@ -111,6 +111,7 @@ def test_rrf_reranker_and_external_egress_guard(monkeypatch):
     assert reranked[0]["chunk_id"] == "k1"
 
     monkeypatch.delenv("ALLOW_EXTERNAL_LLM", raising=False)
+    monkeypatch.delenv("CONTRACT_KB_ALLOW_EXTERNAL_LLM", raising=False)
     with pytest.raises(PermissionError, match="ALLOW_EXTERNAL_LLM"):
         HttpCrossEncoderReranker("https://rerank.external.example/v1/rerank")
 

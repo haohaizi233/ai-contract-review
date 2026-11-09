@@ -319,45 +319,49 @@ renderDocument();
 </html>
 """
 
-converter_html_content = converter_template.replace("__KATEX_CSS__", katex_css) \
-                                          .replace("__MARKED_JS__", marked_js) \
-                                          .replace("__MERMAID_JS__", mermaid_js) \
-                                          .replace("__KATEX_JS__", katex_js) \
-                                          .replace("__RAW_MD_JSON__", json.dumps(md_content))
+converter_html_content = (
+    converter_template.replace("__KATEX_CSS__", katex_css)
+    .replace("__MARKED_JS__", marked_js)
+    .replace("__MERMAID_JS__", mermaid_js)
+    .replace("__KATEX_JS__", katex_js)
+    .replace("__RAW_MD_JSON__", json.dumps(md_content))
+)
 
 rendered_event = threading.Event()
 received_html = []
 
+
 class LocalHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(converter_html_content.encode('utf-8'))
+        self.wfile.write(converter_html_content.encode("utf-8"))
 
     def do_POST(self):
-        if self.path == '/log':
-            content_len = int(self.headers.get('Content-Length', 0))
-            msg = self.rfile.read(content_len).decode('utf-8', errors='ignore')
+        if self.path == "/log":
+            content_len = int(self.headers.get("Content-Length", 0))
+            msg = self.rfile.read(content_len).decode("utf-8", errors="ignore")
             print(f"[Browser Log] {msg}")
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b'OK')
-        elif self.path == '/save':
-            content_len = int(self.headers.get('Content-Length', 0))
-            post_body = self.rfile.read(content_len).decode('utf-8')
+            self.wfile.write(b"OK")
+        elif self.path == "/save":
+            content_len = int(self.headers.get("Content-Length", 0))
+            post_body = self.rfile.read(content_len).decode("utf-8")
             received_html.append(post_body)
             self.send_response(200)
-            self.send_header('Content-Type', 'text/plain')
+            self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(b'OK')
+            self.wfile.write(b"OK")
             rendered_event.set()
 
     def log_message(self, format, *args):
         pass
 
+
 PORT = 18999
-server = HTTPServer(('127.0.0.1', PORT), LocalHandler)
+server = HTTPServer(("127.0.0.1", PORT), LocalHandler)
 server_thread = threading.Thread(target=server.serve_forever, daemon=True)
 server_thread.start()
 print(f"Local server started on http://127.0.0.1:{PORT}")
@@ -369,10 +373,12 @@ cmd_edge = [
     "--disable-gpu",
     "--virtual-time-budget=30000",
     "--dump-dom",
-    f"http://127.0.0.1:{PORT}"
+    f"http://127.0.0.1:{PORT}",
 ]
 
-res_edge = subprocess.run(cmd_edge, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+res_edge = subprocess.run(
+    cmd_edge, capture_output=True, text=True, encoding="utf-8", errors="ignore"
+)
 
 # Wait up to 10 more seconds if not already set
 if not rendered_event.is_set():
@@ -389,7 +395,7 @@ full_html = received_html[0]
 print(f"Received rendered HTML ({len(full_html)} chars)")
 
 # Clean up script tags from the static HTML
-clean_html = re.sub(r'<script[\s\S]*?</script>', '', full_html)
+clean_html = re.sub(r"<script[\s\S]*?</script>", "", full_html)
 
 print(f"Saving static HTML to: {rendered_html}")
 with open(rendered_html, "w", encoding="utf-8") as f:
@@ -403,15 +409,19 @@ cmd_pdf = [
     "--disable-gpu",
     "--no-pdf-header-footer",
     f"--print-to-pdf={output_pdf}",
-    "file:///" + rendered_html.replace("\\", "/")
+    "file:///" + rendered_html.replace("\\", "/"),
 ]
 
-res_pdf = subprocess.run(cmd_pdf, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+res_pdf = subprocess.run(
+    cmd_pdf, capture_output=True, text=True, encoding="utf-8", errors="ignore"
+)
 print(res_pdf.stdout or "")
 
 if os.path.exists(output_pdf) and os.path.getsize(output_pdf) > 20000:
     size_kb = os.path.getsize(output_pdf) / 1024
-    print(f"SUCCESS: PDF created successfully!\nPath: {output_pdf}\nSize: {size_kb:.1f} KB")
+    print(
+        f"SUCCESS: PDF created successfully!\nPath: {output_pdf}\nSize: {size_kb:.1f} KB"
+    )
 else:
     sz = os.path.getsize(output_pdf) if os.path.exists(output_pdf) else 0
     print(f"ERROR: PDF size is {sz} bytes.")

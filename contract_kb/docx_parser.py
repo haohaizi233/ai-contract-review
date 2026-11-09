@@ -99,13 +99,48 @@ class ParsedDocument:
 
 
 def _para_text(p_el) -> str:
-    parts = []
-    for t in p_el.iter(f"{{{W}}}t"):
-        parts.append(t.text or "")
-    # 制表符与换行还原
-    for br in p_el.iter(f"{{{W}}}br"):
-        pass
-    return "".join(parts)
+    """全面提取段落文本，包含常规文本、制表符、硬/软回车、特殊连字符及符号，并递归提取文本框。"""
+    parts: list[str] = []
+    for el in p_el.iter():
+        tag = etree.QName(el).localname
+        if tag == "t":
+            parts.append(el.text or "")
+        elif tag == "tab":
+            parts.append("    ")
+        elif tag in ("br", "cr"):
+            parts.append("\n")
+        elif tag == "noBreakHyphen":
+            parts.append("-")
+        elif tag == "sym":
+            char_attr = el.get(f"{{{W}}}char")
+            if char_attr:
+                try:
+                    parts.append(chr(int(char_attr, 16)))
+                except Exception:
+                    pass
+
+    # 递归支持文本框内的段落文字 (w:txbxContent 与 v:textbox)
+    txbx_texts: list[str] = []
+    for txbx in p_el.iter(f"{{{W}}}txbxContent"):
+        for sub_p in txbx.findall(f"{{{W}}}p"):
+            sub_t = "".join(t.text or "" for t in sub_p.iter(f"{{{W}}}t")).strip()
+            if sub_t and sub_t not in txbx_texts:
+                txbx_texts.append(sub_t)
+    for el in p_el.iter():
+        if etree.QName(el).localname == "textbox":
+            for sub_p in el.iter(f"{{{W}}}p"):
+                sub_t = "".join(t.text or "" for t in sub_p.iter(f"{{{W}}}t")).strip()
+                if sub_t and sub_t not in txbx_texts:
+                    txbx_texts.append(sub_t)
+
+    full_res = "".join(parts).strip()
+    if txbx_texts:
+        if full_res:
+            full_res = full_res + "\n" + "\n".join(txbx_texts)
+        else:
+            full_res = "\n".join(txbx_texts)
+
+    return full_res
 
 
 def _para_style(p_el) -> dict:
@@ -179,8 +214,9 @@ def _build_paragraph_node(
     locator_base: dict,
 ) -> tuple[ASTNode, Optional[str]]:
     text = _para_text(child)
-    m_art = ARTICLE_RE.match(text.strip())
-    m_num = CLAUSE_NUM_RE.match(text.strip())
+    first_line = text.strip().split("\n")[0] if text.strip() else ""
+    m_art = ARTICLE_RE.match(first_line)
+    m_num = CLAUSE_NUM_RE.match(first_line)
     if m_art:
         current_section = f"{m_art.group(1)} {m_art.group(2)}".strip()
     node = ASTNode(
@@ -202,6 +238,17 @@ def _build_paragraph_node(
     if cc:
         doc.checkbox_count += cc
         node.flags["checkbox_symbols"] = cc
+    has_drawing = bool(
+        child.find(f".//{{{W}}}drawing") is not None
+        or child.find(f".//{{{W}}}pict") is not None
+    )
+    if has_drawing:
+        node.flags["has_drawing"] = True
+
+    if not text.strip():
+        if not has_drawing:
+            node.flags["is_empty_spacer"] = True
+
     if text.strip().startswith("合同编号"):
         doc.contract_number_hint = text.strip()
         node.flags["is_contract_number_line"] = True
@@ -361,7 +408,18 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
                     add(tn)
                 table_count += 1
             elif tag == "sdt":
-                for p in child.iter(f"{{{W}}}p"):
+                # 内容控件容器：递归提取内部表格与独立段落
+                for sub_tbl in child.findall(f".//{{{W}}}tbl"):
+                    for tn in _build_table_nodes(
+                        sub_tbl, doc, doc_id, table_count, current_section, locator_base
+                    ):
+                        add(tn)
+                    table_count += 1
+                for p in child.findall(f".//{{{W}}}p"):
+                    # 若属于表格单元格则已在上面提取，避免重复
+                    ancestor_tc = p.xpath("ancestor::w:tc", namespaces=NS)
+                    if ancestor_tc:
+                        continue
                     text = _para_text(p)
                     if text.strip():
                         add(

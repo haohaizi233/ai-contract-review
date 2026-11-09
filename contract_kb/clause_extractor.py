@@ -233,8 +233,9 @@ def extract_clauses(
             text = node.text.strip()
             if not text:
                 continue
-            m_art = ARTICLE_RE.match(text)
-            m_sub = SUB_RE.match(text)
+            first_line = text.split(chr(10))[0].strip()
+            m_art = ARTICLE_RE.match(first_line)
+            m_sub = SUB_RE.match(first_line)
             if m_art:
                 flush()
                 article_title = f"{m_art.group(1)} {m_art.group(2)}".strip()
