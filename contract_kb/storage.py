@@ -664,6 +664,12 @@ class Storage:
                 )
             row = cur.fetchone()
             if row:
+                if row["status"] != "ACTIVE":
+                    self.conn.execute(
+                        "UPDATE documents SET status='ACTIVE' WHERE document_id=?",
+                        (row["document_id"],),
+                    )
+                    self._commit()
                 if refresh_classification:
                     new_cat = doc.get("category", "")
                     new_sub = doc.get("subtype", "")
@@ -703,7 +709,12 @@ class Storage:
                     ).fetchone():
                         did = f"{base_did}_{ver_tag}_{doc['sha256'][:8]}"
                 prefix_clause = True
-                doc_status = "PENDING_REVIEW"
+                doc_status = doc.get("status") or "PENDING_REVIEW"
+                if doc_status == "ACTIVE" and template_id:
+                    self.conn.execute(
+                        "UPDATE documents SET status='SUPERSEDED' WHERE (template_id=? OR document_id=?) AND tenant_id=? AND status='ACTIVE'",
+                        (template_id, template_id, effective_tenant),
+                    )
                 source_ver = doc.get("template_version") or f"v{len(existing_versions) + 1}"
             else:
                 if existing_id and existing_id["tenant_id"] != effective_tenant:
@@ -719,7 +730,13 @@ class Storage:
                 self.conn.execute(
                     "INSERT INTO documents (document_id, template_id, source_file, source_hash, source_version, "
                     "tenant_id, business_category, contract_subtype, document_type, imported_at, "
-                    "status, raw_meta) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "status, raw_meta) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(document_id) DO UPDATE SET "
+                    "template_id=excluded.template_id, source_file=excluded.source_file, source_hash=excluded.source_hash, "
+                    "source_version=excluded.source_version, business_category=excluded.business_category, "
+                    "contract_subtype=excluded.contract_subtype, document_type=excluded.document_type, "
+                    "imported_at=excluded.imported_at, status=excluded.status, raw_meta=excluded.raw_meta, "
+                    "revision=documents.revision+1",
                     (
                         did,
                         template_id,

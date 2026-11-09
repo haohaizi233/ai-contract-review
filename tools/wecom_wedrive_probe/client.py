@@ -113,7 +113,15 @@ class WeComWeDriveClient:
         resp = self.session.get(url, params=params, timeout=self.timeout, verify=True)
         duration_ms = round((time.perf_counter() - t0) * 1000, 2)
 
-        data = resp.json()
+        try:
+            data = resp.json()
+        except Exception:
+            data = {
+                "errcode": -1,
+                "errmsg": f"接口返回非JSON响应 (HTTP {resp.status_code}): {resp.text[:100]}",
+            }
+        data["_http_status"] = resp.status_code
+
         errcode = data.get("errcode", 0)
         errmsg = data.get("errmsg", "ok")
 
@@ -142,26 +150,38 @@ class WeComWeDriveClient:
                 )
         return self._token
 
-    def get_space_info(self, spaceid: str) -> tuple[dict[str, Any], float]:
-        """获取指定微盘共享空间信息与权限设置。
-
-        官方接口: POST /cgi-bin/wedrive/space_info?access_token=TOKEN
-        Body: {"spaceid": "..."}
-        """
+    def _post_api(self, path: str, payload: dict[str, Any]) -> tuple[dict[str, Any], float]:
+        """通用的微盘 POST API 请求封装，支持安全解析与 HTTP 状态保留。"""
         token = self.ensure_token()
-        url = self._get_api_url("/cgi-bin/wedrive/space_info")
-        payload = {"spaceid": spaceid}
+        url = self._get_api_url(path)
 
         t0 = time.perf_counter()
         resp = self.session.post(
             url,
             params={"access_token": token},
             json=payload,
+            headers={"Content-Type": "application/json"},
             timeout=self.timeout,
             verify=True,
         )
         duration_ms = round((time.perf_counter() - t0) * 1000, 2)
-        return resp.json(), duration_ms
+        try:
+            data = resp.json()
+        except Exception:
+            data = {
+                "errcode": -1,
+                "errmsg": f"接口返回非JSON响应 (HTTP {resp.status_code}): {resp.text[:100]}",
+            }
+        data["_http_status"] = resp.status_code
+        return data, duration_ms
+
+    def get_space_info(self, spaceid: str) -> tuple[dict[str, Any], float]:
+        """获取指定微盘共享空间信息与权限设置。
+
+        官方接口: POST /cgi-bin/wedrive/space_info?access_token=TOKEN
+        Body: {"spaceid": "..."}
+        """
+        return self._post_api("/cgi-bin/wedrive/space_info", {"spaceid": spaceid})
 
     def list_files(
         self,
@@ -177,8 +197,6 @@ class WeComWeDriveClient:
         Body: {"spaceid": "...", "fatherid": "...", "sort_type": 1, "start": 0, "limit": 100}
         说明: 若读取根目录，fatherid 填写 spaceid。
         """
-        token = self.ensure_token()
-        url = self._get_api_url("/cgi-bin/wedrive/file_list")
         payload = {
             "spaceid": spaceid,
             "fatherid": fatherid or spaceid,
@@ -186,17 +204,7 @@ class WeComWeDriveClient:
             "start": start,
             "limit": min(limit, 1000),
         }
-
-        t0 = time.perf_counter()
-        resp = self.session.post(
-            url,
-            params={"access_token": token},
-            json=payload,
-            timeout=self.timeout,
-            verify=True,
-        )
-        duration_ms = round((time.perf_counter() - t0) * 1000, 2)
-        return resp.json(), duration_ms
+        return self._post_api("/cgi-bin/wedrive/file_list", payload)
 
     def get_file_info(self, fileid: str) -> tuple[dict[str, Any], float]:
         """获取微盘文件详细元数据。
@@ -204,20 +212,7 @@ class WeComWeDriveClient:
         官方接口: POST /cgi-bin/wedrive/file_info?access_token=TOKEN
         Body: {"fileid": "..."}
         """
-        token = self.ensure_token()
-        url = self._get_api_url("/cgi-bin/wedrive/file_info")
-        payload = {"fileid": fileid}
-
-        t0 = time.perf_counter()
-        resp = self.session.post(
-            url,
-            params={"access_token": token},
-            json=payload,
-            timeout=self.timeout,
-            verify=True,
-        )
-        duration_ms = round((time.perf_counter() - t0) * 1000, 2)
-        return resp.json(), duration_ms
+        return self._post_api("/cgi-bin/wedrive/file_info", {"fileid": fileid})
 
     def get_file_download_ticket(self, fileid: str) -> tuple[dict[str, Any], float]:
         """获取微盘文件下载临时 URL 与 Cookie 鉴权凭证。
@@ -226,20 +221,7 @@ class WeComWeDriveClient:
         Body: {"fileid": "..."}
         返回结构: {"errcode": 0, "errmsg": "ok", "download_url": "...", "cookie_name": "...", "cookie_value": "..."}
         """
-        token = self.ensure_token()
-        url = self._get_api_url("/cgi-bin/wedrive/file_download")
-        payload = {"fileid": fileid}
-
-        t0 = time.perf_counter()
-        resp = self.session.post(
-            url,
-            params={"access_token": token},
-            json=payload,
-            timeout=self.timeout,
-            verify=True,
-        )
-        duration_ms = round((time.perf_counter() - t0) * 1000, 2)
-        return resp.json(), duration_ms
+        return self._post_api("/cgi-bin/wedrive/file_download", {"fileid": fileid})
 
     def download_file_stream(
         self,
