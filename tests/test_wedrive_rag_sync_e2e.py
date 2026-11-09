@@ -413,28 +413,30 @@ def test_e13_large_file_boundary(test_env):
     huge_f = watch / "MB10000000001_超大文件.docx"
     create_sample_docx(huge_f, "超大合同", [("第一条", "基础信息")])
 
-    # 模拟文件大小超限 > 20MB
-    target_cls = type(huge_f)
-    with (
-        patch.object(target_cls, "stat") as mock_stat,
-        patch.object(Path, "stat", mock_stat),
-    ):
-        mock_stat_res = os.stat(huge_f)
-        # 伪造 st_size 为 25MB
-        mock_stat.return_value = os.stat_result(
-            (
-                mock_stat_res.st_mode,
-                mock_stat_res.st_ino,
-                mock_stat_res.st_dev,
-                mock_stat_res.st_nlink,
-                mock_stat_res.st_uid,
-                mock_stat_res.st_gid,
-                25 * 1024 * 1024,
-                mock_stat_res.st_atime,
-                mock_stat_res.st_mtime,
-                mock_stat_res.st_ctime,
+    # 仅针对目标文件模拟大小超限 > 20MB（避免全局 mock 破坏目录的 is_dir/rglob 行为）
+    stat_cls = type(huge_f)
+    orig_stat = stat_cls.stat
+
+    def custom_stat(self, *args, **kwargs):
+        st = orig_stat(self, *args, **kwargs)
+        if self.name == huge_f.name:
+            return os.stat_result(
+                (
+                    st.st_mode,
+                    st.st_ino,
+                    st.st_dev,
+                    st.st_nlink,
+                    st.st_uid,
+                    st.st_gid,
+                    25 * 1024 * 1024,
+                    st.st_atime,
+                    st.st_mtime,
+                    st.st_ctime,
+                )
             )
-        )
+        return st
+
+    with patch.object(stat_cls, "stat", custom_stat):
         res = mgr.sync_from_directory(watch)
         assert res["metrics"]["files_failed"] == 1
         assert mgr.trackers[huge_f.name].state == FileSyncState.QUARANTINED
