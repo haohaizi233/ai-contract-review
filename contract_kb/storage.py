@@ -664,12 +664,6 @@ class Storage:
                 )
             row = cur.fetchone()
             if row:
-                if row["status"] != "ACTIVE":
-                    self.conn.execute(
-                        "UPDATE documents SET status='ACTIVE' WHERE document_id=?",
-                        (row["document_id"],),
-                    )
-                    self._commit()
                 if refresh_classification:
                     new_cat = doc.get("category", "")
                     new_sub = doc.get("subtype", "")
@@ -956,55 +950,106 @@ class Storage:
             self.rebuild_index()
 
     def rollback_to_version(
-        self, document_id: str, source_hash: str, tenant_id: str | None = None
+        self,
+        document_id: str,
+        source_hash: str,
+        tenant_id: str | None = None,
+        actor: str = "system",
     ) -> bool:
-        """回滚：旧哈希仍保留在库（文档版本化），重新激活指定版本并重建索引。限定指定租户及同一模板版本链。"""
+        """回滚：重新激活指定版本并重建索引。
+        必须严格校验目标哈希与 document_id 属于同租户、同一模板版本链，
+        且目标版本具备合法的已审批/已生效历史状态，禁止跨模板链串联或借回滚越权激活未审批版本。
+        """
+        effective_tenant = tenant_id if tenant_id is not None else config.TENANT_ID
         with self._lock:
-            if tenant_id is not None:
-                row = self.conn.execute(
-                    "SELECT * FROM documents WHERE source_hash=? AND tenant_id=?",
-                    (source_hash, tenant_id),
-                ).fetchone()
-                if not row:
-                    row = self.conn.execute(
-                        "SELECT * FROM documents WHERE document_id=? AND tenant_id=?",
-                        (document_id, tenant_id),
-                    ).fetchone()
-            else:
-                row = self.conn.execute(
-                    "SELECT * FROM documents WHERE source_hash=?",
-                    (source_hash,),
-                ).fetchone()
-                if not row:
-                    row = self.conn.execute(
-                        "SELECT * FROM documents WHERE document_id=?",
-                        (document_id,),
-                    ).fetchone()
-            if not row:
+            # 1. 查找调用者指定的当前/基准文档及其模板链
+            cur_doc = self.conn.execute(
+                "SELECT document_id, template_id, source_file, status, tenant_id FROM documents WHERE document_id=? AND tenant_id=?",
+                (document_id, effective_tenant),
+            ).fetchone()
+
+            if not cur_doc:
                 return False
 
-            target_did = row["document_id"]
-            tpl_id = (
-                row["template_id"]
-                if "template_id" in row.keys() and row["template_id"]
-                else target_did
-            )
-            effective_tenant = (
-                row["tenant_id"]
-                if "tenant_id" in row.keys() and row["tenant_id"]
-                else (tenant_id or config.TENANT_ID)
-            )
-            self.conn.execute(
-                "UPDATE documents SET status='ACTIVE' WHERE document_id=? AND tenant_id=?",
-                (target_did, effective_tenant),
-            )
-            self.conn.execute(
-                "UPDATE documents SET status='SUPERSEDED' WHERE (template_id=? OR document_id=?) AND document_id<>? AND tenant_id=?",
-                (tpl_id, tpl_id, target_did, effective_tenant),
-            )
-            self._commit()
-            self.rebuild_index()
-            return True
+            cur_tpl = cur_doc["template_id"] or cur_doc["document_id"]
+
+            # 2. 在同租户下查找目标 source_hash 对应的目标文档
+            target_doc = self.conn.execute(
+                "SELECT document_id, template_id, source_file, status, tenant_id FROM documents WHERE source_hash=? AND tenant_id=?",
+                (source_hash, effective_tenant),
+            ).fetchone()
+
+            if not target_doc:
+                return False
+
+            # 3. 校验目标文档与 cur_doc 是否属于同一模板版本链
+            tgt_tpl = target_doc["template_id"] or target_doc["document_id"]
+            if cur_tpl != tgt_tpl:
+                return False
+
+            # 4. 幂等检查：目标文档若已处于 ACTIVE 状态，无需重复流转
+            if (
+                target_doc["document_id"] == cur_doc["document_id"]
+                and cur_doc["status"] == "ACTIVE"
+            ):
+                return True
+
+            # 5. 治理与审批约束校验：目标版本必须曾处于已审批/已生效生命周期（ACTIVE 或 SUPERSEDED）
+            # 绝对禁止借回滚通道将未经审批的 PENDING_REVIEW / PENDING 或已废弃/撤销的 REVOKED / DELETED 激活
+            if target_doc["status"] not in ("SUPERSEDED", "ACTIVE"):
+                return False
+
+            # 检查条款审批状态：所有条款必须均为 APPROVED，不得包含未审批或被撤销条款
+            unapproved = self.conn.execute(
+                "SELECT 1 FROM clauses WHERE document_id=? AND (approval_status IS NULL OR approval_status<>'APPROVED')",
+                (target_doc["document_id"],),
+            ).fetchone()
+            if unapproved:
+                return False
+
+            # 6. 原子切换版本状态并同步重建索引（若重建失败，事务必须回滚）
+            chain_tpl = cur_tpl or tgt_tpl
+            try:
+                self.conn.execute(
+                    "UPDATE documents SET status='ACTIVE' WHERE document_id=? AND tenant_id=?",
+                    (target_doc["document_id"], effective_tenant),
+                )
+                self.conn.execute(
+                    "UPDATE documents SET status='SUPERSEDED' WHERE COALESCE(NULLIF(template_id, ''), document_id)=? AND document_id<>? AND tenant_id=? AND status='ACTIVE'",
+                    (
+                        chain_tpl,
+                        target_doc["document_id"],
+                        effective_tenant,
+                    ),
+                )
+                # 记录审计日志
+                now_ts = time.time()
+                detail = json.dumps(
+                    {
+                        "action": "rollback",
+                        "from_document_id": document_id,
+                        "to_document_id": target_doc["document_id"],
+                        "target_hash": source_hash,
+                        "template_id": chain_tpl,
+                    },
+                    ensure_ascii=False,
+                )
+                self.conn.execute(
+                    "INSERT INTO audit_log (at, actor, action, target, detail) VALUES (?,?,?,?,?)",
+                    (
+                        now_ts,
+                        actor,
+                        "rollback_to_version",
+                        target_doc["document_id"],
+                        detail,
+                    ),
+                )
+                self.rebuild_index()
+                self._commit()
+                return True
+            except Exception:
+                self._rollback()
+                raise
 
     def update_document_classification(
         self,

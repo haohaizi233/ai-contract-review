@@ -27,6 +27,7 @@ from typing import Any
 
 import numpy as np
 
+from . import config
 from .application.security.idempotency import IdempotencyOutcome, RequestIdentity
 from .domain.models.execution import JobLease, JobOutcome
 from .embeddings import EmbeddingProvider, get_embedding_provider
@@ -383,7 +384,12 @@ class PgVectorStorage:
                             if cur.fetchone():
                                 did = f"{base_did}_{ver_tag}_{doc['sha256'][:8]}"
                         prefix_clause = True
-                        doc_status = "PENDING_REVIEW"
+                        doc_status = doc.get("status") or "PENDING_REVIEW"
+                        if doc_status == "ACTIVE" and template_id:
+                            cur.execute(
+                                "UPDATE documents SET status='SUPERSEDED' WHERE (template_id=%s OR document_id=%s) AND tenant_id=%s AND status='ACTIVE'",
+                                (template_id, template_id, effective_tenant),
+                            )
                         source_ver = (
                             doc.get("template_version")
                             or f"v{len(existing_versions) + 1}"
@@ -558,55 +564,127 @@ class PgVectorStorage:
                 raise
 
     def rollback_to_version(
-        self, document_id: str, source_hash: str, tenant_id: str | None = None
+        self,
+        document_id: str,
+        source_hash: str,
+        tenant_id: str | None = None,
+        actor: str = "system",
     ) -> bool:
+        """回滚：重新激活指定版本并重建索引 (PostgreSQL)。
+        必须严格校验目标哈希与 document_id 属于同租户、同一模板版本链，
+        且目标版本具备合法的已审批/已生效历史状态，禁止跨模板链串联或借回滚越权激活未审批版本。
+        """
+        effective_tenant = tenant_id if tenant_id is not None else config.TENANT_ID
         with self._lock:
             try:
                 with self.conn.cursor() as cur:
-                    if tenant_id is not None:
-                        cur.execute(
-                            "SELECT document_id, template_id, source_file, tenant_id FROM documents WHERE source_hash=%s AND tenant_id=%s",
-                            (source_hash, tenant_id),
-                        )
-                        row = cur.fetchone()
-                        if not row:
-                            cur.execute(
-                                "SELECT document_id, template_id, source_file, tenant_id FROM documents WHERE document_id=%s AND tenant_id=%s",
-                                (document_id, tenant_id),
-                            )
-                            row = cur.fetchone()
-                    else:
-                        cur.execute(
-                            "SELECT document_id, template_id, source_file, tenant_id FROM documents WHERE source_hash=%s",
-                            (source_hash,),
-                        )
-                        row = cur.fetchone()
-                        if not row:
-                            cur.execute(
-                                "SELECT document_id, template_id, source_file, tenant_id FROM documents WHERE document_id=%s",
-                                (document_id,),
-                            )
-                            row = cur.fetchone()
+                    # 1. 查找调用者指定的当前/基准文档及其模板链
+                    cur.execute(
+                        "SELECT document_id, template_id, source_file, status, tenant_id FROM documents WHERE document_id=%s AND tenant_id=%s",
+                        (document_id, effective_tenant),
+                    )
+                    cur_doc = cur.fetchone()
 
-                    if not row:
+                    if not cur_doc:
                         self._commit()
                         return False
 
-                    target_did = row[0]
-                    tpl_id = row[1] or target_did
-                    effective_tenant = row[3] or (tenant_id or "default")
+                    (
+                        cur_did,
+                        cur_template_id,
+                        _cur_source_file,
+                        cur_status,
+                        _cur_tenant_id,
+                    ) = (
+                        cur_doc[0],
+                        cur_doc[1],
+                        cur_doc[2],
+                        cur_doc[3],
+                        cur_doc[4],
+                    )
+                    cur_tpl = cur_template_id or cur_did
 
+                    # 2. 在同租户下查找目标 source_hash 对应的目标文档
+                    cur.execute(
+                        "SELECT document_id, template_id, source_file, status, tenant_id FROM documents WHERE source_hash=%s AND tenant_id=%s",
+                        (source_hash, effective_tenant),
+                    )
+                    target_doc = cur.fetchone()
+                    if not target_doc:
+                        self._commit()
+                        return False
+
+                    (
+                        target_did,
+                        target_template_id,
+                        _target_source_file,
+                        target_status,
+                        _target_tenant_id,
+                    ) = (
+                        target_doc[0],
+                        target_doc[1],
+                        target_doc[2],
+                        target_doc[3],
+                        target_doc[4],
+                    )
+                    tgt_tpl = target_template_id or target_did
+
+                    # 3. 校验目标文档与 cur_doc 是否属于同一模板版本链
+                    if cur_tpl != tgt_tpl:
+                        self._commit()
+                        return False
+
+                    # 4. 幂等检查：目标文档若已处于 ACTIVE 状态，无需重复流转
+                    if target_did == cur_did and cur_status == "ACTIVE":
+                        self._commit()
+                        return True
+
+                    # 5. 治理与审批约束校验：目标版本必须曾处于已审批/已生效生命周期（ACTIVE 或 SUPERSEDED）
+                    # 绝对禁止借回滚通道将未经审批的 PENDING_REVIEW / PENDING 或已废弃/撤销的 REVOKED / DELETED 激活
+                    if target_status not in ("SUPERSEDED", "ACTIVE"):
+                        self._commit()
+                        return False
+
+                    # 检查条款审批状态：所有条款必须均为 APPROVED，不得包含未审批或被撤销条款
+                    cur.execute(
+                        "SELECT 1 FROM clauses WHERE document_id=%s AND (approval_status IS NULL OR approval_status<>'APPROVED') LIMIT 1",
+                        (target_did,),
+                    )
+                    if cur.fetchone():
+                        self._commit()
+                        return False
+
+                    # 6. 原子切换版本状态并同步重建索引（若重建失败，事务必须回滚）
+                    chain_tpl = cur_tpl or tgt_tpl
                     cur.execute(
                         "UPDATE documents SET status='ACTIVE' WHERE document_id=%s AND tenant_id=%s",
                         (target_did, effective_tenant),
                     )
                     cur.execute(
                         "UPDATE documents SET status='SUPERSEDED' "
-                        "WHERE (template_id=%s OR document_id=%s) AND document_id<>%s AND tenant_id=%s",
-                        (tpl_id, tpl_id, target_did, effective_tenant),
+                        "WHERE COALESCE(NULLIF(template_id, ''), document_id)=%s AND document_id<>%s AND tenant_id=%s AND status='ACTIVE'",
+                        (
+                            chain_tpl,
+                            target_did,
+                            effective_tenant,
+                        ),
                     )
-                self._commit()
+                    detail = json.dumps(
+                        {
+                            "action": "rollback",
+                            "from_document_id": document_id,
+                            "to_document_id": target_did,
+                            "target_hash": source_hash,
+                            "template_id": chain_tpl,
+                        },
+                        ensure_ascii=False,
+                    )
+                    cur.execute(
+                        "INSERT INTO audit_log (actor, action, target, detail) VALUES (%s,%s,%s,%s)",
+                        (actor, "rollback_to_version", target_did, detail),
+                    )
                 self.rebuild_index()
+                self._commit()
                 return True
             except Exception:
                 self._rollback()
