@@ -24,6 +24,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from tools.sync_wecom_wedrive import WeDriveSyncManager, FileSyncState  # noqa: E402
+
 VERIFY_DIR = ROOT_DIR / "tools" / "test_assets" / "verification_run"
 STAGING_DIR = ROOT_DIR / "reports" / "sync_staging"
 ACCEPT_DB = ROOT_DIR / "reports" / "phase3_acceptance_rag.db"
@@ -43,10 +44,18 @@ def generate_test_assets():
     docx_path = VERIFY_DIR / "MB20261109001_知识产权代理框架协议.docx"
     doc = docx.Document()
     doc.add_heading("知识产权代理框架协议（Phase3标准验收母本）", level=1)
-    doc.add_paragraph("第一条 合作范围：甲方委托乙方代理全球专利布局申请、商标注册维护及知识产权侵权分析业务。")
-    doc.add_paragraph("第二条 代理费用结算：本协议服务费用采用年度框架结算制，累计服务费满人民币拾万元后十个工作日内电汇结清。")
-    doc.add_paragraph("第三条 保密义务：双方对在履约过程中知悉的任何商业秘密及未公开技术交底书承担无限期保密义务。")
-    doc.add_paragraph("第四条 争议解决条款：因履行本合同发生的一切争议，双方一致同意提交中国国际经济贸易仲裁委员会（CIETAC）在北京进行仲裁。")
+    doc.add_paragraph(
+        "第一条 合作范围：甲方委托乙方代理全球专利布局申请、商标注册维护及知识产权侵权分析业务。"
+    )
+    doc.add_paragraph(
+        "第二条 代理费用结算：本协议服务费用采用年度框架结算制，累计服务费满人民币拾万元后十个工作日内电汇结清。"
+    )
+    doc.add_paragraph(
+        "第三条 保密义务：双方对在履约过程中知悉的任何商业秘密及未公开技术交底书承担无限期保密义务。"
+    )
+    doc.add_paragraph(
+        "第四条 争议解决条款：因履行本合同发生的一切争议，双方一致同意提交中国国际经济贸易仲裁委员会（CIETAC）在北京进行仲裁。"
+    )
     doc.save(str(docx_path))
 
     # 2. PDF 补充协议
@@ -76,12 +85,14 @@ def generate_test_assets():
     pos3 = pos2 + len(obj2)
     pos4 = pos3 + len(obj3)
     xref_pos = pos4 + len(obj4)
-    xref = (
-        f"xref\n0 5\n0000000000 65535 f \n{pos1:010d} 00000 n \n{pos2:010d} 00000 n \n{pos3:010d} 00000 n \n{pos4:010d} 00000 n \n".encode(
+    xref = f"xref\n0 5\n0000000000 65535 f \n{pos1:010d} 00000 n \n{pos2:010d} 00000 n \n{pos3:010d} 00000 n \n{pos4:010d} 00000 n \n".encode(
+        "ascii"
+    )
+    trailer = (
+        f"trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode(
             "ascii"
         )
     )
-    trailer = f"trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("ascii")
     with open(pdf_path, "wb") as f:
         f.write(header + obj1 + obj2 + obj3 + obj4 + xref + trailer)
 
@@ -91,12 +102,20 @@ def generate_test_assets():
     user_docx = user_test_dir / "TEST_RAG_增量测试合同_v1.docx"
     u_doc = docx.Document()
     u_doc.add_heading("企业微信微盘增量同步验收测试合同（v1版本）", level=1)
-    u_doc.add_paragraph("第一条 验收目的：验证企业微信客户端新建合同能否秒级自动同步到本地并入库 RAG 知识库。")
-    u_doc.add_paragraph("第二条 独特特征标记：验收代码包含特征指纹 WEWORK_WEDRIVE_ACCEPTANCE_TEST_KEY_20261109。")
-    u_doc.add_paragraph("第三条 仲裁管辖：因本测试合同引发的一切技术交流，在深圳前海国际仲裁院协商处理。")
+    u_doc.add_paragraph(
+        "第一条 验收目的：验证企业微信客户端新建合同能否秒级自动同步到本地并入库 RAG 知识库。"
+    )
+    u_doc.add_paragraph(
+        "第二条 独特特征标记：验收代码包含特征指纹 WEWORK_WEDRIVE_ACCEPTANCE_TEST_KEY_20261109。"
+    )
+    u_doc.add_paragraph(
+        "第三条 仲裁管辖：因本测试合同引发的一切技术交流，在深圳前海国际仲裁院协商处理。"
+    )
     u_doc.save(str(user_docx))
 
-    print(f"✅ 生成脱敏测试资产完成：\n  - {docx_path.name}\n  - {pdf_path.name}\n  - {user_docx.name}")
+    print(
+        f"✅ 生成脱敏测试资产完成：\n  - {docx_path.name}\n  - {pdf_path.name}\n  - {user_docx.name}"
+    )
 
 
 def run_acceptance():
@@ -134,7 +153,9 @@ def run_acceptance():
     print(f"Query 1: '{query1}' -> 命中数: {len(hits1)}")
     assert len(hits1) > 0, "Query 1 failed to hit"
     top1 = hits1[0]
-    print(f"  Top 1: doc={top1['document_id']}, clause={top1['clause_id']}, text={top1['text']}")
+    print(
+        f"  Top 1: doc={top1['document_id']}, clause={top1['clause_id']}, text={top1['text']}"
+    )
     assert "中国国际经济贸易仲裁委员会" in top1["text"]
     assert top1["document_id"] == "MB20261109001"
 
@@ -144,7 +165,9 @@ def run_acceptance():
     print(f"Query 2: '{query2}' -> 命中数: {len(hits2)}")
     assert len(hits2) > 0, "Query 2 failed to hit"
     top2 = hits2[0]
-    print(f"  Top 1: doc={top2['document_id']}, clause={top2['clause_id']}, text={top2['text']}")
+    print(
+        f"  Top 1: doc={top2['document_id']}, clause={top2['clause_id']}, text={top2['text']}"
+    )
     assert "保密" in top2["text"]
     assert top2["document_id"] == "MB20261109001"
 
@@ -154,14 +177,18 @@ def run_acceptance():
     print(f"Query 3: '{query3}' -> 命中数: {len(hits3)}")
     assert len(hits3) > 0, "Query 3 failed to hit"
     top3 = hits3[0]
-    print(f"  Top 1: doc={top3['document_id']}, clause={top3['clause_id']}, text={top3['text']}")
+    print(
+        f"  Top 1: doc={top3['document_id']}, clause={top3['clause_id']}, text={top3['text']}"
+    )
     assert "Nanshan District" in top3["text"]
     assert top3["document_id"] == "MB20261109002"
 
     # 二次扫描去重验证（0成本跳过）
     print("\n--- 4. 二次增量扫描去重性能验证 ---")
     res2 = mgr.sync_from_directory(VERIFY_DIR)
-    print(f"二次扫描指标: changed={res2['metrics']['files_changed']}, skipped={res2['metrics']['files_skipped']}, 耗时={res2['metrics']['scan_duration_ms']}ms")
+    print(
+        f"二次扫描指标: changed={res2['metrics']['files_changed']}, skipped={res2['metrics']['files_skipped']}, 耗时={res2['metrics']['scan_duration_ms']}ms"
+    )
     assert res2["metrics"]["files_changed"] == 0
     assert res2["metrics"]["files_skipped"] == 2
 

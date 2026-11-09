@@ -7,14 +7,19 @@ conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
 cur = conn.cursor()
 
 space_id = "s.1970324998235347.648114738G1H"
-local_root = Path(r"D:\Users\Administrator\Documents\WXWork\1688855905806482\WeDrive\恒程创新\法律事务部（含商务合同等文件）")
+local_root = Path(
+    r"D:\Users\Administrator\Documents\WXWork\1688855905806482\WeDrive\恒程创新\法律事务部（含商务合同等文件）"
+)
 
-cur.execute("""
+cur.execute(
+    """
     SELECT file_id, name, size, file_type, relativePath
     FROM File
     WHERE space_id=?
     ORDER BY file_type, relativePath
-""", (space_id,))
+""",
+    (space_id,),
+)
 rows = cur.fetchall()
 
 cloud_dirs = []
@@ -54,4 +59,6 @@ for f in local_found:
 
 print("\n--- 待下载/云端占位文件示例 (前 15 个) ---")
 for f in local_missing[:15]:
-    print(f"  [MISSING] {f['name']} ({f['size']} bytes, type={f['file_type']}) -> {f['rel_path']}")
+    print(
+        f"  [MISSING] {f['name']} ({f['size']} bytes, type={f['file_type']}) -> {f['rel_path']}"
+    )

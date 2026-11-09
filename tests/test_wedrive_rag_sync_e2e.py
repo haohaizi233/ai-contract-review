@@ -52,7 +52,9 @@ def create_sample_pdf(path: Path, title: str, clauses: list[tuple[str, str]]) ->
     y = 720
     for num, text in clauses:
         clean_text = f"{num} {text}".replace("(", "\\(").replace(")", "\\)")
-        stream_parts.append(f"BT /F1 10 Tf 50 {y} Td ({clean_text}) Tj ET\n".encode("ascii"))
+        stream_parts.append(
+            f"BT /F1 10 Tf 50 {y} Td ({clean_text}) Tj ET\n".encode("ascii")
+        )
         y -= 25
     stream = b"".join(stream_parts)
 
@@ -76,12 +78,14 @@ def create_sample_pdf(path: Path, title: str, clauses: list[tuple[str, str]]) ->
     pos3 = pos2 + len(obj2)
     pos4 = pos3 + len(obj3)
     xref_pos = pos4 + len(obj4)
-    xref = (
-        f"xref\n0 5\n0000000000 65535 f \n{pos1:010d} 00000 n \n{pos2:010d} 00000 n \n{pos3:010d} 00000 n \n{pos4:010d} 00000 n \n".encode(
+    xref = f"xref\n0 5\n0000000000 65535 f \n{pos1:010d} 00000 n \n{pos2:010d} 00000 n \n{pos3:010d} 00000 n \n{pos4:010d} 00000 n \n".encode(
+        "ascii"
+    )
+    trailer = (
+        f"trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode(
             "ascii"
         )
     )
-    trailer = f"trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("ascii")
 
     with open(path, "wb") as f:
         f.write(header + obj1 + obj2 + obj3 + obj4 + xref + trailer)
@@ -263,7 +267,7 @@ def test_e06_corrupt_file_quarantined(test_env):
 
     assert m["files_discovered"] == 2
     assert m["files_changed"] == 1  # 正常文件入库
-    assert m["files_failed"] == 1   # 损坏文件被隔离
+    assert m["files_failed"] == 1  # 损坏文件被隔离
     assert mgr.trackers["MB10000000002_损坏.docx"].state == FileSyncState.QUARANTINED
 
 
@@ -275,7 +279,9 @@ def test_e07_index_failure_rollback(test_env):
     f = watch / "MB10000000001_测试回滚.docx"
     create_sample_docx(f, "回滚合同", [("第一条", "测试回滚条款")])
 
-    with patch.object(mgr.storage, "upsert_document", side_effect=RuntimeError("DB Disk Full")):
+    with patch.object(
+        mgr.storage, "upsert_document", side_effect=RuntimeError("DB Disk Full")
+    ):
         res = mgr.sync_from_directory(watch)
         assert res["metrics"]["files_failed"] == 1
         assert res["metrics"]["index_failures"] == 1
@@ -291,7 +297,9 @@ def test_e08_recovery_after_failure(test_env):
     create_sample_docx(f, "自愈合同", [("第一条", "自愈条款")])
 
     # 第一次模拟失败
-    with patch.object(mgr.storage, "upsert_document", side_effect=RuntimeError("Transient Error")):
+    with patch.object(
+        mgr.storage, "upsert_document", side_effect=RuntimeError("Transient Error")
+    ):
         mgr.sync_from_directory(watch)
 
     # 第二次恢复正常
@@ -410,9 +418,18 @@ def test_e13_large_file_boundary(test_env):
         mock_stat_res = os.stat(huge_f)
         # 伪造 st_size 为 25MB
         mock_stat.return_value = os.stat_result(
-            (mock_stat_res.st_mode, mock_stat_res.st_ino, mock_stat_res.st_dev,
-             mock_stat_res.st_nlink, mock_stat_res.st_uid, mock_stat_res.st_gid,
-             25 * 1024 * 1024, mock_stat_res.st_atime, mock_stat_res.st_mtime, mock_stat_res.st_ctime)
+            (
+                mock_stat_res.st_mode,
+                mock_stat_res.st_ino,
+                mock_stat_res.st_dev,
+                mock_stat_res.st_nlink,
+                mock_stat_res.st_uid,
+                mock_stat_res.st_gid,
+                25 * 1024 * 1024,
+                mock_stat_res.st_atime,
+                mock_stat_res.st_mtime,
+                mock_stat_res.st_ctime,
+            )
         )
         res = mgr.sync_from_directory(watch)
         assert res["metrics"]["files_failed"] == 1

@@ -25,8 +25,10 @@ import requests
 try:
     from dotenv import load_dotenv
 except ImportError:
+
     def load_dotenv(*_args: Any, **_kwargs: Any) -> None:
         pass
+
 
 CURRENT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CURRENT_DIR.parent.parent
@@ -143,7 +145,9 @@ class WeDriveDiagnosticsRunner:
         # ---------------------------------------------------------
         # 实验 C: 新版空间信息接口对照 (new_space_info)
         # ---------------------------------------------------------
-        logger.info(f"[实验 C] 尝试新版空间信息接口 (new_space_info): {self.space_id}...")
+        logger.info(
+            f"[实验 C] 尝试新版空间信息接口 (new_space_info): {self.space_id}..."
+        )
         exp_c = self._experiment_c_new_space_info(token, self.space_id)
         self.report_data["experiments"]["experiment_c"] = exp_c
 
@@ -190,7 +194,7 @@ class WeDriveDiagnosticsRunner:
 
         errcode = body.get("errcode", -1)
         access_token = body.get("access_token")
-        success = (resp.status_code == 200 and errcode == 0 and bool(access_token))
+        success = resp.status_code == 200 and errcode == 0 and bool(access_token)
 
         return {
             "name": "实验 A: Token 诊断",
@@ -399,21 +403,15 @@ class WeDriveDiagnosticsRunner:
                 "endpoint": "POST /cgi-bin/wedrive/space_create?access_token=ACCESS_TOKEN",
                 "proposed_payload": {
                     "space_name": "AI合同审核_API探针测试空间",
-                    "auth_info": [
-                        {
-                            "type": 1,
-                            "userid": "MaoShiMei",
-                            "auth": 7
-                        }
-                    ],
-                    "space_sub_type": 0
+                    "auth_info": [{"type": 1, "userid": "MaoShiMei", "auth": 7}],
+                    "space_sub_type": 0,
                 },
                 "expected_hypothesis": (
                     "如果成功创建新空间并在返回的 spaceid 上执行 space_info 得到 errcode=0，"
                     "即可实锤企微自建应用对『API自建空间』拥有完全管理权，"
                     "而对『用户客户端手动创建空间』存在原生隔离阻断。"
-                )
-            }
+                ),
+            },
         }
 
 
@@ -440,7 +438,9 @@ def main():
     for k, v in exps.items():
         name = v.get("name", k)
         code = v.get("errcode")
-        status = v.get("business_success") if "business_success" in v else v.get("success")
+        status = (
+            v.get("business_success") if "business_success" in v else v.get("success")
+        )
         print(f"[{name}] status={status}, errcode={code}, errmsg={v.get('errmsg')}")
 
 

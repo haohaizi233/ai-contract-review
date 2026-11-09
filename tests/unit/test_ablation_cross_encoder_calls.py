@@ -38,7 +38,9 @@ def test_mock_cross_encoder_constructor_error_is_raised(tmp_path: Path):
         def __init__(self):
             raise RuntimeError("MockCrossEncoderReranker 故意失败")
 
-    with patch("contract_kb.ablation_study.MockCrossEncoderReranker", BrokenMockCrossEncoder):
+    with patch(
+        "contract_kb.ablation_study.MockCrossEncoderReranker", BrokenMockCrossEncoder
+    ):
         with pytest.raises(RuntimeError, match="MockCrossEncoderReranker 故意失败"):
             evaluate_configuration(cfg_e, st, allow_mock_for_contract_test=True)
 

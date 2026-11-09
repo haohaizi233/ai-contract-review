@@ -103,7 +103,9 @@ def test_sqlite_legacy_source_hash_migration(tmp_path: Path):
     # 验证创建的旧库确实含有全局 source_hash UNIQUE
     con = sqlite3.connect(db_path)
     cur = con.cursor()
-    tbl_sql = cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='documents'").fetchone()[0]
+    tbl_sql = cur.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='documents'"
+    ).fetchone()[0]
     assert "source_hash TEXT UNIQUE" in tbl_sql
     con.close()
 
@@ -134,7 +136,9 @@ def test_sqlite_legacy_source_hash_migration(tmp_path: Path):
     assert doc_def is not None
 
     # 4. 同一租户重复内容仍幂等
-    did_beta_dup, is_new_beta_dup = st.upsert_document(same_content_doc, tenant="tenant_beta")
+    did_beta_dup, is_new_beta_dup = st.upsert_document(
+        same_content_doc, tenant="tenant_beta"
+    )
     assert did_beta_dup == did_beta
     assert is_new_beta_dup is False
 

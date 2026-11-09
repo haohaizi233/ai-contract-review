@@ -243,7 +243,9 @@ def evaluate_configuration(
             is_contract and cfg.reranker_type == "CROSS_ENCODER"
         ):
             if not is_contract:
-                raise ValueError("Mock cross-encoder only allowed when is_contract=True")
+                raise ValueError(
+                    "Mock cross-encoder only allowed when is_contract=True"
+                )
             reranker: Any = MockCrossEncoderReranker()
         else:
             from .rerankers import CrossEncoderReranker

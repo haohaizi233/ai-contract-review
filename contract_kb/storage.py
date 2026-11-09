@@ -696,9 +696,13 @@ class Storage:
             ).fetchone()
 
             if existing_versions:
-                if doc.get("document_id") and not self.conn.execute(
-                    "SELECT 1 FROM documents WHERE document_id=?", (doc["document_id"],)
-                ).fetchone():
+                if (
+                    doc.get("document_id")
+                    and not self.conn.execute(
+                        "SELECT 1 FROM documents WHERE document_id=?",
+                        (doc["document_id"],),
+                    ).fetchone()
+                ):
                     did = doc["document_id"]
                 else:
                     ver_num = len(existing_versions) + 1
@@ -715,7 +719,9 @@ class Storage:
                         "UPDATE documents SET status='SUPERSEDED' WHERE (template_id=? OR document_id=?) AND tenant_id=? AND status='ACTIVE'",
                         (template_id, template_id, effective_tenant),
                     )
-                source_ver = doc.get("template_version") or f"v{len(existing_versions) + 1}"
+                source_ver = (
+                    doc.get("template_version") or f"v{len(existing_versions) + 1}"
+                )
             else:
                 if existing_id and existing_id["tenant_id"] != effective_tenant:
                     did = f"{effective_tenant}:{base_did}"
@@ -953,17 +959,27 @@ class Storage:
         self, document_id: str, source_hash: str, tenant_id: str | None = None
     ) -> bool:
         """回滚：旧哈希仍保留在库（文档版本化），重新激活指定版本并重建索引。限定指定租户及同一模板版本链。"""
-        effective_tenant = tenant_id if tenant_id is not None else config.TENANT_ID
         with self._lock:
-            row = self.conn.execute(
-                "SELECT * FROM documents WHERE source_hash=? AND tenant_id=?",
-                (source_hash, effective_tenant),
-            ).fetchone()
-            if not row:
+            if tenant_id is not None:
                 row = self.conn.execute(
-                    "SELECT * FROM documents WHERE document_id=? AND tenant_id=?",
-                    (document_id, effective_tenant),
+                    "SELECT * FROM documents WHERE source_hash=? AND tenant_id=?",
+                    (source_hash, tenant_id),
                 ).fetchone()
+                if not row:
+                    row = self.conn.execute(
+                        "SELECT * FROM documents WHERE document_id=? AND tenant_id=?",
+                        (document_id, tenant_id),
+                    ).fetchone()
+            else:
+                row = self.conn.execute(
+                    "SELECT * FROM documents WHERE source_hash=?",
+                    (source_hash,),
+                ).fetchone()
+                if not row:
+                    row = self.conn.execute(
+                        "SELECT * FROM documents WHERE document_id=?",
+                        (document_id,),
+                    ).fetchone()
             if not row:
                 return False
 
@@ -972,6 +988,11 @@ class Storage:
                 row["template_id"]
                 if "template_id" in row.keys() and row["template_id"]
                 else target_did
+            )
+            effective_tenant = (
+                row["tenant_id"]
+                if "tenant_id" in row.keys() and row["tenant_id"]
+                else (tenant_id or config.TENANT_ID)
             )
             self.conn.execute(
                 "UPDATE documents SET status='ACTIVE' WHERE document_id=? AND tenant_id=?",
@@ -1037,7 +1058,13 @@ class Storage:
                 )
                 self.conn.execute(
                     "INSERT INTO audit_log (at, actor, action, target, detail) VALUES (?,?,?,?,?)",
-                    (now_ts, "system", "update_document_classification", document_id, detail),
+                    (
+                        now_ts,
+                        "system",
+                        "update_document_classification",
+                        document_id,
+                        detail,
+                    ),
                 )
                 self._commit()
                 return True

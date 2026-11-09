@@ -11,7 +11,9 @@ from contract_kb.modules.retrieval.citation import CitationVerifier
 from contract_kb.storage import Storage
 
 
-def _create_template_docx(file_path: Path, title: str, clause1_text: str, clause2_text: str | None = None) -> None:
+def _create_template_docx(
+    file_path: Path, title: str, clause1_text: str, clause2_text: str | None = None
+) -> None:
     doc = docx.Document()
     doc.add_heading(title, level=1)
     doc.add_paragraph("第一条 付款条款")
@@ -50,7 +52,7 @@ def test_template_version_v1_v2_import_and_rollback(tmp_path: Path):
         v2_path,
         "标准服务协议 V2",
         "甲方应于合同签订后10个工作日内支付首付款二万元整。",  # 修改了第1条
-        "乙方应于收到首付款后5个工作日内完成交付。",           # 第2条完全未修改
+        "乙方应于收到首付款后5个工作日内完成交付。",  # 第2条完全未修改
     )
 
     doc_v1, err1 = import_template_file(v1_path)

@@ -150,7 +150,9 @@ class WeComWeDriveClient:
                 )
         return self._token
 
-    def _post_api(self, path: str, payload: dict[str, Any]) -> tuple[dict[str, Any], float]:
+    def _post_api(
+        self, path: str, payload: dict[str, Any]
+    ) -> tuple[dict[str, Any], float]:
         """通用的微盘 POST API 请求封装，支持安全解析与 HTTP 状态保留。"""
         token = self.ensure_token()
         url = self._get_api_url(path)

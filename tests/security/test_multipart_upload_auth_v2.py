@@ -18,7 +18,9 @@ from contract_kb.storage import Storage
 SHARED_KEY = "test-multipart-auth-v2-secret-key"
 
 
-def _create_synthetic_docx_bytes(text: str = "合同正文：甲方应于五个工作日内付款。") -> bytes:
+def _create_synthetic_docx_bytes(
+    text: str = "合同正文：甲方应于五个工作日内付款。",
+) -> bytes:
     doc = docx.Document()
     doc.add_heading("合成技术服务合同", level=1)
     doc.add_paragraph("第一条 支付条款")
@@ -129,7 +131,9 @@ def test_multipart_upload_with_actual_body_signature_succeeds(tmp_path: Path):
     ):
         client = TestClient(api.app)
         resp = client.post(path, headers=headers, content=body)
-        assert resp.status_code == 200, f"合法签名正文上传失败: {resp.status_code}, {resp.text}"
+        assert resp.status_code == 200, (
+            f"合法签名正文上传失败: {resp.status_code}, {resp.text}"
+        )
         data = resp.json()
         assert "task_id" in data
     st.close()
@@ -173,7 +177,9 @@ def test_multipart_upload_tampered_payload_rejected(tmp_path: Path):
     """
     st = Storage(tmp_path / "multipart_test3.db")
     docx_bytes = _create_synthetic_docx_bytes("合规条款文本 A。")
-    original_body, ctype = _build_multipart_payload(docx_bytes, mode="STANDARD", custom="req1")
+    original_body, ctype = _build_multipart_payload(
+        docx_bytes, mode="STANDARD", custom="req1"
+    )
 
     path = "/api/v1/contract-review/tasks"
     nonce = "nonce_multipart_tamper_0000001"
@@ -182,7 +188,9 @@ def test_multipart_upload_tampered_payload_rejected(tmp_path: Path):
     headers["Content-Type"] = ctype
 
     # 篡改 body (改变 mode)
-    tampered_body, _ = _build_multipart_payload(docx_bytes, mode="STRICT", custom="req1")
+    tampered_body, _ = _build_multipart_payload(
+        docx_bytes, mode="STRICT", custom="req1"
+    )
 
     with (
         patch.object(api, "get_storage", return_value=st),
@@ -227,7 +235,9 @@ def test_failed_signature_does_not_consume_nonce(tmp_path: Path):
         headers_good = _make_v2_headers("POST", path, nonce, body, key=SHARED_KEY)
         headers_good["Content-Type"] = ctype
         r_good = client.post(path, headers=headers_good, content=body)
-        assert r_good.status_code == 200, f"失败后未消费的 Nonce 应可被合法请求消费: {r_good.status_code}"
+        assert r_good.status_code == 200, (
+            f"失败后未消费的 Nonce 应可被合法请求消费: {r_good.status_code}"
+        )
 
         # 再次重放该 nonce 必须被阻断
         r_replay = client.post(path, headers=headers_good, content=body)
@@ -260,11 +270,15 @@ def test_normal_json_and_get_requests_remain_available(tmp_path: Path):
         path_post = "/api/v1/contract-kb/rules"
         nonce_post = "nonce_normal_json_00000001"
         rule_data = b'{"rule_id":"r_json_01","name":"JSON Rule","rule_type":"SYNTHETIC","execution_mode":"DETERMINISTIC","severity":"LOW"}'
-        headers_post = _make_v2_headers("POST", path_post, nonce_post, rule_data, roles="admin")
+        headers_post = _make_v2_headers(
+            "POST", path_post, nonce_post, rule_data, roles="admin"
+        )
         headers_post["Content-Type"] = "application/json"
 
         r_post = client.post(path_post, headers=headers_post, content=rule_data)
-        assert r_post.status_code == 200, f"POST JSON 失败: {r_post.status_code}, {r_post.text}"
+        assert r_post.status_code == 200, (
+            f"POST JSON 失败: {r_post.status_code}, {r_post.text}"
+        )
 
     st.close()
 

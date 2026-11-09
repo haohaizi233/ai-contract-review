@@ -384,7 +384,10 @@ class PgVectorStorage:
                                 did = f"{base_did}_{ver_tag}_{doc['sha256'][:8]}"
                         prefix_clause = True
                         doc_status = "PENDING_REVIEW"
-                        source_ver = doc.get("template_version") or f"v{len(existing_versions) + 1}"
+                        source_ver = (
+                            doc.get("template_version")
+                            or f"v{len(existing_versions) + 1}"
+                        )
                     else:
                         if existing_id and existing_id[0] != effective_tenant:
                             did = f"{effective_tenant}:{base_did}"
@@ -557,27 +560,41 @@ class PgVectorStorage:
     def rollback_to_version(
         self, document_id: str, source_hash: str, tenant_id: str | None = None
     ) -> bool:
-        effective_tenant = tenant_id if tenant_id is not None else "default"
         with self._lock:
             try:
                 with self.conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT document_id, template_id, source_file, tenant_id FROM documents WHERE source_hash=%s AND tenant_id=%s",
-                        (source_hash, effective_tenant),
-                    )
-                    row = cur.fetchone()
-                    if not row:
+                    if tenant_id is not None:
                         cur.execute(
-                            "SELECT document_id, template_id, source_file, tenant_id FROM documents WHERE document_id=%s AND tenant_id=%s",
-                            (document_id, effective_tenant),
+                            "SELECT document_id, template_id, source_file, tenant_id FROM documents WHERE source_hash=%s AND tenant_id=%s",
+                            (source_hash, tenant_id),
                         )
                         row = cur.fetchone()
+                        if not row:
+                            cur.execute(
+                                "SELECT document_id, template_id, source_file, tenant_id FROM documents WHERE document_id=%s AND tenant_id=%s",
+                                (document_id, tenant_id),
+                            )
+                            row = cur.fetchone()
+                    else:
+                        cur.execute(
+                            "SELECT document_id, template_id, source_file, tenant_id FROM documents WHERE source_hash=%s",
+                            (source_hash,),
+                        )
+                        row = cur.fetchone()
+                        if not row:
+                            cur.execute(
+                                "SELECT document_id, template_id, source_file, tenant_id FROM documents WHERE document_id=%s",
+                                (document_id,),
+                            )
+                            row = cur.fetchone()
+
                     if not row:
                         self._commit()
                         return False
 
                     target_did = row[0]
                     tpl_id = row[1] or target_did
+                    effective_tenant = row[3] or (tenant_id or "default")
 
                     cur.execute(
                         "UPDATE documents SET status='ACTIVE' WHERE document_id=%s AND tenant_id=%s",

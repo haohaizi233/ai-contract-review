@@ -39,6 +39,7 @@ from contract_kb.ingest import import_template_file, security_check_file, Import
 
 try:
     import pypdf
+
     HAS_PYPDF = True
 except ImportError:
     HAS_PYPDF = False
@@ -142,7 +143,11 @@ def parse_pdf_document(path: Path) -> tuple[ImportedDoc | None, str | None]:
             line_str = line.strip()
             if not line_str:
                 continue
-            if re.match(r"^(第[一二三四五六七八九十0-9]+条|\d+\.\d+|Article\s*\d+)", line_str, re.IGNORECASE):
+            if re.match(
+                r"^(第[一二三四五六七八九十0-9]+条|\d+\.\d+|Article\s*\d+)",
+                line_str,
+                re.IGNORECASE,
+            ):
                 if curr_lines:
                     clause_text = "\n".join(curr_lines)
                     clauses.append(
@@ -223,11 +228,15 @@ class WeDriveSyncManager:
         staging_dir: Path | None = None,
     ):
         self.db_path = db_path
-        self.storage: Storage = Storage(db_path) if db_path is not None else create_storage()
+        self.storage: Storage = (
+            Storage(db_path) if db_path is not None else create_storage()
+        )
         self.min_stable_checks = min_stable_checks
         self.removal_grace_seconds = removal_grace_seconds
         self.enable_auto_deactivation = enable_auto_deactivation
-        self.staging_dir = Path(staging_dir) if staging_dir else ROOT_DIR / "reports" / "sync_staging"
+        self.staging_dir = (
+            Path(staging_dir) if staging_dir else ROOT_DIR / "reports" / "sync_staging"
+        )
         self.staging_dir.mkdir(parents=True, exist_ok=True)
         self._thread_lock = threading.Lock()
 
@@ -322,7 +331,11 @@ class WeDriveSyncManager:
         for p in watch_path.rglob("*"):
             if not p.is_file():
                 continue
-            if p.name.startswith("~$") or p.name.startswith(".") or ".WeDrive" in p.parts:
+            if (
+                p.name.startswith("~$")
+                or p.name.startswith(".")
+                or ".WeDrive" in p.parts
+            ):
                 continue
             # 扩展名白名单限制
             if p.suffix.lower() in (".docx", ".pdf"):
@@ -359,7 +372,9 @@ class WeDriveSyncManager:
 
             # 2. 文件稳定性检测
             if not self.check_file_stability(tracker):
-                logger.info(f"⏳ 文件同步中或未稳定，跳过本次处理: {rel_path} (checks={tracker.stable_checks})")
+                logger.info(
+                    f"⏳ 文件同步中或未稳定，跳过本次处理: {rel_path} (checks={tracker.stable_checks})"
+                )
                 metrics.pending_tasks += 1
                 continue
 
@@ -387,7 +402,9 @@ class WeDriveSyncManager:
                     continue
                 else:
                     # 路径发生重命名或移动：仅更新元数据映射，零成本跳过 Embedding 重建
-                    logger.info(f"⚡ 检测到文件路径/名称变更，更新映射: {stored_file} -> {rel_path}")
+                    logger.info(
+                        f"⚡ 检测到文件路径/名称变更，更新映射: {stored_file} -> {rel_path}"
+                    )
                     with self.storage._lock:
                         self.storage.conn.execute(
                             "UPDATE documents SET source_file=? WHERE source_hash=?",
@@ -406,7 +423,9 @@ class WeDriveSyncManager:
             if resolved_file.suffix.lower() == ".docx":
                 sec = security_check_file(resolved_file)
                 if not sec.passed:
-                    logger.warning(f"文件安全检查未通过，隔离处置: {rel_path} ({sec.rejected_reason})")
+                    logger.warning(
+                        f"文件安全检查未通过，隔离处置: {rel_path} ({sec.rejected_reason})"
+                    )
                     tracker.state = FileSyncState.QUARANTINED
                     tracker.error_msg = sec.rejected_reason
                     metrics.files_failed += 1
@@ -443,7 +462,9 @@ class WeDriveSyncManager:
                 existing_hashes[file_sha256] = rel_path
 
                 action = "新模板入库" if is_new else "旧模板版本迭代热替换"
-                logger.info(f"✅ [RAG热生效] {action}: [{doc_id}] {rel_path} (条款数: {len(rec.clauses or [])})")
+                logger.info(
+                    f"✅ [RAG热生效] {action}: [{doc_id}] {rel_path} (条款数: {len(rec.clauses or [])})"
+                )
 
             except Exception as e:
                 logger.error(f"索引构建失败，回滚隔离: {rel_path} - {e}", exc_info=True)
@@ -470,9 +491,13 @@ class WeDriveSyncManager:
                         elapsed = now - tracker.disappeared_since
                         if self.enable_auto_deactivation:
                             if elapsed >= self.removal_grace_seconds:
-                                logger.info(f"🗑️ 宽限期已过 ({elapsed:.1f}s)，软删除失效对应索引: {rel_path}")
+                                logger.info(
+                                    f"🗑️ 宽限期已过 ({elapsed:.1f}s)，软删除失效对应索引: {rel_path}"
+                                )
                                 if tracker.document_id:
-                                    self.storage.set_document_status(tracker.document_id, "INACTIVE")
+                                    self.storage.set_document_status(
+                                        tracker.document_id, "INACTIVE"
+                                    )
                                 tracker.state = FileSyncState.COMPLETED
                         else:
                             logger.warning(
@@ -488,7 +513,9 @@ class WeDriveSyncManager:
         # 写入健康检查报告供可观测性探针与监控告警读取
         try:
             health_file = self.staging_dir / "sync_health.json"
-            health_file.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+            health_file.write_text(
+                json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
         except Exception as e:
             logger.debug(f"写入健康度量文件失败: {e}")
         logger.info(
@@ -522,10 +549,16 @@ def main():
         "--interval", type=int, default=60, help="轮询间隔秒数（默认 60 秒）"
     )
     parser.add_argument(
-        "--sync-deletion", action="store_true", default=True, help="是否同步删除变更（当微盘文件删除超过宽限期后软删除对应索引，默认开启）"
+        "--sync-deletion",
+        action="store_true",
+        default=True,
+        help="是否同步删除变更（当微盘文件删除超过宽限期后软删除对应索引，默认开启）",
     )
     parser.add_argument(
-        "--grace-seconds", type=float, default=60.0, help="删除防抖宽限期秒数（默认 60 秒）"
+        "--grace-seconds",
+        type=float,
+        default=60.0,
+        help="删除防抖宽限期秒数（默认 60 秒）",
     )
     args = parser.parse_args()
 

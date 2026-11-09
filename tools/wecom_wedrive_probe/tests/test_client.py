@@ -491,17 +491,49 @@ def test_missing_config_detection():
     [
         (640001, "space not exist", ErrorCategory.RESOURCE_NOT_FOUND.value, "空间"),
         (640002, "file not exist", ErrorCategory.RESOURCE_NOT_FOUND.value, "文件"),
-        (640004, "access forbidden", ErrorCategory.SPACE_NO_PERMISSION.value, "无权限访问"),
-        (640005, "member not in space", ErrorCategory.SPACE_NO_PERMISSION.value, "成员不在空间内"),
-        (640008, "permision deny", ErrorCategory.SPACE_NO_PERMISSION.value, "微盘空间无访问权限"),
-        (640017, "wedrive api disabled", ErrorCategory.API_UNAUTHORIZED.value, "未开启微盘 API"),
+        (
+            640004,
+            "access forbidden",
+            ErrorCategory.SPACE_NO_PERMISSION.value,
+            "无权限访问",
+        ),
+        (
+            640005,
+            "member not in space",
+            ErrorCategory.SPACE_NO_PERMISSION.value,
+            "成员不在空间内",
+        ),
+        (
+            640008,
+            "permision deny",
+            ErrorCategory.SPACE_NO_PERMISSION.value,
+            "微盘空间无访问权限",
+        ),
+        (
+            640017,
+            "wedrive api disabled",
+            ErrorCategory.API_UNAUTHORIZED.value,
+            "未开启微盘 API",
+        ),
         (45009, "api freq limit", ErrorCategory.RATE_LIMIT_ERROR.value, "频率超限"),
         (45029, "app freq limit", ErrorCategory.RATE_LIMIT_ERROR.value, "频率超限"),
-        (60020, "from ip: 183.23.152.239", ErrorCategory.TRUSTED_IP_ERROR.value, "企业可信 IP"),
-        (999999, "custom unexpected error", ErrorCategory.UNKNOWN_ERROR.value, "未收录"),
+        (
+            60020,
+            "from ip: 183.23.152.239",
+            ErrorCategory.TRUSTED_IP_ERROR.value,
+            "企业可信 IP",
+        ),
+        (
+            999999,
+            "custom unexpected error",
+            ErrorCategory.UNKNOWN_ERROR.value,
+            "未收录",
+        ),
     ],
 )
-def test_official_wecom_error_codes_parameterized(errcode, errmsg, expected_cat, expected_kw):
+def test_official_wecom_error_codes_parameterized(
+    errcode, errmsg, expected_cat, expected_kw
+):
     """参数化严格验证企业微信官方微盘错误码分类及描述契约。"""
     res = classify_wecom_error(errcode, errmsg, http_status=200)
     assert res["category"] == expected_cat
@@ -509,5 +541,3 @@ def test_official_wecom_error_codes_parameterized(errcode, errmsg, expected_cat,
     assert res["errcode"] == errcode
     assert res["http_status"] == 200
     assert "official_doc" in res
-
-

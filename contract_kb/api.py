@@ -136,7 +136,10 @@ async def capture_request_body_middleware(request: Request, call_next):
             if int(content_length) > max_limit:
                 return JSONResponse(
                     status_code=413,
-                    content={"error": "file_too_large", "detail": "Request Entity Too Large"},
+                    content={
+                        "error": "file_too_large",
+                        "detail": "Request Entity Too Large",
+                    },
                 )
         except ValueError:
             pass
@@ -148,7 +151,10 @@ async def capture_request_body_middleware(request: Request, call_next):
         if total > max_limit:
             return JSONResponse(
                 status_code=413,
-                content={"error": "file_too_large", "detail": "Request Entity Too Large"},
+                content={
+                    "error": "file_too_large",
+                    "detail": "Request Entity Too Large",
+                },
             )
         chunks.append(chunk)
 

@@ -46,6 +46,9 @@ config/company_profile.local.json
 tools/wecom_wedrive_probe/downloads/
 tools/wecom_wedrive_probe/tmp_downloads/
 tools/wecom_wedrive_probe/reports/downloads/
+tools/test_assets/
+*.docx
+
 
 # 系统文件
 Thumbs.db
