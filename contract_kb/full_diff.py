@@ -246,17 +246,16 @@ def build_full_contract_diff(
             )
 
             s_html = (
-                f'<div class="doc-block-missing-std">'
-                f'<div class="doc-badge-missing">❌【母本原版条款·送审稿已删除】</div>'
-                f'<div class="doc-missing-text">{escape_html(s_text)}</div>'
-                f"</div>"
+                f'<div class="doc-text-deleted">'
+                f'<span class="del-clause-pill">【母本原款·送审已被整段删除】</span> '
+                f'<del class="diff-del-flow">{escape_html(s_text)}</del>'
+                f'</div>'
             )
             r_html = (
-                f'<div class="doc-block-missing-slot" onclick="selectAnnotation(\'{ann_id}\')">'
-                f'<span class="slot-icon">⚠️</span>'
-                f'<span class="slot-text">【此处母本条款在送审版中已被整段删除】</span>'
+                f'<div class="doc-slot-deleted" onclick="selectAnnotation(\'{ann_id}\')">'
+                f'<span class="del-slot-tag">⛔ 母本条款已整段删除</span> '
                 f'<span class="ann-ref-anchor" title="点击查看右侧法务批注详情">🏷️ [批注 #{ann_counter:02d} · {risk_label}]</span>'
-                f"</div>"
+                f'</div>'
             )
 
             aligned_blocks.append(
@@ -310,18 +309,17 @@ def build_full_contract_diff(
             )
 
             s_html = (
-                '<div class="doc-block-blank-slot">'
-                '<span class="slot-icon">🏛️</span>'
-                '<span class="slot-text">【标准母本库无此条款（客户单方新增）】</span>'
-                "</div>"
+                '<div class="doc-slot-blank">'
+                '<span class="blank-slot-text">（母本无此条款）</span>'
+                '</div>'
             )
             r_html = (
-                f'<div class="doc-block-new-rev" onclick="selectAnnotation(\'{ann_id}\')">'
-                f'<div class="doc-badge-new">➕【送审非标新增条款】 <span class="ann-ref-anchor">🏷️ [批注 #{ann_counter:02d} · 客户新增]</span></div>'
-                f'<div class="doc-new-text">{escape_html(r_text)}</div>'
-                f"</div>"
+                f'<div class="doc-text-added" onclick="selectAnnotation(\'{ann_id}\')">'
+                f'<span class="add-clause-pill">➕【送审新增非标条款】</span> '
+                f'<ins class="diff-ins-flow">{escape_html(r_text)}</ins> '
+                f'<span class="ann-ref-anchor" title="点击查看右侧法务批注详情">🏷️ [批注 #{ann_counter:02d} · 客户新增]</span>'
+                f'</div>'
             )
-
             aligned_blocks.append(
                 {
                     "block_id": block_id,

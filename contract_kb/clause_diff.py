@@ -54,6 +54,12 @@ def _extract_spans(text: str) -> dict:
     }
 
 
+def _format_span(items: list[str]) -> str:
+    if not items:
+        return "（空白）"
+    return "、".join(items)
+
+
 def diff_clauses(standard_text: str, reviewed_text: str) -> list[ClauseDelta]:
     """逐维对比两段条款，输出结构化变更列表。"""
     deltas: list[ClauseDelta] = []
@@ -61,50 +67,58 @@ def diff_clauses(standard_text: str, reviewed_text: str) -> list[ClauseDelta]:
 
     # 数字/金额
     if s["numbers"] != r["numbers"]:
+        s_span = _format_span(s["numbers"])
+        r_span = _format_span(r["numbers"])
         deltas.append(
             ClauseDelta(
                 "NUMBER_CHANGE",
-                f"数值变化：{s['numbers']} → {r['numbers']}",
+                f"数值/金额变化：{s_span} ➔ {r_span}",
                 standard_text,
                 reviewed_text,
-                standard_span=str(s["numbers"]),
-                reviewed_span=str(r["numbers"]),
+                standard_span=s_span,
+                reviewed_span=r_span,
             )
         )
     # 期限
     if s["deadlines"] != r["deadlines"]:
+        s_span = _format_span(s["deadlines"])
+        r_span = _format_span(r["deadlines"])
         deltas.append(
             ClauseDelta(
                 "DEADLINE_CHANGE",
-                f"期限表达变化：{s['deadlines']} → {r['deadlines']}",
+                f"期限表达变化：{s_span} ➔ {r_span}",
                 standard_text,
                 reviewed_text,
-                standard_span=str(s["deadlines"]),
-                reviewed_span=str(r["deadlines"]),
+                standard_span=s_span,
+                reviewed_span=r_span,
             )
         )
     # 责任主体
     if s["parties"] != r["parties"]:
+        s_span = _format_span(s["parties"])
+        r_span = _format_span(r["parties"])
         deltas.append(
             ClauseDelta(
                 "PARTY_CHANGE",
-                f"主体表述变化：{s['parties']} → {r['parties']}",
+                f"主体表述变化：{s_span} ➔ {r_span}",
                 standard_text,
                 reviewed_text,
-                standard_span=str(s["parties"]),
-                reviewed_span=str(r["parties"]),
+                standard_span=s_span,
+                reviewed_span=r_span,
             )
         )
     # 否定词
     if s["negations"] != r["negations"]:
+        s_span = _format_span(s["negations"])
+        r_span = _format_span(r["negations"])
         deltas.append(
             ClauseDelta(
                 "NEGATION_CHANGE",
-                f"否定词变化：{s['negations']} → {r['negations']}（义务方向可能反转）",
+                f"否定词变化：{s_span} ➔ {r_span}（义务方向可能反转）",
                 standard_text,
                 reviewed_text,
-                standard_span=str(s["negations"]),
-                reviewed_span=str(r["negations"]),
+                standard_span=s_span,
+                reviewed_span=r_span,
             )
         )
     # 义务强度
