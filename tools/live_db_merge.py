@@ -10,7 +10,7 @@
      - e9 物理附件库（17,797 份存量文件）+ e9 已编译标准 PNG 相册（17,243 张，100% 编译转码）
      - tender MinIO 物理附件库（40,526 份文件）+ tender BPM 流程截图（7,873 张）
 
-合并产物输出至 data/contract_merged/:
+合并产物输出至独立新目录 data/contract_merged_run_<时间>/，可用 --out 指定:
   - cases/<合同编号>.md       每案唯一一份终极合流 Markdown 案卷（去重合流，100% PNG，无 base64）
   - attachments/<合同编号>/   去重互补附件库（相同的文件去重只留一份，不同的互补）
   - albums/<合同编号>/        去重互补多媒体相册（相同的图片去重只留一份，100% PNG）
@@ -51,7 +51,9 @@ DATA_DIR = ROOT / "data"
 DOCS_DIR = ROOT / "docs"
 ENVF = DATA_DIR / ".db_env"
 
-OUT_DIR = DATA_DIR / "contract_merged"
+OUT_DIR = DATA_DIR / (
+    "contract_merged_run_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+)
 CASES_OUT = OUT_DIR / "cases"
 ATTACH_OUT = OUT_DIR / "attachments"
 ALBUM_OUT = OUT_DIR / "albums"
@@ -593,18 +595,11 @@ def execute_union_merge(
     all_keys = sorted(set(e9_db) | set(applies) | set(archives))
     total_contracts = len(all_keys)
 
-    # 清理并创建目标输出目录
-    if CASES_OUT.exists():
-        shutil.rmtree(CASES_OUT, ignore_errors=True)
-    if ATTACH_OUT.exists():
-        shutil.rmtree(ATTACH_OUT, ignore_errors=True)
-    if ALBUM_OUT.exists():
-        shutil.rmtree(ALBUM_OUT, ignore_errors=True)
-
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    CASES_OUT.mkdir(parents=True, exist_ok=True)
-    ATTACH_OUT.mkdir(parents=True, exist_ok=True)
-    ALBUM_OUT.mkdir(parents=True, exist_ok=True)
+    # Exclusive creation preserves previous results on retries and concurrent runs.
+    OUT_DIR.mkdir(parents=True, exist_ok=False)
+    CASES_OUT.mkdir()
+    ATTACH_OUT.mkdir()
+    ALBUM_OUT.mkdir()
 
     stats = {
         "total_contracts": total_contracts,
@@ -1166,6 +1161,7 @@ flowchart LR
 
 
 def main():
+    global OUT_DIR, CASES_OUT, ATTACH_OUT, ALBUM_OUT
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -1179,7 +1175,16 @@ def main():
     parser.add_argument(
         "--limit", type=int, default=0, help="处理案件上限（0表示全部）"
     )
+    parser.add_argument(
+        "--out", type=Path, default=OUT_DIR, help="新输出目录，已存在则拒绝覆盖"
+    )
     args = parser.parse_args()
+    OUT_DIR = args.out.resolve()
+    CASES_OUT = OUT_DIR / "cases"
+    ATTACH_OUT = OUT_DIR / "attachments"
+    ALBUM_OUT = OUT_DIR / "albums"
+    if OUT_DIR.exists():
+        parser.error("输出目录已存在，请指定新的 --out 目录")
 
     t0 = time.time()
     env = load_env()

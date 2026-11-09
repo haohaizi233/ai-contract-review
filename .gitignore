@@ -63,3 +63,7 @@ Thumbs.db
 # IDE & Tooling
 .idea/
 .workbuddy/
+
+# 本地临时排查与独立前端工程
+tmp/
+tender-ui/
