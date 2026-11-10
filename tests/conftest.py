@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """测试公共夹具（Phase 0 安全治理后）：
 
-- 默认使用**合成语料**（contract_kb.synthetic 生成，不含真实企业信息），CI/公开环境安全；
+- 默认使用**合成语料**（contract_kb.evaluation.datasets.synthetic 生成，不含真实企业信息），CI/公开环境安全；
 - 真实模板回归测试仅在显式授权环境变量下启用：
       CONTRACT_KB_REAL_CORPUS=1  且 CONTRACT_KB_TEMPLATE_DIR 指向受控真实模板目录
   真实用例统一打 @pytest.mark.real_corpus，未授权时自动 skip。
@@ -39,7 +39,7 @@ def workspace_ready():
 @pytest.fixture(scope="session")
 def corpus_dir(workspace_ready) -> Path:
     """测试语料目录：默认合成语料。"""
-    from contract_kb.synthetic import generate_corpus
+    from contract_kb.evaluation.datasets.synthetic import generate_corpus
 
     d = ROOT / "tests" / "fixtures" / "synth_corpus"
     generate_corpus(d)
@@ -107,7 +107,7 @@ def storage(workspace_ready, corpus_dir, tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def golden_samples(workspace_ready):
-    from contract_kb.golden import generate_all
+    from contract_kb.evaluation.datasets.golden import generate_all
 
     out = ROOT / "tests" / "fixtures" / "golden"
     manifest = generate_all(out)

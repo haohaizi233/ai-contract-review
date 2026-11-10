@@ -197,7 +197,10 @@ def test_clause_diff_sets_pairing():
 
 
 def test_retrieval_golden_judge():
-    from contract_kb.retrieval_golden import GOLDEN_QUERIES, judge_hits
+    from contract_kb.evaluation.datasets.retrieval_golden import (
+        GOLDEN_QUERIES,
+        judge_hits,
+    )
 
     q = GOLDEN_QUERIES[0]
     hits = [
@@ -219,7 +222,10 @@ def test_retrieval_golden_judge():
 
 
 def test_retrieval_benchmark_runs():
-    from contract_kb.benchmark_retrieval import build_bench_storage, run_benchmark
+    from contract_kb.evaluation.retrieval.benchmark_retrieval import (
+        build_bench_storage,
+        run_benchmark,
+    )
     from contract_kb.embeddings import LocalHashEmbedding
     import tempfile
 

@@ -14,9 +14,12 @@
 
 import os
 import json
-from template_5th_layer_data import TEMPLATE_5TH_LAYER_RULES, DISAMBIGUATION_GROUPS
+from contract_kb.modules.templates.catalog_data import (
+    TEMPLATE_5TH_LAYER_RULES,
+    DISAMBIGUATION_GROUPS,
+)
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRATCH_DIR = os.environ.get(
     "CONTRACT_KB_SCRATCH_DIR", os.path.join(BASE_DIR, "data", "scratch")
 )

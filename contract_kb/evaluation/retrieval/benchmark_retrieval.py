@@ -9,18 +9,22 @@ from __future__ import annotations
 import json
 import time
 
-from . import config
-from .storage import Storage
-from .embeddings import LocalHashEmbedding
-from .retrieval_golden import GOLDEN_QUERIES, HARD_NEGATIVES, judge_hits
-from .rerankers import LexicalReranker, get_reranker
+from contract_kb import config
+from contract_kb.storage import Storage
+from contract_kb.embeddings import LocalHashEmbedding
+from contract_kb.evaluation.datasets.retrieval_golden import (
+    GOLDEN_QUERIES,
+    HARD_NEGATIVES,
+    judge_hits,
+)
+from contract_kb.rerankers import LexicalReranker, get_reranker
 
 
 def build_bench_storage(emb, tmp_db) -> Storage:
     """独立基准库：合成语料 + 困难负样本注入。"""
     st = Storage(tmp_db, emb=emb)
-    from .ingest import scan_and_import
-    from .synthetic import generate_corpus
+    from contract_kb.ingest import scan_and_import
+    from contract_kb.evaluation.datasets.synthetic import generate_corpus
     import tempfile
     from pathlib import Path
 
@@ -124,7 +128,7 @@ def run():
     st1.close()
     # 2) 真实 Embedding（如可用）
     try:
-        from .embeddings_real import SentenceTransformerEmbedding
+        from contract_kb.embeddings_real import SentenceTransformerEmbedding
 
         emb2 = SentenceTransformerEmbedding()
         st2 = build_bench_storage(emb2, f"{tmp}/st.db")

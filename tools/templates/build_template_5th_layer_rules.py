@@ -18,14 +18,19 @@ import pymysql
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(
+    0, str(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+)
 from tender_fullsync import load_env
-from export_contract_mappings_excel import write_styled_xlsx
-from template_5th_layer_data import TEMPLATE_5TH_LAYER_RULES, DISAMBIGUATION_GROUPS
+from tools.reports.export_contract_mappings_excel import write_styled_xlsx
+from contract_kb.modules.templates.catalog_data import (
+    TEMPLATE_5TH_LAYER_RULES,
+    DISAMBIGUATION_GROUPS,
+)
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRATCH_DIR = os.environ.get(
     "CONTRACT_KB_SCRATCH_DIR", os.path.join(BASE_DIR, "data", "scratch")
 )

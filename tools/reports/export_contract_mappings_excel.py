@@ -15,7 +15,9 @@ import zipfile
 from collections import Counter, defaultdict
 from xml.sax.saxutils import escape
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(
+    0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 from tender_fullsync import load_env
 import pymysql
 import pytds
@@ -983,12 +985,17 @@ def main():
         """)
         tpl_use_cnt = {r["contract_template_code"]: r["cnt"] for r in cur.fetchall()}
 
-    from template_5th_layer_data import TEMPLATE_5TH_LAYER_RULES, DISAMBIGUATION_GROUPS
+    from contract_kb.modules.templates.catalog_data import (
+        TEMPLATE_5TH_LAYER_RULES,
+        DISAMBIGUATION_GROUPS,
+    )
 
     _scratch_dir = os.environ.get(
         "CONTRACT_KB_SCRATCH_DIR",
         os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            os.path.dirname(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            ),
             "data",
             "scratch",
         ),
@@ -1480,7 +1487,7 @@ def main():
             for r in cur.fetchall()
         }
 
-    from template_5th_layer_data import TEMPLATE_5TH_LAYER_RULES
+    from contract_kb.modules.templates.catalog_data import TEMPLATE_5TH_LAYER_RULES
 
     ref_existing_map = {}
     for root_dir, _, files in os.walk("参考"):

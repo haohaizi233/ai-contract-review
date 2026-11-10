@@ -11,7 +11,7 @@ from pathlib import Path
 
 from docx import Document
 
-from . import config
+from contract_kb import config
 
 # 基础合同文本（取自真实模板结构，字段留白 → 填入基准值）
 BASE = {

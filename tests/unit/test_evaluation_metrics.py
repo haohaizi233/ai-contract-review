@@ -13,8 +13,8 @@ from contract_kb.domain.models.evaluation import (
     mrr,
     legacy_success_rate_at_k,
 )
-from contract_kb.retrieval_golden import BENCHMARK_15_HARD_NEGATIVE
-from contract_kb.evaluate import EVALUATE_30_BROAD_BUSINESS
+from contract_kb.evaluation.datasets.retrieval_golden import BENCHMARK_15_HARD_NEGATIVE
+from contract_kb.evaluation.review.evaluate import EVALUATE_30_BROAD_BUSINESS
 
 
 def test_recall_at_k_calculation_versus_hit_at_k():

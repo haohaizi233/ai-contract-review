@@ -13,10 +13,10 @@
 import html
 import os
 import urllib.parse
-from template_5th_layer_data import DISAMBIGUATION_GROUPS
+from contract_kb.modules.templates.catalog_data import DISAMBIGUATION_GROUPS
 from build_knowledge_graph_html import build_hierarchy_data
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUT_MD_CLEAN = os.path.join(
     BASE_DIR,
     "data",

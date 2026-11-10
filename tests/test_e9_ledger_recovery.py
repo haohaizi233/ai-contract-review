@@ -10,7 +10,7 @@ import pytest
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-import compile_b64_to_png as legacy
+from tools.reports import compile_b64_to_png as legacy
 import recover_e9_ledger_assets as recovery
 
 

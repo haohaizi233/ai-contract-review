@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 import contract_kb.api as api
-from contract_kb.golden import generate_all
+from contract_kb.evaluation.datasets.golden import generate_all
 from contract_kb.storage import Storage
 
 ALICE_T1 = {"X-User": "alice", "X-Roles": "reviewer", "X-Tenant": "tenant_1"}

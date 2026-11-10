@@ -291,7 +291,7 @@ def _add_template(
 def generate_corpus(out_dir: Path | None = None) -> list[dict]:
     """生成合成模板语料，返回清单（含哈希，供回归比对）。"""
     out_dir = out_dir or (
-        Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "synth_corpus"
+        Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "synth_corpus"
     )
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest = []

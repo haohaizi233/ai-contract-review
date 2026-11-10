@@ -780,9 +780,16 @@ class StartGUI:
             ),
             (
                 "RAG 检索对比评测基准实测",
-                [str(PYTHON_EXE), "-m", "contract_kb.benchmark_retrieval"],
+                [
+                    str(PYTHON_EXE),
+                    "-m",
+                    "contract_kb.evaluation.retrieval.benchmark_retrieval",
+                ],
             ),
-            ("端到端审核质量评估", [str(PYTHON_EXE), "-m", "contract_kb.evaluate"]),
+            (
+                "端到端审核质量评估",
+                [str(PYTHON_EXE), "-m", "contract_kb.evaluation.review.evaluate"],
+            ),
         ]
         self.runner.run_commands_sequential(cmds)
 
@@ -846,12 +853,17 @@ class StartGUI:
     def _cmd_rag_benchmark(self):
         self.runner.run_command(
             "RAG 检索对比评测基准实测",
-            [str(PYTHON_EXE), "-m", "contract_kb.benchmark_retrieval"],
+            [
+                str(PYTHON_EXE),
+                "-m",
+                "contract_kb.evaluation.retrieval.benchmark_retrieval",
+            ],
         )
 
     def _cmd_review_evaluate(self):
         self.runner.run_command(
-            "端到端审核质量与延迟评估", [str(PYTHON_EXE), "-m", "contract_kb.evaluate"]
+            "端到端审核质量与延迟评估",
+            [str(PYTHON_EXE), "-m", "contract_kb.evaluation.review.evaluate"],
         )
 
     def _cmd_validate_contract_merged(self):

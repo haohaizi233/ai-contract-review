@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from contract_kb.ablation_study import (
+from contract_kb.evaluation.benchmarks.ablation_study import (
     AblationConfig,
     ComponentCallTracker,
     evaluate_configuration,

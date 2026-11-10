@@ -10,7 +10,7 @@ import sys
 import urllib.parse
 import urllib.request
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tender_fullsync import load_env
 import pymysql
 
@@ -115,7 +115,10 @@ def main():
     ref_root = os.environ.get(
         "CONTRACT_KB_TEMPLATE_DIR",
         os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "参考"
+            os.path.dirname(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            ),
+            "参考",
         ),
     )
     missing_dir = os.path.join(ref_root, "数据库补齐模板_52份")

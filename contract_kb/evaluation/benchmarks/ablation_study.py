@@ -23,18 +23,22 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel
 
-from . import config
-from .embeddings import EmbeddingProvider, LocalHashEmbedding
-from .synthetic import generate_corpus
-from .ingest import scan_and_import
-from .modules.retrieval.citation import CitationVerifier
-from .modules.retrieval.comparison import ClauseComparisonEngine
-from .modules.retrieval.hierarchy import HierarchicalKnowledgeTree
-from .modules.retrieval.query_planner import ContractAwareQueryPlanner
-from .modules.retrieval.reranker import LexicalCoverageReranker
-from .modules.retrieval.service import GovernedRetrievalService
-from .retrieval_golden import GOLDEN_QUERIES, HARD_NEGATIVES, judge_hits
-from .storage import Storage
+from contract_kb import config
+from contract_kb.embeddings import EmbeddingProvider, LocalHashEmbedding
+from contract_kb.evaluation.datasets.synthetic import generate_corpus
+from contract_kb.ingest import scan_and_import
+from contract_kb.modules.retrieval.citation import CitationVerifier
+from contract_kb.modules.retrieval.comparison import ClauseComparisonEngine
+from contract_kb.modules.retrieval.hierarchy import HierarchicalKnowledgeTree
+from contract_kb.modules.retrieval.query_planner import ContractAwareQueryPlanner
+from contract_kb.modules.retrieval.reranker import LexicalCoverageReranker
+from contract_kb.modules.retrieval.service import GovernedRetrievalService
+from contract_kb.evaluation.datasets.retrieval_golden import (
+    GOLDEN_QUERIES,
+    HARD_NEGATIVES,
+    judge_hits,
+)
+from contract_kb.storage import Storage
 
 
 class ComponentCallTracker:
@@ -248,7 +252,7 @@ def evaluate_configuration(
                 )
             reranker: Any = MockCrossEncoderReranker()
         else:
-            from .rerankers import CrossEncoderReranker
+            from contract_kb.rerankers import CrossEncoderReranker
 
             reranker = CrossEncoderReranker()
 

@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Tuple
 
 from PIL import Image
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"
 DOCS_DIR = ROOT / "docs"
 

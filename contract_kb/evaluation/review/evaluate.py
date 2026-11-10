@@ -19,12 +19,12 @@ from typing import Any
 
 import numpy as np
 
-from . import config
-from .ingest import import_template_file
-from .modules.retrieval import CitationVerifier
-from .domain.models.evaluation import hit_at_k, recall_at_k, mrr, ndcg_at_k
-from .review_engine import ReviewEngine
-from .storage import Storage
+from contract_kb import config
+from contract_kb.ingest import import_template_file
+from contract_kb.modules.retrieval import CitationVerifier
+from contract_kb.domain.models.evaluation import hit_at_k, recall_at_k, mrr, ndcg_at_k
+from contract_kb.review_engine import ReviewEngine
+from contract_kb.storage import Storage
 
 # 黄金检索集：覆盖 8 大业务板块的 30 条核心业务查询（兼容真实 78 套模板语料库）
 RAG_GOLDEN = [

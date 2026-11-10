@@ -17,7 +17,7 @@ python -m contract_kb.cli import
 pytest tests tools/wecom_wedrive_probe/tests -q
 
 # 4. 运行真实测量评估（RAG Hit@K / MRR / NDCG@8 / 引用真实度 + 审核延迟 / 误漏报率）
-python -m contract_kb.evaluate
+python -m contract_kb.evaluation.review.evaluate
 
 # 5. 启动企业级 API 服务（支持 /api/v1/* 标准契约与 /api/* 平滑兼容）
 uvicorn contract_kb.api:app --host 127.0.0.1 --port 8000
