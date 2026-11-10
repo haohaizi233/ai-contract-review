@@ -1,10 +1,8 @@
-import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-import live_db_merge as m
+from tools.data_ops import live_db_merge as m
 
 
 def test_existing_merge_output_is_never_deleted():

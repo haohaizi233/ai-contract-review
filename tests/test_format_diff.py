@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """test_format_auditor / test_clause_diff（Phase 4）。"""
 
-from contract_kb.format_auditor import audit_format
-from contract_kb.clause_diff import diff_clauses, diff_clause_sets
+from contract_kb.modules.contract_comparison.format_auditor import audit_format
+from contract_kb.modules.contract_comparison.clause_diff import (
+    diff_clauses,
+    diff_clause_sets,
+)
 
 
 class _FakeNode:
@@ -197,7 +200,10 @@ def test_clause_diff_sets_pairing():
 
 
 def test_retrieval_golden_judge():
-    from contract_kb.retrieval_golden import GOLDEN_QUERIES, judge_hits
+    from contract_kb.evaluation.datasets.retrieval_golden import (
+        GOLDEN_QUERIES,
+        judge_hits,
+    )
 
     q = GOLDEN_QUERIES[0]
     hits = [
@@ -219,8 +225,11 @@ def test_retrieval_golden_judge():
 
 
 def test_retrieval_benchmark_runs():
-    from contract_kb.benchmark_retrieval import build_bench_storage, run_benchmark
-    from contract_kb.embeddings import LocalHashEmbedding
+    from contract_kb.evaluation.retrieval.benchmark_retrieval import (
+        build_bench_storage,
+        run_benchmark,
+    )
+    from contract_kb.infrastructure.ai.embedding_providers import LocalHashEmbedding
     import tempfile
 
     tmp = tempfile.mkdtemp()

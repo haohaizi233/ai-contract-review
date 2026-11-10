@@ -16,9 +16,9 @@ import uuid
 from pathlib import Path
 import pytest
 
-from contract_kb.storage import Storage
-from contract_kb.storage_pg import PgVectorStorage
-from contract_kb.storage_errors import OptimisticLockConflictError
+from contract_kb.infrastructure.persistence.sqlite_storage import Storage
+from contract_kb.infrastructure.persistence.postgres_storage import PgVectorStorage
+from contract_kb.infrastructure.persistence.errors import OptimisticLockConflictError
 
 PG_DSN = os.environ.get(
     "CONTRACT_KB_TEST_PG_DSN", "postgresql://postgres:postgres@localhost:5432/postgres"

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from contract_kb import full_diff
+from contract_kb.modules.contract_comparison import full_diff
 from contract_kb.domain.models.source_node import ContractSourceNode
 
 
@@ -109,7 +109,9 @@ def test_material_card_delegates_default_attachment_choice_to_backend():
     node = shutil.which("node")
     if not node:
         pytest.skip("Node required")
-    source = Path("tools/contract_diff_web.py").read_text(encoding="utf-8")
+    source = Path("contract_kb/interfaces/web/static/js/api_client.js").read_text(
+        encoding="utf-8"
+    )
     render = (
         "function renderMaterialCases(data) {"
         + source.split("function renderMaterialCases(data) {")[1].split(

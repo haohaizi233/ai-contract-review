@@ -37,17 +37,11 @@ from pydantic import BaseModel
 
 from . import config
 from .application.security.idempotency import IdempotencyConflictError
-from .auth import (
-    ROLE_ADMIN,
-    ROLE_REVIEWER,
-    Principal,
-    TrustedHeaderAuth,
-    authorize,
-    enforce_input_limits,
-)
 from .infrastructure.observability import GLOBAL_METRICS
 from .infrastructure.task_queue import PersistentTaskRunner
 from .interfaces.http import (
+    ROLE_ADMIN,
+    ROLE_REVIEWER,
     CompareReq,
     ErrorEnvelope,
     FeedbackIn,
@@ -55,10 +49,14 @@ from .interfaces.http import (
     FormatStandardIn,
     HealthResponse,
     PaginatedResponse,
+    Principal,
     ReadinessResponse,
     ReviewTaskIn,
     RuleIn,
     SearchReq,
+    TrustedHeaderAuth,
+    authorize,
+    enforce_input_limits,
     install_observability_and_error_handlers,
 )
 from .modules.rules.governance import HumanOverrideConflictError, HumanOverrideService
@@ -69,7 +67,7 @@ _lock = threading.Lock()
 _storage: Any = None
 _runner: PersistentTaskRunner | None = None
 _runner_storage_ref: Any = None
-_auth = TrustedHeaderAuth()
+_auth = TrustedHeaderAuth(storage=lambda: get_storage())
 _override_service = HumanOverrideService()
 
 UPLOAD_CHUNK_SIZE = 64 * 1024
@@ -285,7 +283,7 @@ def get_metrics(request: Request, fmt: str = Query(default="json", alias="format
 def import_templates(request: Request, refresh: bool = Query(default=False)):
     p = _principal(request)
     st = get_storage()
-    from .ingest import scan_and_import
+    from .modules.document_processing.ingestion import scan_and_import
 
     result = scan_and_import(config.TEMPLATE_DIR)
     raw = result.pop("_raw")
@@ -315,7 +313,7 @@ def refresh_classifications(request: Request):
     """刷新存量模板分类元数据与检索索引（不覆盖正文与已有审批状态）。"""
     p = _principal(request)
     st = get_storage()
-    from .ingest import scan_and_import
+    from .modules.document_processing.ingestion import scan_and_import
 
     result = scan_and_import(config.TEMPLATE_DIR)
     raw = result.pop("_raw")
@@ -449,7 +447,7 @@ def approve_document_knowledge(
         raise HTTPException(status_code=403, detail="仅法务或管理员有权审批知识版本")
     storage = get_storage()
     try:
-        from .storage_errors import OptimisticLockConflictError
+        from .infrastructure.persistence.errors import OptimisticLockConflictError
 
         res = storage.approve_knowledge_version(
             tenant_id=p.tenant_id,
@@ -477,7 +475,7 @@ def revoke_document_knowledge(
         raise HTTPException(status_code=403, detail="仅法务或管理员有权撤销知识版本")
     storage = get_storage()
     try:
-        from .storage_errors import OptimisticLockConflictError
+        from .infrastructure.persistence.errors import OptimisticLockConflictError
 
         res = storage.revoke_knowledge_version(
             tenant_id=p.tenant_id,
@@ -501,7 +499,7 @@ def compare(req: CompareReq, request: Request):
     enforce_input_limits(compare_texts=req.clause_texts)
     import difflib
 
-    from .clause_diff import diff_clauses
+    from .modules.contract_comparison.clause_diff import diff_clauses
 
     a, b = req.clause_texts
     identical = a.strip() == b.strip()

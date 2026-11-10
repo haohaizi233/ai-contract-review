@@ -6,7 +6,7 @@ from __future__ import annotations
 import time
 from unittest.mock import patch
 
-from contract_kb.agent_queue_manager import AgentReviewManager
+from contract_kb.application.agents.review_sessions import AgentReviewManager
 from contract_kb.legal_agent import CircuitBreaker, LegalReviewAgent, get_legal_agent
 
 
@@ -118,7 +118,9 @@ def test_agent_checkpoint_save_and_resume(tmp_path, monkeypatch):
     """测试断点续跑机制（Hermes 3层记忆）：已研判项持久化落盘，重新加载直接复用。"""
     ckpt_dir = tmp_path / "checkpoints"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("contract_kb.agent_queue_manager.CHECKPOINT_DIR", ckpt_dir)
+    monkeypatch.setattr(
+        "contract_kb.application.agents.review_sessions.CHECKPOINT_DIR", ckpt_dir
+    )
 
     mgr = AgentReviewManager()
 

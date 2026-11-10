@@ -17,7 +17,7 @@ from docx import Document
 
 from contract_kb.application.pipeline.contracts import ExecutionManifest
 from contract_kb.application.pipeline.runner import ReviewPipeline
-from contract_kb.llm_review import MockLLMProvider
+from contract_kb.infrastructure.ai.llm_providers import MockLLMProvider
 from contract_kb.modules.rules import RuleRegistry
 from contract_kb.storage import Storage
 

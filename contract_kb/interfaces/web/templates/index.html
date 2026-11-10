@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 合同审查 · 条款级 Diff 与整版原格式比对工作台</title>
+<style>
+/* __APP_CSS_PLACEHOLDER__ */
+</style>
+</head>
+<body class="mode-pure-redline">
+
+<!-- 顶部 48px 全局精炼导航栏 -->
+<header class="header">
+  <div class="brand">
+    <div class="brand-logo">Δ</div>
+    <span class="brand-title">AI 合同审查 · 条款级 Diff 与整版原格式比对工作台</span>
+  </div>
+
+  <div class="header-meta-group">
+    <!-- 点击可更换母本的胶囊 -->
+    <button class="meta-tag-btn" id="matchedTemplateTag" onclick="openTemplateModal()" title="点击自主更换基准母本">
+      <span>🎯 基准母本:</span>
+      <span id="matchedTemplateName">国内专利服务合同（年费缴纳）</span>
+      <span class="btn-arrow">▾ 更换</span>
+    </button>
+
+    <!-- 模板匹配置信度标签 -->
+    <span class="meta-tag confidence conf-high" id="confidenceTag" title="点击查看置信度计算规则">
+      <span>📊 匹配置信度:</span>
+      <b id="confValueText">99.0%</b>
+      <span class="conf-badge-pill" id="confPillText">权威匹配</span>
+    </span>
+
+    <span class="meta-tag doc-title" id="docFileName" title="送审合同原稿">《国内专利服务合同》送审修改稿</span>
+  </div>
+
+  <div class="header-actions">
+    <button class="btn btn-emerald" id="btnOpenMaterialModal" onclick="openMaterialModal()" title="调取 2.1万+ 历史实单案卷及 4,500+ Word 合同原件">📚 历史素材库 (contract_merged)</button>
+    <button class="btn btn-blue" id="btnOpenRefTemplateModal" onclick="openRefTemplateModal()" title="全景浏览【参考/】目录 54 套官方标准模板">📑 模板库全景 (参考/)</button>
+    <button class="btn" id="btnSwitchTemplate" onclick="openTemplateModal()">🔄 更换母本</button>
+    <button class="btn btn-purple" id="btnReloadTemplates" onclick="reloadTemplates()">⚡ 热加载母本库</button>
+    <button class="btn btn-primary" onclick="openUploadModal()">📂 上传送审合同</button>
+    <button class="btn" onclick="window.print()">🖨️ 导出对比单</button>
+  </div>
+</header>
+
+<!-- 紧凑型 40px 工具与审阅导航条 -->
+<div class="toolbar-strip">
+  <div class="tool-left">
+    <!-- 视图模式切换 -->
+    <div class="segmented-control">
+      <button class="seg-btn active" id="btnModeSide" onclick="setViewMode('side')">📖 原格式双栏对照</button>
+      <button class="seg-btn" id="btnModeSingle" onclick="setViewMode('single')">📄 单版标红审阅</button>
+      <button class="seg-btn" id="btnModeDiff" onclick="setViewMode('diff')">🎯 仅看变更条款</button>
+    </div>
+
+    <!-- 标红风格切换 -->
+    <div class="segmented-control">
+      <button class="seg-btn active" id="btnStyleRedline" onclick="setRedlineMode(true)">🔴 纯标红划线</button>
+      <button class="seg-btn" id="btnStyleColor" onclick="setRedlineMode(false)">🎨 红绿对照</button>
+    </div>
+
+    <!-- 快速导航 -->
+    <div class="nav-group">
+      <button class="nav-arrow-btn" onclick="prevAnnotation()" title="快捷键: [ 或 Alt+↑">◀ 上一处</button>
+      <span class="nav-indicator-pill" id="navIndicator">批注 1 / 0</span>
+      <button class="nav-arrow-btn" onclick="nextAnnotation()" title="快捷键: ] 或 Alt+↓">下一处 ▶</button>
+    </div>
+  </div>
+
+  <div class="tool-right">
+    <!-- 核心统计徽章 -->
+    <span class="stat-pill danger">🔴 高危篡改 <b id="statHighRisk">0</b></span>
+    <span class="stat-pill missing">🚩 核心缺失 <b id="statMissingClauses">0</b></span>
+    <span class="stat-pill warning">🟠 期限/违约 <b id="statMediumRisk">0</b></span>
+    <span class="stat-pill progress">⚖️ 核验进度 <b id="statProgress">0/0</b></span>
+
+    <button class="btn-toggle-sidebar" id="btnToggleSidebar" onclick="toggleSidebarCollapse()">
+      <span>📋 详情专栏</span>
+      <span class="sidebar-badge" id="btnSidebarCount">0</span>
+    </button>
+  </div>
+</div>
+
+<!-- ==================== 核心工作区：三栏独立视口与双向联动 ==================== -->
+<div class="review-workspace" id="reviewWorkspace">
+
+  <!-- 1. 左栏：标准参考母本（基准条款） -->
+  <section class="contract-column pane-standard" id="colStandardPane">
+    <div class="column-sticky-header standard">
+      <div class="col-header-info">
+        <span class="col-icon">🏛️</span>
+        <span class="col-header-title">标准参考母本（基准正文）</span>
+      </div>
+      <span class="col-header-sub" id="headerStdName">母本库</span>
+    </div>
+    <div class="contract-scroll-container" id="colStandardContainer">
+      <div class="contract-paper-canvas" id="paperStandard"></div>
+    </div>
+  </section>
+
+  <!-- 2. 中栏：送审修改稿（增删标红） -->
+  <section class="contract-column pane-reviewed" id="colReviewedPane">
+    <div class="column-sticky-header reviewed">
+      <div class="col-header-info">
+        <span class="col-icon">✏️</span>
+        <span class="col-header-title">送审合同（待审修改稿·增删对比）</span>
+      </div>
+      <span class="col-header-sub" id="headerRevName">待审稿</span>
+    </div>
+    <div class="contract-scroll-container" id="colReviewedContainer">
+      <div class="contract-paper-canvas" id="paperReviewed"></div>
+    </div>
+  </section>
+
+  <!-- 3. 右栏：法务审阅详情与批注专栏 (自适应) -->
+  <aside class="annotations-sidebar-panel" id="annotationsSidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-title">
+        <span>📋 条款变动与法务详情</span>
+        <span class="sidebar-count-badge" id="sidebarCount">0</span>
+      </div>
+      <button class="mini-tool-btn" onclick="toggleSidebarCollapse()" title="收起详情专栏">◀ 收起</button>
+    </div>
+
+    <!-- Agent 研判与全链路容灾监控面板 (爱马仕/CC/小龙虾高可用) -->
+    <div class="agent-status-panel" id="agentStatusPanel">
+      <div class="agent-status-row">
+        <div class="agent-badge-group">
+          <span class="agent-state-pill RUNNING" id="agentStateBadge">🟢 智能研判中</span>
+          <span style="font-weight:700; color:#1E293B;" id="agentProgressRatio">0/0</span>
+        </div>
+        <div style="display:flex; gap:4px;">
+          <button class="agent-control-btn" id="btnAgentPause" onclick="toggleAgentPause()" title="暂停/继续大模型后台研判">⏸️ 暂停</button>
+          <button class="agent-control-btn" onclick="rerunAgentReview()" title="强制全篇重新研判">🔄 重审</button>
+          <button class="agent-control-btn" id="btnResetCircuit" onclick="resetCircuitBreaker()" style="display:none;" title="重置大模型熔断器">🛡️ 复位熔断</button>
+        </div>
+      </div>
+      <div class="agent-progress-bar-bg">
+        <div class="agent-progress-bar-fill" id="agentProgressBar" style="width: 0%;"></div>
+      </div>
+      <div class="agent-meta-stats">
+        <span class="agent-meta-tag" id="agentHeartbeatTag" title="SSE 双向保活与心跳监护">💓 心跳正常</span>
+        <span class="agent-meta-tag" id="agentCircuitTag" title="连续失败自适应熔断（爱马仕/CC容灾）">🛡️ 熔断防护: 闭合</span>
+        <span class="agent-meta-tag" id="agentWatchdogTag" title="单任务45s硬看门狗（OpenClaw卡死抢救）">⏱️ 看门狗: 就绪</span>
+      </div>
+    </div>
+
+    <!-- 分类筛选标签 -->
+    <div class="sidebar-filter-strip">
+      <button class="filter-chip active" onclick="setFilter('ALL')">全部 (<span id="filterAllCount">0</span>)</button>
+      <button class="filter-chip" onclick="setFilter('HIGH')">🔴 高危 (<span id="filterHighCount">0</span>)</button>
+      <button class="filter-chip" onclick="setFilter('MISSING')">🚩 缺失 (<span id="filterMissingCount">0</span>)</button>
+      <button class="filter-chip" onclick="setFilter('NEW')">➕ 新增 (<span id="filterNewCount">0</span>)</button>
+      <button class="filter-chip" onclick="setFilter('WARNING')">🟠 违约/期限 (<span id="filterWarnCount">0</span>)</button>
+    </div>
+
+    <div class="annotations-list" id="annotationsList"></div>
+  </aside>
+
+</div>
+
+<!-- 模态弹窗：上传送审合同 (DOCX/DOC/PDF) 与快速加载实测用例 -->
+<div class="modal-overlay" id="uploadModal" onclick="closeUploadModalOnBackdrop(event)">
+  <div class="modal-card">
+    <div class="modal-header">
+      <span class="modal-title">📂 上传送审合同 (DOCX/DOC/PDF) / 快速加载用例</span>
+      <button class="modal-close-btn" onclick="closeUploadModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+        <input type="file" id="fileInput" accept=".docx,.doc,.pdf" style="display:none;" onchange="handleFileSelect(event)">
+        <div class="drop-icon">📄</div>
+        <div class="drop-title">点击或拖拽 DOCX / DOC / PDF 送审合同至此</div>
+        <div class="drop-desc">自动高保真结构解析并秒级对齐母本库，出具原格式增删比对</div>
+      </div>
+
+      <div style="font-size:12px; font-weight:700; color:#475569; margin-top:6px;">⚡ 快速加载实测高危用例 / 连通全量资产库：</div>
+      <div class="preset-grid">
+        <button class="preset-btn" style="border-color:#10B981; background:#F0FDF4;" onclick="closeUploadModal(); openMaterialModal();">
+          <span>📚 打开 2.1万+ 历史素材库 (选择真实业务合同比对)</span>
+          <span style="font-size:10.5px; font-weight:700; background:#DCFCE7; color:#166534; padding:1px 6px; border-radius:3px;">全库检索</span>
+        </button>
+        <button class="preset-btn" style="border-color:#3B82F6; background:#EFF6FF;" onclick="closeUploadModal(); openRefTemplateModal();">
+          <span>📑 打开 54 套官方模板库 (选择标准母本原稿测试)</span>
+          <span style="font-size:10.5px; font-weight:700; background:#DBEAFE; color:#1E40AF; padding:1px 6px; border-radius:3px;">母本原稿</span>
+        </button>
+        <button class="preset-btn" onclick="loadSample('prescreen_tampered'); closeUploadModal();">
+          <span>🚨 快速预审 (违约金日息从 3‰ 偷降到 1‰)</span>
+          <span style="font-size:10.5px; font-weight:700; background:#FEE2E2; color:#991B1B; padding:1px 6px; border-radius:3px;">高危篡改</span>
+        </button>
+        <button class="preset-btn" onclick="loadSample('missing_confidential'); closeUploadModal();">
+          <span>🚩 专利代理 (保密条款与核心权利义务被偷删)</span>
+          <span style="font-size:10.5px; font-weight:700; background:#FEF3C7; color:#92400E; padding:1px 6px; border-radius:3px;">核心缺失</span>
+        </button>
+        <button class="preset-btn" onclick="loadSample('trademark_match'); closeUploadModal();">
+          <span>✅ 商标驳回复审 (合规原版基准)</span>
+          <span style="font-size:10.5px; font-weight:700; background:#DCFCE7; color:#15803D; padding:1px 6px; border-radius:3px;">100%匹配</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 模态弹窗：选择/更换合同标准模板库 ==================== -->
+<div class="modal-overlay" id="templateModal" onclick="closeTemplateModalOnBackdrop(event)">
+  <div class="tpl-modal-card">
+    <div class="tpl-modal-header">
+      <div class="tpl-modal-title">
+        <span>🔄 选择更换标准合同母本</span>
+        <span style="font-size:11.5px; font-weight:600; color:#64748B;">(共 <span id="tplModalTotalCount">0</span> 套可用模板 · 严格按置信度从高到低排序)</span>
+      </div>
+      <button class="modal-close-btn" onclick="closeTemplateModal()">✕</button>
+    </div>
+
+    <div class="tpl-modal-toolbar">
+      <input type="text" class="tpl-search-input" id="tplSearchInput" placeholder="🔍 快速搜索模板名称、编号(MB...)或关键词..." oninput="onTemplateSearchInput(event)">
+      <button class="btn btn-purple" onclick="reloadTemplates(true)" title="重新扫描模板目录并热更新入库">⚡ 热加载库</button>
+      <button class="btn" onclick="resetAutoTemplate()" title="切回由 AI 智能自动识别母本">🎯 恢复自动识别</button>
+    </div>
+
+    <div class="tpl-category-tabs" id="tplCategoryTabs"></div>
+
+    <div class="tpl-list-scroll" id="tplListContainer"></div>
+
+    <div class="tpl-modal-footer">
+      <div style="font-size:11.5px; color:#64748B;">
+        <span>💡 提示：所有模板已按照与当前送审合同的匹配置信度从高到低从上往下排序，点击任意卡片即可切换基准并实时重算。</span>
+      </div>
+      <button class="btn" onclick="closeTemplateModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 模态弹窗：历史素材库 (contract_merged) ==================== -->
+<div class="modal-overlay" id="materialModal" onclick="closeMaterialModalOnBackdrop(event)">
+  <div class="mat-modal-card">
+    <div class="mat-modal-header">
+      <div class="mat-header-left">
+        <span class="modal-title">📚 历史合同素材库 (contract_merged)</span>
+        <span class="mat-stats-pill" id="matStatsPill">共 21,623 案卷 · 4,586 实单 Word 原件</span>
+      </div>
+      <button class="modal-close-btn" onclick="closeMaterialModal()">✕</button>
+    </div>
+
+    <!-- 顶部检索与筛选工具条 -->
+    <div class="mat-modal-toolbar">
+      <div class="mat-search-wrap">
+        <input type="text" class="mat-search-input" id="matSearchInput" placeholder="🔍 搜索合同编号(如 CIP/GW/HCI...)、合同名称、对方主体(客户名)、申请人..." onkeyup="onMaterialSearchKey(event)">
+        <button class="btn btn-emerald" onclick="triggerMaterialSearch()">搜索</button>
+        <button class="btn" onclick="resetMaterialSearch()">重置</button>
+      </div>
+
+      <div class="mat-toggle-wrap">
+        <label class="mat-toggle-label">
+          <input type="checkbox" id="matHasWordOnly" checked onchange="triggerMaterialSearch()">
+          <span>仅看含 Word 原件 (4,586份可直接比对)</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- 分类标签页 -->
+    <div class="mat-category-tabs" id="matCategoryTabs">
+      <button class="mat-tab-btn active" id="matTab-ALL" onclick="setMaterialCategory('ALL')">全部 (2.1万)</button>
+      <button class="mat-tab-btn" id="matTab-CIP" onclick="setMaterialCategory('CIP')">专利核心 (CIP/CIPCX)</button>
+      <button class="mat-tab-btn" id="matTab-TRADEMARK" onclick="setMaterialCategory('TRADEMARK')">商标代理 (GW/MG/TZ)</button>
+      <button class="mat-tab-btn" id="matTab-LITIGATION" onclick="setMaterialCategory('LITIGATION')">诉讼维权 (HCI/HCZ)</button>
+      <button class="mat-tab-btn" id="matTab-FRAMEWORK" onclick="setMaterialCategory('FRAMEWORK')">合作框架 (HCCX/HKP)</button>
+      <button class="mat-tab-btn" id="matTab-OTHER" onclick="setMaterialCategory('OTHER')">分部与其他</button>
+    </div>
+
+    <!-- 案卷卡片列表容器 -->
+    <div class="mat-list-container" id="matListContainer">
+      <div class="mat-loading-hint" style="grid-column: 1/-1; padding: 40px; text-align: center; color: #64748B;">正在加载素材库案卷...</div>
+    </div>
+
+    <!-- 分页与底部状态栏 -->
+    <div class="mat-modal-footer">
+      <div class="mat-page-info" id="matPageInfo">显示第 1-20 条 / 共 0 条</div>
+      <div class="mat-pagination-btns">
+        <button class="btn btn-sm" id="matBtnPrev" onclick="changeMaterialPage(-1)">◀ 上一页</button>
+        <span class="mat-cur-page" id="matCurPageIndicator">1 / 1</span>
+        <button class="btn btn-sm" id="matBtnNext" onclick="changeMaterialPage(1)">下一页 ▶</button>
+      </div>
+      <button class="btn" onclick="closeMaterialModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 模态弹窗：模板库全景 (参考/) ==================== -->
+<div class="modal-overlay" id="refTemplateModal" onclick="closeRefTemplateModalOnBackdrop(event)">
+  <div class="ref-modal-card">
+    <div class="ref-modal-header">
+      <div class="ref-header-left">
+        <span class="modal-title">📑 官方标准模板库全景 (参考/)</span>
+        <span class="ref-stats-pill">共 54 套受控母本 · 10 大业务板块全量覆盖</span>
+      </div>
+      <button class="modal-close-btn" onclick="closeRefTemplateModal()">✕</button>
+    </div>
+
+    <div class="ref-modal-toolbar">
+      <input type="text" class="ref-search-input" id="refSearchInput" placeholder="🔍 快速搜索模板名称、业务板块或编号..." oninput="onRefSearchInput(event)">
+      <div class="ref-hint-text">💡 点击【载入待审】可测试真实原稿渲染；点击【设为母本】更换基准；点击【一键自测】验证 100% 匹配。</div>
+    </div>
+
+    <!-- 板块分类标签 -->
+    <div class="ref-category-tabs" id="refCategoryTabs"></div>
+
+    <!-- 模板卡片列表 -->
+    <div class="ref-list-container" id="refListContainer"></div>
+
+    <div class="ref-modal-footer">
+      <div style="font-size:12px; color:#64748B;">全量模板均通过 OOXML 严格结构解析与段落 AST 校验。</div>
+      <button class="btn" onclick="closeRefTemplateModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 模态弹窗：案卷审批与履约详情 ==================== -->
+<div class="modal-overlay" id="caseDetailModal" onclick="closeCaseDetailModalOnBackdrop(event)">
+  <div class="detail-modal-card">
+    <div class="detail-modal-header">
+      <div>
+        <span class="modal-title" id="detailModalTitle">案卷履约与审批详情</span>
+        <span class="detail-no-pill" id="detailModalNo">CIP20202024-BM</span>
+      </div>
+      <button class="modal-close-btn" onclick="closeCaseDetailModal()">✕</button>
+    </div>
+    <div class="detail-modal-body" id="detailModalBody">
+      <div style="padding:20px; text-align:center; color:#64748B;">加载中...</div>
+    </div>
+    <div class="detail-modal-footer">
+      <button class="btn btn-emerald" id="detailBtnLoadDiff" onclick="loadCurrentDetailContract()">⚡ 载入此案卷合同并比对</button>
+      <button class="btn" onclick="closeCaseDetailModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 全局轻量 Toast 消息容器 -->
+<div id="toastContainer"></div>
+
+<!-- 全局 Loading 遮罩 -->
+<div class="loading-mask" id="globalLoadingMask">
+  <div class="spinner"></div>
+  <div id="loadingMaskText">正在加载中，请稍候...</div>
+</div>
+
+<script>
+/* __APP_JS_PLACEHOLDER__ */
+</script>
+</body>
+</html>

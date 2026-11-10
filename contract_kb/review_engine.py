@@ -122,7 +122,7 @@ class ReviewEngine:
         if llm_provider is None and llm_reviewer is None:
             # 启动时按授权配置初始化 LLM：配置了授权端点就绝不为 None；
             # 配置不完整时 fail-closed 抛错；未配置（none）时返回 None → 如实标 NOT_CHECKED。
-            from .llm_review import get_llm_provider
+            from .infrastructure.ai.llm_providers import get_llm_provider
 
             self._llm_provider = get_llm_provider()
 

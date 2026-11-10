@@ -3,7 +3,7 @@
 
 import pytest
 
-from contract_kb.llm_review import (
+from contract_kb.infrastructure.ai.llm_providers import (
     LLMSemanticReviewer,
     MockLLMProvider,
     LLMFailure,
@@ -146,7 +146,7 @@ def test_openai_compat_requires_config():
 
 
 def test_llm_findings_schema_strict():
-    from contract_kb.llm_review import LLMFinding
+    from contract_kb.infrastructure.ai.llm_providers import LLMFinding
 
     with pytest.raises(Exception):
         LLMFinding(
@@ -161,7 +161,10 @@ def test_llm_findings_schema_strict():
 def test_engine_integration_llm_findings(storage, golden_samples):
     """审核引擎集成：Mock LLM 发现进入 issues（带证据），自定义要求有结论。"""
     from contract_kb.review_engine import ReviewEngine
-    from contract_kb.llm_review import LLMSemanticReviewer, MockLLMProvider
+    from contract_kb.infrastructure.ai.llm_providers import (
+        LLMSemanticReviewer,
+        MockLLMProvider,
+    )
 
     prov = MockLLMProvider(
         {

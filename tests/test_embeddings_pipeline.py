@@ -15,7 +15,7 @@ import types
 import numpy as np
 import pytest
 
-from contract_kb.embeddings import (
+from contract_kb.infrastructure.ai.embedding_providers import (
     EmbeddingProvider,
     LocalHashEmbedding,
     get_embedding_provider,
@@ -110,7 +110,9 @@ def test_factory_st_spec_wired(monkeypatch):
     fake_mod.SentenceTransformer = FakeST
     monkeypatch.setitem(sys.modules, "sentence_transformers", fake_mod)
     p = get_embedding_provider("st:fake-bge")
-    from contract_kb.embeddings_real import SentenceTransformerEmbedding
+    from contract_kb.infrastructure.ai.embedding_providers import (
+        SentenceTransformerEmbedding,
+    )
 
     assert isinstance(p, SentenceTransformerEmbedding)
     assert p.dim == 384 and p.name == "st:fake-bge"

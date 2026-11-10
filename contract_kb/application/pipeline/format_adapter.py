@@ -76,7 +76,7 @@ def audit_format_from_record(
     rec: Any, standard_record: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     """调用确定性格式审核器并返回结构化差异与约束级别。"""
-    from ...format_auditor import audit_format
+    from ...modules.contract_comparison.format_auditor import audit_format
 
     view = ParsedDocumentView(rec.ast or {}, rec.template_id)
     if standard_record:

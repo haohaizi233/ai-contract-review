@@ -120,12 +120,12 @@ jobs:
         run: python -m pytest tests tools/wecom_wedrive_probe/tests -q --junitxml=report.xml
       - name: 知识库导入测试（合成语料）
         run: |
-          python -m contract_kb.synthetic
+          python -m contract_kb.evaluation.datasets.synthetic
           CONTRACT_KB_TEMPLATE_DIR=tests/fixtures/synth_corpus python -m contract_kb.cli import
       - name: SQL 迁移语法测试
         run: python -m pytest tests/test_pg_migration.py tests/test_pg_storage.py -q
       - name: 检索评估（合成基准）
-        run: python -m contract_kb.benchmark_retrieval
+        run: python -m contract_kb.evaluation.retrieval.benchmark_retrieval
       - name: 审核回归（黄金变异样本）
         run: python -m pytest tests/test_review.py tests/test_format_diff.py tests/test_compare_semantics.py -q
       - name: 上传测试报告（7天自动过期防额度耗尽）

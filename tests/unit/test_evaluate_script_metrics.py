@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 
-from contract_kb.evaluate import eval_rag
+from contract_kb.evaluation.review.evaluate import eval_rag
 
 
 def test_eval_rag_metrics_honesty(storage):

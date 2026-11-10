@@ -29,7 +29,7 @@ def test_classifier_l1_l2_consistency(import_result):
 
 def test_classifier_subtype_matches_oracle(import_result):
     """合成语料子类已知（生成器标签），分类必须与真值一致。"""
-    from contract_kb.synthetic import SYNTH_TEMPLATES
+    from contract_kb.evaluation.datasets.synthetic import SYNTH_TEMPLATES
 
     oracle = {t[0]: t[4] for t in SYNTH_TEMPLATES}
     for d in import_result["imported"]:
@@ -100,7 +100,7 @@ def test_clause_entities_extracted(layer_a):
 
 def test_synthetic_corpus_has_no_real_enterprise_info(parsed_docs):
     """Phase 0 安全：合成语料只允许合成标记（正向白名单校验，不引入真实值）。"""
-    from contract_kb.synthetic import SYNTH_COMPANY_B, SYNTH_ACCOUNT
+    from contract_kb.evaluation.datasets.synthetic import SYNTH_COMPANY_B, SYNTH_ACCOUNT
     import re as _re
 
     for name, doc in parsed_docs.items():
@@ -111,7 +111,7 @@ def test_synthetic_corpus_has_no_real_enterprise_info(parsed_docs):
         for m in _re.findall(r"[\w.\-]+@[\w.\-]+", text):
             assert m.endswith("@example.com"), f"{name} 出现非合成邮箱 {m}"
         # 3) 银行账号/手机号只允许合成值
-        from contract_kb.synthetic import SYNTH_PHONE
+        from contract_kb.evaluation.datasets.synthetic import SYNTH_PHONE
 
         for m in _re.findall(r"\d{10,}", text):
             assert m in (SYNTH_ACCOUNT, SYNTH_PHONE), f"{name} 出现非合成数字串 {m}"
@@ -126,7 +126,7 @@ def test_synthetic_corpus_has_no_real_enterprise_info(parsed_docs):
 
 
 def test_field_schema_extraction(layer_a):
-    from contract_kb.distill import build_field_schema
+    from contract_kb.modules.templates.distill import build_field_schema
 
     fs = build_field_schema(layer_a, {"imported": layer_a["documents"]})
     keys = {f["field_key"] for f in fs["fields"]}
@@ -143,7 +143,7 @@ def test_field_schema_extraction(layer_a):
 
 
 def test_field_schema_required_not_auto_approved(layer_a):
-    from contract_kb.distill import build_field_schema
+    from contract_kb.modules.templates.distill import build_field_schema
 
     fs = build_field_schema(layer_a, {"imported": layer_a["documents"]})
     for f in fs["fields"]:

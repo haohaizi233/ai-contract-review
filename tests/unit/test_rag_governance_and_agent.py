@@ -19,8 +19,12 @@ from contract_kb.application.workflow import (
     ToolSpec,
     WorkflowBudget,
 )
-from contract_kb.evaluate import determine_evaluation_tier, eval_rag, eval_review
-from contract_kb.llm_review import MockLLMProvider
+from contract_kb.evaluation.review.evaluate import (
+    determine_evaluation_tier,
+    eval_rag,
+    eval_review,
+)
+from contract_kb.infrastructure.ai.llm_providers import MockLLMProvider
 from contract_kb.modules.retrieval import (
     CitationVerifier,
     GovernedRetrievalService,

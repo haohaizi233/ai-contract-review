@@ -1,8 +1,8 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from contract_merge_repair import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.data_ops.contract_merge_repair import (  # noqa: E402
     group_sources,
     ResourceStore,
     rewrite_body,

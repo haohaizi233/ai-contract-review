@@ -112,7 +112,7 @@ def test_distill_never_labels_semantic_equivalence(diff_result):
 
 @pytest.fixture(scope="module")
 def diff_result(layer_a):
-    from contract_kb import distill as D
+    from contract_kb.modules.templates import distill as D
 
     D.imported_index = {d["template_id"]: d for d in layer_a["documents"]}
     return D.build_clause_diff(layer_a)

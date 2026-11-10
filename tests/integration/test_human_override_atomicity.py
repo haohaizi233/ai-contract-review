@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 import pytest
 
-from contract_kb.golden import generate_all
+from contract_kb.evaluation.datasets.golden import generate_all
 from contract_kb.modules.rules.governance import (
     HumanOverrideConflictError,
     HumanOverrideService,

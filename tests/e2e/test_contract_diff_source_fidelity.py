@@ -7,13 +7,13 @@ from pathlib import Path
 from unittest.mock import patch
 from docx import Document
 
-from contract_kb.clause_extractor import extract_clauses
-from contract_kb.docx_parser import ASTNode, ParsedDocument
+from contract_kb.modules.document_processing.clause_extractor import extract_clauses
+from contract_kb.modules.document_processing.docx_parser import ASTNode, ParsedDocument
 from contract_kb.full_diff import build_full_contract_diff
-from contract_kb.ingest import scan_and_import
+from contract_kb.modules.document_processing.ingestion import scan_and_import
 from contract_kb.legal_agent import LegalReviewAgent
 from contract_kb.storage import Storage
-from contract_kb.synthetic import generate_corpus
+from contract_kb.evaluation.datasets.synthetic import generate_corpus
 
 
 def _build_custom_docx(path: Path, paragraphs: list[str]) -> Path:

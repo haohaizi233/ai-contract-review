@@ -7,14 +7,14 @@ from pathlib import Path
 from unittest.mock import patch
 import pytest
 
-from contract_kb.ablation_study import (
+from contract_kb.evaluation.benchmarks.ablation_study import (
     AblationConfig,
     ComponentCallTracker,
     MockCrossEncoderReranker,
     evaluate_configuration,
     setup_ablation_storage,
 )
-from contract_kb.embeddings import LocalHashEmbedding
+from contract_kb.infrastructure.ai.embedding_providers import LocalHashEmbedding
 
 
 def test_mock_cross_encoder_constructor_error_is_raised(tmp_path: Path):
@@ -39,7 +39,8 @@ def test_mock_cross_encoder_constructor_error_is_raised(tmp_path: Path):
             raise RuntimeError("MockCrossEncoderReranker 故意失败")
 
     with patch(
-        "contract_kb.ablation_study.MockCrossEncoderReranker", BrokenMockCrossEncoder
+        "contract_kb.evaluation.benchmarks.ablation_study.MockCrossEncoderReranker",
+        BrokenMockCrossEncoder,
     ):
         with pytest.raises(RuntimeError, match="MockCrossEncoderReranker 故意失败"):
             evaluate_configuration(cfg_e, st, allow_mock_for_contract_test=True)

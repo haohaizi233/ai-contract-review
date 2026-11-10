@@ -9,7 +9,7 @@ import pytest
 from contract_kb.storage import Storage
 from contract_kb.application.pipeline.runner import ReviewPipeline
 from contract_kb.application.pipeline.stages import ReviewStage
-from contract_kb.golden import generate_all
+from contract_kb.evaluation.datasets.golden import generate_all
 
 
 def test_resume_preserves_all_findings_and_gate_status(tmp_path: Path):
