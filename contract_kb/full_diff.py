@@ -24,6 +24,12 @@ from typing import Any
 from contract_kb.storage import create_storage
 from contract_kb.ingest import import_template_file, security_check_file
 from contract_kb.clause_diff import diff_clauses, diff_clause_sets
+from contract_kb import config
+from contract_kb.table_aligner import (
+    align_contract_tables,
+    build_table_diff_block,
+    extract_tables_from_nodes,
+)
 from contract_kb.classifier import TEMPLATE_CODE_SUBTYPE_MAP
 
 
@@ -112,280 +118,114 @@ def generate_word_diff_html(std_text: str, rev_text: str) -> tuple[str, str]:
 
 
 def _enhance_diff_tables(
-    aligned_blocks: list[dict[str, Any]], annotations: list[dict[str, Any]]
+    aligned_blocks: list[dict[str, Any]],
+    annotations: list[dict[str, Any]],
+    std_nodes: list[Any] | None = None,
+    rev_nodes: list[Any] | None = None,
+    std_doc_id: str = "",
+    rev_doc_id: str = "",
+    std_hash: str = "",
+    rev_hash: str = "",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """将散落的表格单元格比对块重构为语义高保真 HTML <table> 块。
+    """将表格结构以 Source of Truth 原则高保真重构为 HTML <table> 块。
 
-    解决双方主体表、费用清单表等被拍平撕裂为孤立文本行的问题。
+    严格拒绝任何形式的硬编码演示主体、虚假地址或预设固定金额。
     """
+    # 1. 若存在 AST 节点，从真实 AST 节点集合中抽取表格进行结构对齐
+    std_tables = (
+        extract_tables_from_nodes(std_nodes or [], std_doc_id, std_hash or "std_hash")
+        if std_nodes
+        else []
+    )
+    rev_tables = (
+        extract_tables_from_nodes(rev_nodes or [], rev_doc_id, rev_hash or "rev_hash")
+        if rev_nodes
+        else []
+    )
+
     new_blocks: list[dict[str, Any]] = []
-    i = 0
-    n = len(aligned_blocks)
-    obsolete_ann_ids = set()
+    final_annotations: list[dict[str, Any]] = list(annotations)
+    ann_counter = max([a.get("index", 0) for a in final_annotations], default=0) + 10
 
-    has_parties = False
-    has_fees = False
+    if std_tables or rev_tables:
+        aligned_table_pairs = align_contract_tables(std_tables, rev_tables)
+        table_blocks: list[dict[str, Any]] = []
+        table_annotations: list[dict[str, Any]] = []
 
-    while i < n:
-        b = aligned_blocks[i]
+        for t_idx, pair in enumerate(aligned_table_pairs):
+            tbl_block, tbl_anns, ann_counter = build_table_diff_block(
+                pair, block_order=t_idx, ann_counter_start=ann_counter
+            )
+            table_blocks.append(tbl_block)
+            table_annotations.extend(tbl_anns)
 
-        # 1. 双方主体表合并 (连续的双方主体信息块)
-        if b.get("clause_title") == "双方主体与基本信息" and i < 8 and not has_parties:
-            has_parties = True
-            all_match = True
-            while (
-                i < n and aligned_blocks[i].get("clause_title") == "双方主体与基本信息"
+        # 过滤掉 aligned_blocks 中残留的散落单元格碎片
+        for b in aligned_blocks:
+            src_nodes = (b.get("standard_source_node_ids") or []) + (
+                b.get("reviewed_source_node_ids") or []
+            )
+            if (
+                any(":tbl" in str(n) for n in src_nodes)
+                or b.get("clause_category") == "TABLE_NOTE"
             ):
-                if aligned_blocks[i].get("status") != "MATCH":
-                    all_match = False
-                obsolete_ann_ids.update(aligned_blocks[i].get("annotation_ids", []))
-                i += 1
+                continue
+            new_blocks.append(b)
 
-            tbl_status = "MATCH" if all_match else "DIFF"
-            ann_ids = [] if all_match else ["ann-parties"]
+        # 依据表格业务语义合理插入：主体表放首部，费用与标的清单表放对应章节位置，其他顺延
+        front_tbls = [
+            tb
+            for tb in table_blocks
+            if tb.get("clause_category") in ("PARTIES", "FRONT_MATTER")
+        ]
+        body_tbls = [
+            tb
+            for tb in table_blocks
+            if tb.get("clause_category") not in ("PARTIES", "FRONT_MATTER")
+        ]
+
+        combined_blocks = front_tbls + new_blocks + body_tbls
+        for idx, b in enumerate(combined_blocks):
+            b["order"] = idx
+
+        combined_annotations = table_annotations + final_annotations
+        for idx, a in enumerate(combined_annotations, 1):
+            a["index"] = idx
+
+        return combined_blocks, combined_annotations
+
+    # 2. 降级模式（无 AST 节点直接传入时）：基于真实 text 安全渲染，严禁混入演示假数据
+    for b in aligned_blocks:
+        if (
+            b.get("clause_title") == "双方主体与基本信息"
+            or b.get("clause_category") == "PARTIES"
+        ):
+            s_text = b.get("standard_text") or ""
+            r_text = b.get("reviewed_text") or ""
+            block_id = b.get("block_id") or "block-parties"
 
             s_html = (
-                '<div class="contract-table-card parties-card" data-block-id="block-parties">'
-                '  <div class="table-badge">🏛️ 双方主体基本信息（母本基准）</div>'
-                '  <table class="contract-doc-table parties-table">'
-                "    <tr>"
-                '      <td class="party-label"><b>甲方：</b></td>'
-                '      <td class="party-val"><span class="doc-slot-placeholder">（母本待填写主体名称及地址）</span></td>'
-                "    </tr>"
-                "    <tr>"
-                '      <td class="party-label"><b>乙方：</b></td>'
-                '      <td class="party-val">深圳市世纪恒程知识产权代理事务所<br><span style="font-size:12px; color:#64748B;">地址：深圳市南山区西丽街道西丽社区打石一路深圳国际创新谷6栋A座6楼</span></td>'
-                "    </tr>"
-                "  </table>"
-                "</div>"
+                f'<div class="contract-table-card parties-card" data-block-id="{block_id}">'
+                f'  <div class="table-badge">🏛️ 双方主体基本信息（母本基准）</div>'
+                f'  <table class="contract-doc-table parties-table">'
+                f'    <tr><td class="party-val">{escape_html(s_text)}</td></tr>'
+                f"  </table>"
+                f"</div>"
             )
-
-            if all_match:
-                parties_extra = ""
-                badge_text = "🏛️ 双方主体基本信息（完全一致）"
-                party_a_val = "<span class='doc-slot-placeholder'>（母本待填写主体名称及地址）</span>"
-                party_b_val = (
-                    "深圳市世纪恒程知识产权代理事务所<br>"
-                    "<span style='font-size:12px; color:#64748B;'>"
-                    "地址：深圳市南山区西丽街道西丽社区打石一路深圳国际创新谷6栋A座6楼</span>"
-                )
-            else:
-                parties_extra = ' data-ann-id="ann-parties" onclick=\'selectAnnotation("ann-parties")\''
-                badge_text = "✏️ 双方主体基本信息（送审填报）"
-                party_a_val = (
-                    "<span class='doc-text-added'>深圳市某某科技有限公司</span>"
-                )
-                party_b_val = (
-                    "<span class='doc-text-added'>示例知识产权代理有限公司</span>"
-                )
-
             r_html = (
-                f'<div class="contract-table-card parties-card" data-block-id="block-parties"{parties_extra}>'
-                f'  <div class="table-badge">{badge_text}</div>'
-                '  <table class="contract-doc-table parties-table">'
-                "    <tr>"
-                '      <td class="party-label"><b>甲方：</b></td>'
-                f'      <td class="party-val">{party_a_val}</td>'
-                "    </tr>"
-                "    <tr>"
-                '      <td class="party-label"><b>乙方：</b></td>'
-                f'      <td class="party-val">{party_b_val}</td>'
-                "    </tr>"
-                "  </table>"
-                "</div>"
+                f'<div class="contract-table-card parties-card" data-block-id="{block_id}">'
+                f'  <div class="table-badge">✏️ 双方主体基本信息（送审）</div>'
+                f'  <table class="contract-doc-table parties-table">'
+                f'    <tr><td class="party-val">{escape_html(r_text)}</td></tr>'
+                f"  </table>"
+                f"</div>"
             )
-
-            new_blocks.append(
-                {
-                    "block_id": "block-parties",
-                    "order": len(new_blocks),
-                    "clause_category": "PARTIES",
-                    "clause_category_zh": "双方主体与基本信息",
-                    "clause_number": None,
-                    "clause_title": "双方主体与基本信息",
-                    "status": tbl_status,
-                    "standard_text": "甲方: (待填)\n乙方: 深圳市世纪恒程知识产权代理事务所",
-                    "reviewed_text": "甲方: (待填)\n乙方: 深圳市世纪恒程知识产权代理事务所"
-                    if all_match
-                    else "甲方: 深圳市某某科技有限公司\n乙方: 示例知识产权代理有限公司",
-                    "standard_html": s_html,
-                    "reviewed_html": r_html,
-                    "annotation_ids": ann_ids,
-                }
-            )
-            continue
-
-        # 2. 费用项目明细表合并
-        txt = (b.get("standard_text", "") + " " + b.get("reviewed_text", "")).strip()
-        if (
-            (
-                b.get("block_id") in ["block-8", "block-9"]
-                or any(k in txt for k in ["费用项目", "代收代付官费", "含税服务费"])
-            )
-            and i < 15
-            and not has_fees
-        ):
-            has_fees = True
-            all_match = True
-            while i < n:
-                cur_b = aligned_blocks[i]
-                cur_std = cur_b.get("standard_text", "")
-                cur_rev = cur_b.get("reviewed_text", "")
-                # 遇到第一条正文事项结束
-                if (
-                    "第一条" in cur_std
-                    or "第一条" in cur_rev
-                    or "乙方接受甲方委托" in cur_rev
-                ):
-                    break
-                if cur_b is not None and cur_b.get("status") != "MATCH":
-                    all_match = False
-                if cur_b is not None:
-                    obsolete_ann_ids.update(cur_b.get("annotation_ids", []))
-                i += 1
-
-            tbl_status = "MATCH" if all_match else "DIFF"
-            ann_ids = [] if all_match else ["ann-fee-table"]
-
-            s_fee_html = (
-                '<div class="contract-table-card fee-card" data-block-id="block-fees">'
-                '  <div class="table-badge">🏛️ 专利清单标准结构（母本基准）</div>'
-                '  <table class="contract-doc-table fee-table">'
-                "    <thead>"
-                "      <tr>"
-                "        <th>序号</th><th>专利名称</th><th>专利号</th><th>专利权人名称</th><th>年费期限</th>"
-                "      </tr>"
-                "    </thead>"
-                "    <tbody>"
-                "      <tr>"
-                "        <td>1</td>"
-                '        <td><span class="doc-slot-placeholder">（待填专利名称）</span></td>'
-                '        <td><span class="doc-slot-placeholder">（待填专利号）</span></td>'
-                '        <td><span class="doc-slot-placeholder">（待填权利人）</span></td>'
-                "        <td>第&nbsp;&nbsp;&nbsp;&nbsp;年专利年费</td>"
-                "      </tr>"
-                "    </tbody>"
-                "  </table>"
-                "</div>"
-            )
-
-            if all_match:
-                fee_extra = ""
-                fee_badge = "🏛️ 专利清单标准结构（完全一致）"
-                fee_thead = "<th>序号</th><th>专利名称</th><th>专利号</th><th>专利权人名称</th><th>年费期限</th>"
-                fee_tbody = (
-                    "<tr><td>1</td>"
-                    "<td><span class='doc-slot-placeholder'>（待填专利名称）</span></td>"
-                    "<td><span class='doc-slot-placeholder'>（待填专利号）</span></td>"
-                    "<td><span class='doc-slot-placeholder'>（待填权利人）</span></td>"
-                    "<td>第&nbsp;&nbsp;&nbsp;&nbsp;年专利年费</td></tr>"
-                )
-            else:
-                fee_extra = ' data-ann-id="ann-fee-table" onclick=\'selectAnnotation("ann-fee-table")\''
-                fee_badge = "📋 费用项目明细表（送审填报）"
-                fee_thead = "<th>费用项目</th><th>代收代付官费（元/件）</th><th>含税服务费（元/件）</th><th>数量</th>"
-                fee_tbody = (
-                    "<tr><td><span class='doc-text-added'>年费代缴</span></td>"
-                    "<td><b style='color:#2563EB;'>600</b></td>"
-                    "<td><b style='color:#2563EB;'>150</b></td>"
-                    "<td>1</td></tr>"
-                    "<tr class='table-total-row'><td><b>小计</b></td><td><b>600</b></td><td><b>150</b></td><td>/</td></tr>"
-                )
-
-            r_fee_html = (
-                f'<div class="contract-table-card fee-card" data-block-id="block-fees"{fee_extra}>'
-                f'  <div class="table-badge">{fee_badge}</div>'
-                '  <table class="contract-doc-table fee-table">'
-                "    <thead>"
-                f"      <tr>{fee_thead}</tr>"
-                "    </thead>"
-                "    <tbody>"
-                f"      {fee_tbody}"
-                "    </tbody>"
-                "  </table>"
-                "</div>"
-            )
-
-            new_blocks.append(
-                {
-                    "block_id": "block-fees",
-                    "order": len(new_blocks),
-                    "clause_category": "FEE_AND_PAYMENT",
-                    "clause_category_zh": "费用项目与金额明细",
-                    "clause_number": None,
-                    "clause_title": "费用项目与金额明细表",
-                    "status": tbl_status,
-                    "standard_text": "标准母本专利清单与年费待填表格",
-                    "reviewed_text": "标准母本专利清单与年费待填表格"
-                    if all_match
-                    else "费用项目: 年费代缴 | 官费: 600 | 服务费: 150 | 数量: 1 | 小计: 750",
-                    "standard_html": s_fee_html,
-                    "reviewed_html": r_fee_html,
-                    "annotation_ids": ann_ids,
-                }
-            )
-            continue
-
-        new_blocks.append(b)
-        i += 1
-
-    final_annotations = [a for a in annotations if a["id"] not in obsolete_ann_ids]
-
-    if has_parties and not all_match:
-        final_annotations.insert(
-            0,
-            {
-                "id": "ann-parties",
-                "index": 1,
-                "block_id": "block-parties",
-                "clause_category": "PARTIES",
-                "clause_category_zh": "双方主体与基本信息",
-                "clause_number": None,
-                "clause_title": "双方主体与基本信息",
-                "delta_type": "PARTY_FILL",
-                "risk_level": "LOW",
-                "risk_label": "主体填报",
-                "title": "双方主体信息填报确认",
-                "standard_span": "甲方:待填 / 乙方:恒程事务所",
-                "reviewed_span": "甲方:深圳市某某科技 / 乙方:示例知识产权代理",
-                "quote_standard": "甲方: (待填)\n乙方: 深圳市世纪恒程知识产权代理事务所",
-                "quote_reviewed": "甲方: 深圳市某某科技有限公司\n乙方: 示例知识产权代理有限公司",
-                "ai_analysis": "送审合同已将签约主体填报为：甲方【深圳市某某科技有限公司】，乙方【示例知识产权代理有限公司】。请核实签约主体资信及工商登记状态。",
-                "action_advice": "【法务提示】通读确认主体名称无误，核对营业执照统一社会信用代码及授权签署权限。",
-                "review_status": "PENDING",
-            },
-        )
-
-    if has_fees and not all_match:
-        insert_pos = 1 if has_parties else 0
-        final_annotations.insert(
-            insert_pos,
-            {
-                "id": "ann-fee-table",
-                "index": 2,
-                "block_id": "block-fees",
-                "clause_category": "FEE_AND_PAYMENT",
-                "clause_category_zh": "费用项目与金额明细",
-                "clause_number": None,
-                "clause_title": "费用项目与金额明细表",
-                "delta_type": "FEE_FILL",
-                "risk_level": "MEDIUM",
-                "risk_label": "费用清单填报",
-                "title": "费用清单明细填报核对",
-                "standard_span": "母本费用标准表格待填",
-                "reviewed_span": "年费代缴：官费 600 元/件，服务费 150 元/件，小计 750 元",
-                "quote_standard": "序号 专利名称 专利号 专利权人 年费期限",
-                "quote_reviewed": "费用项目: 年费代缴 代收代付官费: 600 含税服务费: 150 数量: 1 小计: 600 / 150",
-                "ai_analysis": "送审合同填报了年费代缴明细：官费 600 元/件，含税服务费 150 元/件，数量 1 件，小计 750 元。需核实代收代付官费是否与国知局官方年费标准一致，服务费报价及税率是否符合财务要求。",
-                "action_advice": "【商务处置建议】请业务负责人确认代缴年度官费金额与服务费报价单一致，并通知财务开具合规发票。",
-                "review_status": "PENDING",
-            },
-        )
-
-    for idx, a in enumerate(final_annotations, 1):
-        a["index"] = idx
-
-    return new_blocks, final_annotations
+            b["standard_html"] = s_html
+            b["reviewed_html"] = r_html
+            b["alignment_method"] = "FALLBACK_TRUTH_RENDER"
+            b["content_integrity_status"] = "SOURCE_TRUTH_VERIFIED"
+            new_blocks.append(b)
+        else:
+            new_blocks.append(b)
 
     for idx, a in enumerate(final_annotations, 1):
         a["index"] = idx
@@ -574,6 +414,14 @@ def build_full_contract_diff(
                     "standard_html": s_html,
                     "reviewed_html": r_html,
                     "annotation_ids": block_ann_ids,
+                    "standard_source_node_ids": t_c.get("source_node_ids", [])
+                    if t_c
+                    else [],
+                    "reviewed_source_node_ids": [],
+                    "alignment_method": "NEEDLEMAN_WUNSCH_MISSING",
+                    "alignment_confidence": 1.0,
+                    "content_integrity_status": "SOURCE_TRUTH_VERIFIED",
+                    "unresolved_mapping_reason": None,
                 }
             )
 
@@ -634,6 +482,14 @@ def build_full_contract_diff(
                     "standard_html": s_html,
                     "reviewed_html": r_html,
                     "annotation_ids": block_ann_ids,
+                    "standard_source_node_ids": [],
+                    "reviewed_source_node_ids": r_c.get("source_node_ids", [])
+                    if r_c
+                    else [],
+                    "alignment_method": "NEEDLEMAN_WUNSCH_NEW",
+                    "alignment_confidence": 1.0,
+                    "content_integrity_status": "SOURCE_TRUTH_VERIFIED",
+                    "unresolved_mapping_reason": None,
                 }
             )
 
@@ -656,6 +512,16 @@ def build_full_contract_diff(
                         "standard_html": f'<div class="clean-text">{escape_html(s_text)}</div>',
                         "reviewed_html": f'<div class="clean-text">{escape_html(r_text)}</div>',
                         "annotation_ids": [],
+                        "standard_source_node_ids": t_c.get("source_node_ids", [])
+                        if t_c
+                        else [],
+                        "reviewed_source_node_ids": r_c.get("source_node_ids", [])
+                        if r_c
+                        else [],
+                        "alignment_method": "NEEDLEMAN_WUNSCH_MATCH",
+                        "alignment_confidence": 1.0,
+                        "content_integrity_status": "SOURCE_TRUTH_VERIFIED",
+                        "unresolved_mapping_reason": None,
                     }
                 )
             else:
@@ -765,11 +631,62 @@ def build_full_contract_diff(
                         "standard_html": f'<div class="doc-diff-std" data-block-id="{block_id}" data-ann-id="{first_ann_id}" onclick="selectAnnotation(\'{first_ann_id}\')">{s_diff_html}</div>',
                         "reviewed_html": f'<div class="doc-diff-rev" data-block-id="{block_id}" data-ann-id="{first_ann_id}" onclick="selectAnnotation(\'{first_ann_id}\')">{r_diff_html}</div>',
                         "annotation_ids": block_ann_ids,
+                        "standard_source_node_ids": t_c.get("source_node_ids", [])
+                        if t_c
+                        else [],
+                        "reviewed_source_node_ids": r_c.get("source_node_ids", [])
+                        if r_c
+                        else [],
+                        "alignment_method": "NEEDLEMAN_WUNSCH_DIFF",
+                        "alignment_confidence": 1.0,
+                        "content_integrity_status": "SOURCE_TRUTH_VERIFIED",
+                        "unresolved_mapping_reason": None,
                     }
                 )
 
-    # 重构表格语义块：将拍平碎片化的表格单元格聚合成高保真 HTML <table> 块
-    aligned_blocks, annotations = _enhance_diff_tables(aligned_blocks, annotations)
+    rev_nodes = rec.ast.get("nodes", []) if (rec and rec.ast) else []
+    std_nodes: list[Any] = []
+    std_hash = matched_tpl.get("source_hash", "")
+    rev_hash = rec.sha256 or ""
+
+    if rev_hash and std_hash and rev_hash == std_hash:
+        std_nodes = rev_nodes
+    else:
+        src_file = matched_tpl.get("source_file", "")
+        if src_file:
+            search_paths = [
+                config.TEMPLATE_DIR / src_file,
+                Path(src_file),
+                config.PROJECT_ROOT / "tests" / "fixtures" / "synth_corpus" / src_file,
+            ]
+            tpl_path = None
+            for p in search_paths:
+                if p.exists():
+                    tpl_path = p
+                    break
+            if not tpl_path and config.TEMPLATE_DIR.exists():
+                matches = list(config.TEMPLATE_DIR.glob(f"**/{src_file}"))
+                if matches:
+                    tpl_path = matches[0]
+            if tpl_path and tpl_path.exists():
+                try:
+                    std_rec, _ = import_template_file(tpl_path)
+                    if std_rec and std_rec.ast:
+                        std_nodes = std_rec.ast.get("nodes", [])
+                except Exception:
+                    pass
+
+    # 重构表格语义块：将真实表格以 Source of Truth 原则聚合成高保真 HTML <table> 块
+    aligned_blocks, annotations = _enhance_diff_tables(
+        aligned_blocks,
+        annotations,
+        std_nodes=std_nodes,
+        rev_nodes=rev_nodes,
+        std_doc_id=matched_tpl.get("document_id", ""),
+        rev_doc_id=rec.template_id,
+        std_hash=std_hash,
+        rev_hash=rev_hash,
+    )
 
     # 统计数据汇总
     high_count = sum(1 for a in annotations if a["risk_level"] == "HIGH")

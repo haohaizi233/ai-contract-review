@@ -37,6 +37,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import queue
 import re
@@ -88,6 +89,38 @@ CURRENT_SESSION_FILE = SESSION_CACHE_DIR / "current_active_review.docx"
 
 CURRENT_DOC_NAME: str = "《国内专利服务合同（年费缴纳）》送审修改稿"
 CURRENT_FORCED_TEMPLATE_ID: str | None = None
+
+
+def get_session_dir(session_id: str) -> Path:
+    """获取或创建指定会话的物理存储隔离目录。"""
+    clean_id = re.sub(r"[^a-zA-Z0-9_-]", "_", session_id) or "default_session"
+    s_dir = SESSION_CACHE_DIR / clean_id
+    s_dir.mkdir(parents=True, exist_ok=True)
+    return s_dir
+
+
+def get_session_file(session_id: str) -> Path:
+    return get_session_dir(session_id) / "contract.docx"
+
+
+def get_session_meta(session_id: str) -> dict[str, Any]:
+    meta_file = get_session_dir(session_id) / "meta.json"
+    if meta_file.exists():
+        try:
+            return json.loads(meta_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {
+        "doc_name": CURRENT_DOC_NAME,
+        "forced_template_id": None,
+    }
+
+
+def save_session_meta(session_id: str, meta: dict[str, Any]) -> None:
+    meta_file = get_session_dir(session_id) / "meta.json"
+    meta_file.write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def clean_template_title(raw_name: str) -> str:
@@ -281,7 +314,9 @@ def hot_reload_template_library() -> dict[str, Any]:
 
 
 def execute_current_diff(
-    doc_path: Path, forced_template_id: str | None = None
+    doc_path: Path,
+    forced_template_id: str | None = None,
+    doc_name: str | None = None,
 ) -> dict[str, Any]:
     """使用指定文档和可选强制母本执行整版条款对比与批注，并规范化用户面向名称。"""
     res = build_full_contract_diff(doc_path, forced_template_id=forced_template_id)
@@ -289,14 +324,15 @@ def execute_current_diff(
     conf = float(res.get("classification_confidence") or 0.0)
     is_manual = bool(forced_template_id or res.get("is_manual_override"))
 
+    target_name = doc_name or CURRENT_DOC_NAME
     # 规范化送审文档展示名称（彻底杜绝内部临时文件名）
-    res["doc_title"] = CURRENT_DOC_NAME
-    res["reviewed_doc_title"] = CURRENT_DOC_NAME
-    res["friendly_doc_title"] = CURRENT_DOC_NAME
-    res["display_doc_name"] = CURRENT_DOC_NAME
-    res["uploaded_file"] = CURRENT_DOC_NAME
-    res["uploaded_file_name"] = CURRENT_DOC_NAME
-    res["file_name"] = CURRENT_DOC_NAME
+    res["doc_title"] = target_name
+    res["reviewed_doc_title"] = target_name
+    res["friendly_doc_title"] = target_name
+    res["display_doc_name"] = target_name
+    res["uploaded_file"] = target_name
+    res["uploaded_file_name"] = target_name
+    res["file_name"] = target_name
 
     # 规范化基准母本展示名称（彻底杜绝底层十六进制哈希 ID）
     raw_tpl_name = res.get("matched_template_name") or ""
@@ -2910,7 +2946,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
 
 class DiffVisualizerHandler(BaseHTTPRequestHandler):
-    """处理前端页面与比对 API 请求。"""
+    """处理前端页面与比对 API 请求（具备多会话/多租户隔离与安全防护）。"""
 
     protocol_version = "HTTP/1.1"
 
@@ -2921,7 +2957,6 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             self.close_connection = True
 
     def log_message(self, format, *args):
-        # 正常请求打印日志，网络断开时不刷屏
         if args and any("Connection" in str(a) or "10053" in str(a) for a in args):
             return
         super().log_message(format, *args)
@@ -2931,8 +2966,27 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+
+    def _get_request_identity(self) -> tuple[str, str, str]:
+        """从 Query 参数或 Header 安全提取会话标识、租户标识与用户标识。"""
+        parsed = urllib.parse.urlparse(self.path)
+        qs = urllib.parse.parse_qs(parsed.query)
+
+        session_id = (
+            qs.get("session_id", [""])[0]
+            or self.headers.get("X-Session-ID")
+            or "default_session"
+        )
+        tenant_id = (
+            qs.get("tenant_id", [""])[0] or self.headers.get("X-Tenant-ID") or "default"
+        )
+        user_id = (
+            qs.get("user_id", [""])[0] or self.headers.get("X-User-ID") or "anonymous"
+        )
+        return session_id, tenant_id, user_id
 
     def do_GET(self):
         global CURRENT_DOC_NAME, CURRENT_FORCED_TEMPLATE_ID
@@ -2948,8 +3002,15 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
         elif parsed.path == "/api/diff/agent_stream":
+            session_id, tenant_id, user_id = self._get_request_identity()
             mgr = get_agent_manager()
-            sub_q = mgr.subscribe()
+            try:
+                sub_q = mgr.subscribe_events(
+                    session_id=session_id, tenant_id=tenant_id, user_id=user_id
+                )
+            except PermissionError as e:
+                self._send_json(403, {"error": str(e)})
+                return
 
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -2963,7 +3024,7 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                 while True:
                     try:
                         msg = sub_q.get(timeout=2.0)
-                        line = f"event: {msg['name']}\ndata: {json.dumps(msg['data'], ensure_ascii=False)}\n\n"
+                        line = f"event: {msg['event']}\ndata: {json.dumps(msg['data'], ensure_ascii=False)}\n\n"
                         self.wfile.write(line.encode("utf-8"))
                         self.wfile.flush()
                     except queue.Empty:
@@ -2978,31 +3039,37 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                 pass
             finally:
                 self.close_connection = True
-                mgr.unsubscribe(sub_q)
+                mgr.unsubscribe_events(sub_q, session_id=session_id)
             return
 
         elif parsed.path == "/api/templates/list":
+            session_id, _, _ = self._get_request_identity()
+            s_file = get_session_file(session_id)
+            if not s_file.exists():
+                s_file = CURRENT_SESSION_FILE
+            meta = get_session_meta(session_id)
             try:
                 catalog = get_ranked_templates_catalog(
-                    CURRENT_SESSION_FILE, CURRENT_FORCED_TEMPLATE_ID
+                    s_file, meta.get("forced_template_id")
                 )
                 self._send_json(200, {"success": True, "templates": catalog})
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
 
         elif parsed.path == "/api/diff/sample":
+            session_id, tenant_id, user_id = self._get_request_identity()
             qs = urllib.parse.parse_qs(parsed.query)
             key = qs.get("key", ["prescreen_tampered"])[0]
 
             try:
                 if key == "prescreen_tampered":
                     sample_file = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
-                    CURRENT_DOC_NAME = "《国内专利服务合同（年费缴纳）》送审修改稿"
+                    doc_name = "《国内专利服务合同（年费缴纳）》送审修改稿"
                 elif key == "missing_confidential":
                     sample_file = (
                         config.GOLDEN_DIR / "mut_06_missing_confidentiality.docx"
                     )
-                    CURRENT_DOC_NAME = (
+                    doc_name = (
                         "《国内专利服务合同（年费缴纳）》送审修改稿（保密义务被删）"
                     )
                 else:
@@ -3012,23 +3079,34 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                         if sample_files
                         else config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
                     )
-                    CURRENT_DOC_NAME = "《商标驳回复审代理协议》送审原稿"
+                    doc_name = "《商标驳回复审代理协议》送审原稿"
 
-                shutil.copyfile(sample_file, CURRENT_SESSION_FILE)
-                CURRENT_FORCED_TEMPLATE_ID = None
+                s_file = get_session_file(session_id)
+                shutil.copyfile(sample_file, s_file)
+                save_session_meta(
+                    session_id, {"doc_name": doc_name, "forced_template_id": None}
+                )
 
                 res = execute_current_diff(
-                    CURRENT_SESSION_FILE, forced_template_id=None
+                    s_file, forced_template_id=None, doc_name=doc_name
                 )
-                get_agent_manager().start_document_review(res)
+                res["session_id"] = session_id
+                get_agent_manager().start_document_review(
+                    res, session_id=session_id, tenant_id=tenant_id, user_id=user_id
+                )
                 self._send_json(200, res)
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
 
         elif parsed.path == "/api/diff/agent_status":
+            session_id, tenant_id, user_id = self._get_request_identity()
             try:
-                snap = get_agent_manager().get_current_snapshot()
+                snap = get_agent_manager().get_current_snapshot(
+                    session_id=session_id, tenant_id=tenant_id, user_id=user_id
+                )
                 self._send_json(200, snap)
+            except PermissionError as e:
+                self._send_json(403, {"error": str(e)})
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
 
@@ -3048,76 +3126,114 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": str(e)})
 
         elif parsed.path == "/api/diff/switch-template":
+            session_id, tenant_id, user_id = self._get_request_identity()
             length = int(self.headers.get("content-length", 0))
             raw_body = self.rfile.read(length) if length > 0 else b"{}"
             try:
                 data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
                 target_tpl_id = (data.get("template_id") or "").strip()
+                meta = get_session_meta(session_id)
                 if not target_tpl_id or target_tpl_id == "auto":
-                    CURRENT_FORCED_TEMPLATE_ID = None
+                    meta["forced_template_id"] = None
                 else:
-                    CURRENT_FORCED_TEMPLATE_ID = target_tpl_id
+                    meta["forced_template_id"] = target_tpl_id
+                save_session_meta(session_id, meta)
 
-                if not CURRENT_SESSION_FILE.exists():
+                s_file = get_session_file(session_id)
+                if not s_file.exists():
                     default_sample = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
-                    shutil.copyfile(default_sample, CURRENT_SESSION_FILE)
+                    shutil.copyfile(default_sample, s_file)
 
                 res = execute_current_diff(
-                    CURRENT_SESSION_FILE, forced_template_id=CURRENT_FORCED_TEMPLATE_ID
+                    s_file,
+                    forced_template_id=meta["forced_template_id"],
+                    doc_name=meta.get("doc_name"),
                 )
-                get_agent_manager().start_document_review(res)
+                res["session_id"] = session_id
+                get_agent_manager().start_document_review(
+                    res,
+                    force_restart=True,
+                    session_id=session_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                )
                 self._send_json(200, res)
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
 
         elif parsed.path == "/api/diff/prioritize_card":
+            session_id, tenant_id, user_id = self._get_request_identity()
             length = int(self.headers.get("content-length", 0))
             raw_body = self.rfile.read(length) if length > 0 else b"{}"
             try:
                 data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
                 ann_id = data.get("id") or ""
-                ok = get_agent_manager().prioritize_card(ann_id)
+                ok = get_agent_manager().prioritize_card(
+                    ann_id, session_id=session_id, tenant_id=tenant_id, user_id=user_id
+                )
                 self._send_json(200, {"success": ok})
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
 
         elif parsed.path == "/api/diff/toggle_pause":
+            session_id, tenant_id, user_id = self._get_request_identity()
             try:
-                cur_status = get_agent_manager().toggle_pause()
+                cur_status = get_agent_manager().toggle_pause(
+                    session_id=session_id, tenant_id=tenant_id, user_id=user_id
+                )
                 self._send_json(200, {"status": cur_status})
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
 
         elif parsed.path == "/api/diff/rerun_review":
+            session_id, tenant_id, user_id = self._get_request_identity()
             try:
-                if CURRENT_SESSION_FILE.exists():
+                s_file = get_session_file(session_id)
+                if not s_file.exists():
+                    s_file = CURRENT_SESSION_FILE
+                if s_file.exists():
+                    meta = get_session_meta(session_id)
                     res = execute_current_diff(
-                        CURRENT_SESSION_FILE,
-                        forced_template_id=CURRENT_FORCED_TEMPLATE_ID,
+                        s_file,
+                        forced_template_id=meta.get("forced_template_id"),
+                        doc_name=meta.get("doc_name"),
                     )
-                    get_agent_manager().start_document_review(res, force_restart=True)
+                    res["session_id"] = session_id
+                    get_agent_manager().start_document_review(
+                        res,
+                        force_restart=True,
+                        session_id=session_id,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                    )
                 self._send_json(200, {"success": True})
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
 
         elif parsed.path == "/api/diff/retry_card":
+            session_id, tenant_id, user_id = self._get_request_identity()
             length = int(self.headers.get("content-length", 0))
             raw_body = self.rfile.read(length) if length > 0 else b"{}"
             try:
                 data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
                 ann_id = data.get("id") or ""
-                ok = get_agent_manager().retry_card(ann_id)
+                ok = get_agent_manager().retry_card(
+                    ann_id, session_id=session_id, tenant_id=tenant_id, user_id=user_id
+                )
                 self._send_json(200, {"success": ok})
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
 
         elif parsed.path == "/api/diff/skip_card":
+            session_id, tenant_id, user_id = self._get_request_identity()
             length = int(self.headers.get("content-length", 0))
             raw_body = self.rfile.read(length) if length > 0 else b"{}"
             try:
                 data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
                 ann_id = data.get("id") or ""
-                ok = get_agent_manager().skip_card(ann_id)
+                ok = get_agent_manager().skip_card(
+                    ann_id, session_id=session_id, tenant_id=tenant_id, user_id=user_id
+                )
                 self._send_json(200, {"success": ok})
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
@@ -3145,11 +3261,68 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                 self._send_json(200, res)
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
+        elif parsed.path == "/api/diff/cancel":
+            session_id, tenant_id, user_id = self._get_request_identity()
+            try:
+                ok = get_agent_manager().cancel_task(
+                    session_id=session_id, tenant_id=tenant_id, user_id=user_id
+                )
+                self._send_json(200, {"success": ok})
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/diff/human_decision":
+            session_id, tenant_id, user_id = self._get_request_identity()
+            length = int(self.headers.get("content-length", 0))
+            raw_body = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+                ann_id = str(data.get("id") or data.get("annotation_id") or "")
+                decision = str(data.get("decision") or "ACCEPTED").upper()
+                modified_advice = str(data.get("modified_advice") or "")
+
+                sess = get_agent_manager().get_session(
+                    session_id, tenant_id=tenant_id, user_id=user_id
+                )
+                if not sess:
+                    self._send_json(404, {"error": "session_not_found"})
+                    return
+
+                with sess._lock:
+                    card = sess.annotations_map.get(ann_id)
+                    if card:
+                        if decision == "ACCEPTED":
+                            card["human_review_status"] = "HUMAN_ACCEPTED"
+                        elif decision == "REJECTED":
+                            card["human_review_status"] = "HUMAN_REJECTED"
+                        elif decision == "MODIFIED":
+                            card["human_review_status"] = "HUMAN_MODIFIED"
+                            card["human_modified_advice"] = modified_advice
+                        sess._save_checkpoint()
+                self._send_json(200, {"success": True, "card": card})
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
         elif parsed.path == "/api/diff/upload":
+            length = int(self.headers.get("content-length", 0))
+            # 25MB 上传体积限制防护
+            if length > 25 * 1024 * 1024:
+                self._send_json(
+                    413,
+                    {
+                        "error": "payload_too_large",
+                        "message": "上传文件大小超出 25MB 限制",
+                    },
+                )
+                return
+
+            session_id, tenant_id, user_id = self._get_request_identity()
+            if session_id == "default_session":
+                session_id = f"sess_{hashlib.sha256(str(time.time_ns()).encode()).hexdigest()[:16]}"
+
             ctype = self.headers.get("content-type", "")
             if "multipart/form-data" in ctype and "boundary=" in ctype:
                 boundary = ctype.split("boundary=")[-1].strip().encode("utf-8")
-                length = int(self.headers.get("content-length", 0))
                 body = self.rfile.read(length)
                 parts = body.split(b"--" + boundary)
                 file_bytes = None
@@ -3171,19 +3344,28 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
 
                 if file_bytes:
                     stem_clean = Path(file_name).stem
-                    CURRENT_DOC_NAME = (
+                    doc_name = (
                         f"《{stem_clean}》送审稿"
                         if not stem_clean.startswith("《")
                         else stem_clean
                     )
-                    CURRENT_FORCED_TEMPLATE_ID = None
-                    CURRENT_SESSION_FILE.write_bytes(file_bytes)
+                    s_file = get_session_file(session_id)
+                    s_file.write_bytes(file_bytes)
+                    save_session_meta(
+                        session_id, {"doc_name": doc_name, "forced_template_id": None}
+                    )
 
                     try:
                         res = execute_current_diff(
-                            CURRENT_SESSION_FILE, forced_template_id=None
+                            s_file, forced_template_id=None, doc_name=doc_name
                         )
-                        get_agent_manager().start_document_review(res)
+                        res["session_id"] = session_id
+                        get_agent_manager().start_document_review(
+                            res,
+                            session_id=session_id,
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                        )
                         self._send_json(200, res)
                         return
                     except Exception as e:
