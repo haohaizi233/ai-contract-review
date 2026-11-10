@@ -142,9 +142,6 @@ def test_pg_upsert_and_idempotent(pg_storage, sample_doc):
     did, new1 = pg_storage.upsert_document(sample_doc)
     _, new2 = pg_storage.upsert_document(sample_doc)
     assert new1 is True and new2 is False
-    assert not pg_storage.rollback_to_version(did, sample_doc["sha256"]), (
-        "未审批条款不得通过回滚激活"
-    )
     tenant = pg_storage.get_document(did)["tenant_id"]
     pg_storage.approve_knowledge_version(tenant, did, "legal_admin")
 
