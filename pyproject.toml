@@ -69,3 +69,10 @@ ignore_missing_imports = true
 
 [tool.setuptools.packages.find]
 include = ["contract_kb*"]
+
+[tool.setuptools.package-data]
+contract_kb = [
+    "interfaces/web/templates/*.html",
+    "interfaces/web/static/css/*.css",
+    "interfaces/web/static/js/*.js",
+]
