@@ -29,15 +29,16 @@ class SecurityCheckResult:
 def security_check_file(path: Path) -> SecurityCheckResult:
     res = SecurityCheckResult(passed=True)
     size = path.stat().st_size
+    max_file_size = 50 * 1024 * 1024
     res.checks.append(
         {
             "check": "file_size",
             "value": size,
-            "limit": 20 * 1024 * 1024,
-            "passed": size <= 20 * 1024 * 1024,
+            "limit": max_file_size,
+            "passed": size <= max_file_size,
         }
     )
-    if size > 20 * 1024 * 1024:
+    if size > max_file_size:
         res.passed = False
         res.rejected_reason = "file_too_large"
         return res
@@ -59,7 +60,8 @@ def security_check_file(path: Path) -> SecurityCheckResult:
     with open(path, "rb") as _fh:
         head = _fh.read(4)
 
-    if ext == ".docx":
+    is_docx = (ext == ".docx") or (ext == ".doc" and head == b"PK\x03\x04")
+    if is_docx:
         magic_ok = head == b"PK\x03\x04"
         res.checks.append(
             {"check": "magic_bytes", "value": head.hex(), "passed": magic_ok}

@@ -624,14 +624,21 @@ def _build_parsed_doc_from_text(
 def parse_document(
     path: Path | str, document_id: Optional[str] = None
 ) -> ParsedDocument:
-    """统一多格式文档解析入口：支持 .docx、.doc、.pdf。"""
+    """统一多格式文档解析入口：支持 .docx、.doc、.pdf（支持按 Magic Bytes 自动纠偏）。"""
     path = Path(path)
     suffix = path.suffix.lower()
-    if suffix == ".docx":
+    magic4 = b""
+    try:
+        with open(path, "rb") as _fh:
+            magic4 = _fh.read(4)
+    except Exception:
+        pass
+
+    if suffix == ".docx" or magic4 == b"PK\x03\x04":
         return parse_docx(path, document_id=document_id)
     elif suffix == ".doc":
         return parse_doc(path, document_id=document_id)
-    elif suffix == ".pdf":
+    elif suffix == ".pdf" or magic4 == b"%PDF":
         return parse_pdf(path, document_id=document_id)
     else:
         raise ValueError(f"不支持的合同文档格式: {suffix}（仅支持 .docx, .doc, .pdf）")

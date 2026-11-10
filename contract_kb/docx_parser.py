@@ -102,6 +102,8 @@ def _para_text(p_el) -> str:
     """全面提取段落文本，包含常规文本、制表符、硬/软回车、特殊连字符及符号，并递归提取文本框。"""
     parts: list[str] = []
     for el in p_el.iter():
+        if not isinstance(el.tag, str):
+            continue
         tag = etree.QName(el).localname
         if tag == "t":
             parts.append(el.text or "")
@@ -127,7 +129,7 @@ def _para_text(p_el) -> str:
             if sub_t and sub_t not in txbx_texts:
                 txbx_texts.append(sub_t)
     for el in p_el.iter():
-        if etree.QName(el).localname == "textbox":
+        if isinstance(el.tag, str) and etree.QName(el).localname == "textbox":
             for sub_p in el.iter(f"{{{W}}}p"):
                 sub_t = "".join(t.text or "" for t in sub_p.iter(f"{{{W}}}t")).strip()
                 if sub_t and sub_t not in txbx_texts:
@@ -388,6 +390,8 @@ def parse_docx(path, document_id: Optional[str] = None) -> ParsedDocument:
             doc.nodes.append(node)
 
         for bi, child in enumerate(body):
+            if not isinstance(child.tag, str):
+                continue
             tag = etree.QName(child).localname
             locator_base = {
                 "body_child_index": bi,

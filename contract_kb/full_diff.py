@@ -159,17 +159,28 @@ def _enhance_diff_tables(
             table_blocks.append(tbl_block)
             table_annotations.extend(tbl_anns)
 
-        # 过滤掉 aligned_blocks 中残留的散落单元格碎片
-        for b in aligned_blocks:
-            src_nodes = (b.get("standard_source_node_ids") or []) + (
-                b.get("reviewed_source_node_ids") or []
+        # Only remove fragments whose entire provenance is covered by reconstructed tables.
+        # Text/category coincidence is not evidence: a real body obligation may repeat a cell.
+        table_node_ids = {
+            node.node_id
+            for table in std_tables + rev_tables
+            for node in table.nodes
+        }
+        dropped_block_ids: set[str] = set()
+        for block in aligned_blocks:
+            source_ids = (block.get("standard_source_node_ids") or []) + (
+                block.get("reviewed_source_node_ids") or []
             )
-            if (
-                any(":tbl" in str(n) for n in src_nodes)
-                or b.get("clause_category") == "TABLE_NOTE"
-            ):
+            if source_ids and all(node_id in table_node_ids for node_id in source_ids):
+                if block.get("block_id"):
+                    dropped_block_ids.add(block["block_id"])
                 continue
-            new_blocks.append(b)
+            new_blocks.append(block)
+
+        # 过滤掉属于散落单元格碎片的废弃批注
+        filtered_annotations = [
+            a for a in final_annotations if a.get("block_id") not in dropped_block_ids
+        ]
 
         # 依据表格业务语义合理插入：主体表放首部，费用与标的清单表放对应章节位置，其他顺延
         front_tbls = [
@@ -187,7 +198,7 @@ def _enhance_diff_tables(
         for idx, b in enumerate(combined_blocks):
             b["order"] = idx
 
-        combined_annotations = table_annotations + final_annotations
+        combined_annotations = table_annotations + filtered_annotations
         for idx, a in enumerate(combined_annotations, 1):
             a["index"] = idx
 
@@ -268,10 +279,23 @@ def build_full_contract_diff(
             matched_tpl = st.find_active_template(
                 contract_subtype=rec.subtype, business_category=rec.category
             )
+        if not matched_tpl and rec.category:
+            # 降级：按大类寻找活跃母本
+            matched_tpl = st.find_active_template(business_category=rec.category)
         if not matched_tpl:
-            raise ValueError(f"未能在标准库中找到业务子类 [{rec.subtype}] 的基准模板")
+            raise ValueError(
+                f"未能找到业务子类 [{rec.subtype}] / 大类 [{rec.category}] 的活跃基准母本，请手动指定模板"
+            )
 
-        tpl_clauses = st.get_document_clauses(matched_tpl["document_id"])
+        if (
+            rec.sha256
+            and matched_tpl.get("source_hash")
+            and rec.sha256 == matched_tpl["source_hash"]
+        ):
+            # 待审文档与母本物理文件完全一致（模板自测核验），采用同源直出条款，杜绝历史数据库缓存差异
+            tpl_clauses = [dict(c) for c in (rec.clauses or [])]
+        else:
+            tpl_clauses = st.get_document_clauses(matched_tpl["document_id"])
     finally:
         if should_close:
             st.close()
@@ -675,6 +699,24 @@ def build_full_contract_diff(
                         std_nodes = std_rec.ast.get("nodes", [])
                 except Exception:
                     pass
+
+        # 若未从文件直接解析出 std_nodes，尝试从 AST 持久化缓存中加载，保障表格结构保真
+        if not std_nodes:
+            import json
+            doc_id = matched_tpl.get("document_id", "")
+            ast_candidates = [
+                config.DATA_DIR / "ast" / f"{doc_id}.json",
+                config.DATA_DIR / "ast" / f"{std_hash}.json",
+            ]
+            for ast_p in ast_candidates:
+                if ast_p.exists():
+                    try:
+                        ast_obj = json.loads(ast_p.read_text(encoding="utf-8"))
+                        if ast_obj and "nodes" in ast_obj:
+                            std_nodes = ast_obj["nodes"]
+                            break
+                    except Exception:
+                        pass
 
     # 重构表格语义块：将真实表格以 Source of Truth 原则聚合成高保真 HTML <table> 块
     aligned_blocks, annotations = _enhance_diff_tables(
