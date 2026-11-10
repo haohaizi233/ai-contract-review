@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 import json
 from contract_kb.domain.models.review_identity import HumanReviewStatus
@@ -23,6 +24,20 @@ def handle_post_rerun_review(handler: Any) -> None:
     try:
         s_file = get_session_file(session_id, tenant_id=tenant_id)
         if not s_file.exists():
+            is_enterprise = os.environ.get(
+                "DIFF_WEB_MODE", ""
+            ).upper() == "ENTERPRISE" or bool(
+                os.environ.get("CONTRACT_KB_AUTH_SHARED_KEY")
+            )
+            if is_enterprise:
+                handler._send_json(
+                    404,
+                    {
+                        "error": "session_file_not_found",
+                        "message": "当前会话无待审合同文件，严禁回退他租户文档",
+                    },
+                )
+                return
             s_file = CURRENT_SESSION_FILE
         if s_file.exists():
             meta = get_session_meta(session_id, tenant_id=tenant_id)
@@ -42,14 +57,15 @@ def handle_post_rerun_review(handler: Any) -> None:
                 user_id=user_id,
             )
         handler._send_json(200, {"success": True})
+    except PermissionError as e:
+        handler._send_json(403, {"error": str(e)})
     except Exception as e:
         handler._send_json(500, {"error": str(e)})
 
 
 def handle_post_human_decision(handler: Any) -> None:
     session_id, tenant_id, user_id = handler._get_request_identity()
-    length = int(handler.headers.get("content-length", 0))
-    raw_body = handler.rfile.read(length) if length > 0 else b"{}"
+    raw_body = handler.get_request_body()
     try:
         data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         ann_id = str(data.get("id") or data.get("annotation_id") or "")

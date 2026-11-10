@@ -53,17 +53,19 @@ def handle_get_ref_templates_catalog(handler: Any) -> None:
 
 
 def handle_post_templates_reload(handler: Any) -> None:
+    handler._get_request_identity()
     try:
         res = hot_reload_template_library()
         handler._send_json(200, res)
+    except PermissionError as e:
+        handler._send_json(403, {"error": str(e)})
     except Exception as e:
         handler._send_json(500, {"error": str(e)})
 
 
 def handle_post_switch_template(handler: Any) -> None:
     session_id, tenant_id, user_id = handler._get_request_identity()
-    length = int(handler.headers.get("content-length", 0))
-    raw_body = handler.rfile.read(length) if length > 0 else b"{}"
+    raw_body = handler.get_request_body()
     try:
         data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         target_tpl_id = (data.get("template_id") or "").strip()
@@ -95,14 +97,15 @@ def handle_post_switch_template(handler: Any) -> None:
             user_id=user_id,
         )
         handler._send_json(200, res)
+    except PermissionError as e:
+        handler._send_json(403, {"error": str(e)})
     except Exception as e:
         handler._send_json(500, {"error": str(e)})
 
 
 def handle_post_ref_templates_load(handler: Any) -> None:
     session_id, tenant_id, user_id = handler._get_request_identity()
-    length = int(handler.headers.get("content-length", 0))
-    raw_body = handler.rfile.read(length) if length > 0 else b"{}"
+    raw_body = handler.get_request_body()
     try:
         data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         rel_path = (data.get("rel_path") or "").strip()

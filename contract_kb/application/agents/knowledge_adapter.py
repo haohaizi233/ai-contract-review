@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 from dataclasses import asdict, dataclass
@@ -218,16 +219,22 @@ def retrieve_governed_rules(
                             ),
                         )
                     )
+            # 数据库查询完毕后直接返回。若数据库中无生效规则（如全部被撤销），严禁回退至静态字典！
+            return matching_rules
         except Exception:
-            pass
+            return []
 
-    # 2. 备选结构化基准规则（在数据库无特定规则时生效，严格过滤非 APPROVED 状态）
-    if not matching_rules:
-        for rule in GOVERNED_RULES_STORE.values():
-            if not allow_unapproved and rule.approval_status != "APPROVED":
-                continue
-            if rule.clause_category == cat_key or rule.clause_category == "ALL":
-                matching_rules.append(rule)
+    # 2. 当未提供 storage 时的行为：
+    # 在生产模式 (CONTRACT_KB_ENV=production) 下必须严格 Fail-Closed，绝不能使用静态字典
+    if os.environ.get("CONTRACT_KB_ENV", "").lower() == "production":
+        return []
+
+    # 在开发/测试模式下，可从 GOVERNED_RULES_STORE 读取，但严格过滤非 APPROVED 状态（支持测试注入与示例验证）
+    for rule in GOVERNED_RULES_STORE.values():
+        if not allow_unapproved and rule.approval_status != "APPROVED":
+            continue
+        if rule.clause_category == cat_key or rule.clause_category == "ALL":
+            matching_rules.append(rule)
 
     return matching_rules
 
@@ -245,6 +252,8 @@ def retrieve_legal_rules(
     rules = retrieve_governed_rules(
         category,
         delta_type,
+        standard_span=standard_span,
+        reviewed_span=reviewed_span,
         tenant_id=tenant_id,
         storage=storage,
     )
@@ -262,7 +271,7 @@ def retrieve_legal_rules(
             )
     else:
         rules_parts.append(
-            "【企业通用风控指引】所有非标条款变动均需评估权利义务对等性，严防单方加重责任或减损救济途径。"
+            "【企业通用风控指引】所有非标条款变动均需评估权利义务对等性，严防单方加重责任或减损救济途径。（注：当前未匹配到企业生效已审批风控红线，相关研判仅供参考，必须由法务人工复核）"
         )
 
     # 关键变动专项要点
@@ -381,7 +390,12 @@ def record_user_feedback(
                 or sample_data.get("is_approved_for_training", False)
             )
 
-    raw_dir = FEEDBACK_BASE_DIR / "raw_feedback"
+    if tenant_id and tenant_id != "default":
+        tenant_base = FEEDBACK_BASE_DIR / tenant_id
+    else:
+        tenant_base = FEEDBACK_BASE_DIR
+
+    raw_dir = tenant_base / "raw_feedback"
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     # 确定是否划入评估保留集（按文档哈希确定性切分，防数据泄露）
@@ -431,7 +445,7 @@ def record_user_feedback(
         f.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
 
     if is_approved:
-        rev_dir = FEEDBACK_BASE_DIR / "reviewed_feedback"
+        rev_dir = tenant_base / "reviewed_feedback"
         rev_dir.mkdir(parents=True, exist_ok=True)
         rev_file = rev_dir / "reviewed_events.jsonl"
         with rev_file.open("a", encoding="utf-8") as rf:
@@ -443,15 +457,23 @@ def record_user_feedback(
 def export_sft_dataset(
     output_path: str | Path | None = None,
     require_approval: bool = True,
+    tenant_id: str = "default",
 ) -> dict[str, Any]:
-    """严格导出训练集与评估测试集（物理隔离，严禁同合同/同条款数据穿透）。"""
-    raw_file = FEEDBACK_BASE_DIR / "raw_feedback" / "feedback_events.jsonl"
-    if not raw_file.exists():
-        return {"train_count": 0, "eval_count": 0, "message": "暂无反馈数据"}
+    """严格导出训练集与评估测试集（物理隔离，严禁同合同/同条款数据穿透，强制租户作用域）。"""
+    if tenant_id and tenant_id != "default":
+        tenant_base = FEEDBACK_BASE_DIR / tenant_id
+    else:
+        tenant_base = FEEDBACK_BASE_DIR
 
-    rev_dir = FEEDBACK_BASE_DIR / "reviewed_feedback"
-    train_dir = FEEDBACK_BASE_DIR / "approved_training_samples"
-    eval_dir = FEEDBACK_BASE_DIR / "evaluation_holdout"
+    raw_file = tenant_base / "raw_feedback" / "feedback_events.jsonl"
+    if not raw_file.exists():
+        raw_file = FEEDBACK_BASE_DIR / "raw_feedback" / "feedback_events.jsonl"
+        if not raw_file.exists():
+            return {"train_count": 0, "eval_count": 0, "message": "暂无反馈数据"}
+
+    rev_dir = tenant_base / "reviewed_feedback"
+    train_dir = tenant_base / "approved_training_samples"
+    eval_dir = tenant_base / "evaluation_holdout"
     rev_dir.mkdir(parents=True, exist_ok=True)
     train_dir.mkdir(parents=True, exist_ok=True)
     eval_dir.mkdir(parents=True, exist_ok=True)

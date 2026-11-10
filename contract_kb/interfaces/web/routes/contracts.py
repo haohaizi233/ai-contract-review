@@ -84,7 +84,7 @@ def handle_post_upload(handler: Any) -> None:
     ctype = handler.headers.get("content-type", "")
     if "multipart/form-data" in ctype and "boundary=" in ctype:
         boundary = ctype.split("boundary=")[-1].strip().encode("utf-8")
-        body = handler.rfile.read(length)
+        body = handler.get_request_body()
         parts = body.split(b"--" + boundary)
         file_bytes = None
         file_name = "待审合同.docx"
@@ -104,13 +104,25 @@ def handle_post_upload(handler: Any) -> None:
                     break
 
         if file_bytes:
-            stem_clean = Path(file_name).stem
+            # 防路径穿越：仅提取基础文件名
+            safe_name = Path(file_name).name
+            ext = Path(safe_name).suffix.lower()
+            if ext not in (".docx", ".doc", ".pdf"):
+                handler._send_json(
+                    400,
+                    {
+                        "error": "unsupported_file_type",
+                        "message": "仅支持上传 docx, doc, pdf 格式合同",
+                    },
+                )
+                return
+
+            stem_clean = Path(safe_name).stem
             doc_name = (
                 f"《{stem_clean}》送审稿"
                 if not stem_clean.startswith("《")
                 else stem_clean
             )
-            ext = Path(file_name).suffix.lower() or ".docx"
             s_file = prepare_session_file(session_id, ext=ext, tenant_id=tenant_id)
             s_file.write_bytes(file_bytes)
             save_session_meta(
@@ -133,6 +145,9 @@ def handle_post_upload(handler: Any) -> None:
                     user_id=user_id,
                 )
                 handler._send_json(200, res)
+                return
+            except PermissionError as e:
+                handler._send_json(403, {"error": str(e)})
                 return
             except Exception as e:
                 handler._send_json(500, {"error": str(e)})

@@ -262,6 +262,8 @@ class LegalReviewAgent:
         failure_code: str = "FALLBACK_RULE",
         source: str = "FALLBACK_RULE",
         elapsed_sec: float = 0.0,
+        tenant_id: str = "default",
+        storage: Any = None,
     ) -> dict[str, Any]:
         """从企业法务已审批红线知识底座生成确定性规则兜底研判（明确标记 AI 未完成）。"""
         ann_id = annotation.get("id", "ann-0")
@@ -270,8 +272,13 @@ class LegalReviewAgent:
             annotation.get("ai_analysis", "") or "待审合同条款与标准母本存在实质差异。"
         )
 
-        # 匹配已审批规则
-        governed_rules = retrieve_governed_rules(category, annotation.get("delta_type"))
+        # 匹配已审批规则（绑定当前租户与受控存储）
+        governed_rules = retrieve_governed_rules(
+            category,
+            annotation.get("delta_type"),
+            tenant_id=tenant_id,
+            storage=storage,
+        )
         rule = governed_rules[0] if governed_rules else None
 
         if rule:
@@ -311,7 +318,12 @@ class LegalReviewAgent:
                 "action_advice",
                 "【法务处置建议】请法务人员人工复核此项条款修改并评估商业风险。",
             )
-            risk_level = annotation.get("risk_level", "MEDIUM")
+            risk_level = annotation.get(
+                "risk_level",
+                "HIGH"
+                if category in ("LIABILITY", "DISPUTE_RESOLUTION", "CONFIDENTIALITY")
+                else "MEDIUM",
+            )
             risk_label = annotation.get("risk_label", "需法务人工复核")
             evidence_refs = []
 
@@ -344,6 +356,7 @@ class LegalReviewAgent:
         annotation: dict[str, Any],
         doc_context: dict[str, Any] | None = None,
         force_refresh: bool = False,
+        storage: Any = None,
     ) -> dict[str, Any]:
         """对单个合同差异批注进行法务 Agent 深度智能研判（全链路受控与容灾保障）。"""
         ann_id = annotation.get("id", "ann-0")
@@ -371,6 +384,11 @@ class LegalReviewAgent:
             ctx.get("rule_set_version") or annotation.get("rule_set_version") or "v1"
         )
 
+        if storage is None and ctx.get("storage"):
+            storage = ctx.get("storage")
+        if storage is None:
+            storage = getattr(self, "storage", None)
+
         cache_key = self._cache_key(
             category=category,
             delta_type=delta_type,
@@ -386,10 +404,35 @@ class LegalReviewAgent:
         if not force_refresh:
             with self._cache_lock:
                 if cache_key in self._cache:
-                    res = dict(self._cache[cache_key])
-                    res["id"] = ann_id
-                    res["from_cache"] = True
-                    return res
+                    cached_res = dict(self._cache[cache_key])
+                    # 缓存有效性复核：核验缓存所绑定的证据规则当前是否依然处于 APPROVED 状态
+                    cached_refs = cached_res.get("evidence_references") or []
+                    cache_valid = True
+                    if (
+                        storage is not None
+                        and hasattr(storage, "get_rules")
+                        and cached_refs
+                    ):
+                        try:
+                            active_rules = storage.get_rules(
+                                tenant_id=tenant_id, status="APPROVED"
+                            )
+                            active_ids = {str(r.get("rule_id")) for r in active_rules}
+                            for cr in cached_refs:
+                                if (
+                                    cr.get("approval_status") == "APPROVED"
+                                    and cr.get("rule_id") not in active_ids
+                                ):
+                                    cache_valid = False
+                                    break
+                        except Exception:
+                            pass
+                    if cache_valid:
+                        cached_res["id"] = ann_id
+                        cached_res["from_cache"] = True
+                        return cached_res
+                    else:
+                        del self._cache[cache_key]
 
         # 1. 安全授权门禁检查（禁止未经授权的外部出境）
         if not self.is_external_allowed():
@@ -399,6 +442,8 @@ class LegalReviewAgent:
                 failure_code="NOT_AUTHORIZED",
                 source="AUTHORIZATION_GATE",
                 elapsed_sec=0.01,
+                tenant_id=tenant_id,
+                storage=storage,
             )
 
         # 2. 端点有效性与 SSRF 检查
@@ -409,6 +454,8 @@ class LegalReviewAgent:
                 failure_code="NOT_CONFIGURED",
                 source="CONFIGURATION_GATE",
                 elapsed_sec=0.01,
+                tenant_id=tenant_id,
+                storage=storage,
             )
 
         url_ok, url_err = _is_safe_endpoint_url(self.base_url)
@@ -419,6 +466,8 @@ class LegalReviewAgent:
                 failure_code="SSRF_BLOCKED",
                 source="SECURITY_GATE",
                 elapsed_sec=0.01,
+                tenant_id=tenant_id,
+                storage=storage,
             )
 
         if not self.api_key:
@@ -428,6 +477,8 @@ class LegalReviewAgent:
                 failure_code="NOT_CONFIGURED",
                 source="CONFIGURATION_GATE",
                 elapsed_sec=0.01,
+                tenant_id=tenant_id,
+                storage=storage,
             )
 
         # 3. 自适应熔断器拦截
@@ -438,6 +489,8 @@ class LegalReviewAgent:
                 failure_code="CIRCUIT_OPEN",
                 source="CIRCUIT_BREAKER_FALLBACK",
                 elapsed_sec=0.01,
+                tenant_id=tenant_id,
+                storage=storage,
             )
 
         # 4. 从可信知识底座检索匹配的已审批企业规则
@@ -446,14 +499,30 @@ class LegalReviewAgent:
             delta_type=delta_type,
             standard_span=std_span,
             reviewed_span=rev_span,
+            tenant_id=tenant_id,
+            storage=storage,
         )
-        governed_rules = retrieve_governed_rules(category, delta_type)
+        governed_rules = retrieve_governed_rules(
+            category,
+            delta_type,
+            standard_span=std_span,
+            reviewed_span=rev_span,
+            tenant_id=tenant_id,
+            storage=storage,
+        )
         evidence_refs = [
             {
+                "source_type": "APPROVED_RULE"
+                if r.approval_status == "APPROVED"
+                else "STATIC_REFERENCE",
+                "tenant_id": tenant_id,
                 "rule_id": r.rule_id,
                 "rule_name": r.name,
                 "revision": r.revision,
                 "approval_status": r.approval_status,
+                "verification_status": "VERIFIED"
+                if r.approval_status == "APPROVED"
+                else "UNVERIFIED",
                 "is_statutory": r.is_statutory_mandate,
             }
             for r in governed_rules
@@ -650,6 +719,42 @@ class LegalReviewAgent:
                 source="SCHEMA_VALIDATION_FALLBACK",
                 elapsed_sec=elapsed,
             )
+
+        # TOCTOU 审批撤销复核：核验证据规则在推理期间是否被法务管理员撤销
+        if storage is not None and hasattr(storage, "get_rules") and evidence_refs:
+            try:
+                active_rules_now = storage.get_rules(
+                    tenant_id=tenant_id, status="APPROVED"
+                )
+                active_ids_now = {str(r.get("rule_id")) for r in active_rules_now}
+                revoked_in_flight = [
+                    str(ref["rule_id"])
+                    for ref in evidence_refs
+                    if ref.get("approval_status") == "APPROVED"
+                    and ref.get("rule_id") not in active_ids_now
+                ]
+                if revoked_in_flight:
+                    result["review_status"] = ReviewStatus.NEEDS_HUMAN_REVIEW.value
+                    result["requires_human_review"] = True
+                    result["toctou_revocation_detected"] = True
+                    result["ai_analysis"] = (
+                        f"【规则撤销失效警报】所依据风控规则 ({', '.join(revoked_in_flight)}) 在审核期间已被法务管理员撤销！"
+                        f"原权威依据失效，必须由法务重新人工复核。旧研判参考：{result.get('ai_analysis')}"
+                    )
+                    result["evidence_references"] = [
+                        {
+                            **ref,
+                            "approval_status": "REVOKED",
+                            "verification_status": "REVOKED",
+                        }
+                        if ref["rule_id"] in revoked_in_flight
+                        else ref
+                        for ref in evidence_refs
+                    ]
+                    # 阻断失效结论存入持久缓存
+                    return result
+            except Exception:
+                pass
 
         # 写入缓存
         with self._cache_lock:

@@ -162,6 +162,11 @@ class AgentReviewSession:
             self.doc_context = {
                 "uploaded_file": doc_name,
                 "matched_template_name": matched_tpl,
+                "tenant_id": self.tenant_id,
+                "user_id": self.user_id,
+                "template_id": fp.template_id,
+                "template_version": fp.template_version,
+                "rule_set_version": fp.rule_set_version,
             }
 
             if force_restart or not file_hash:
@@ -627,6 +632,10 @@ class AgentReviewManager:
                     raise PermissionError(
                         f"跨租户越权阻断: Session {session_id} 归属 {sess.tenant_id}，拒绝 {tenant_id} 访问"
                     )
+                if user_id != "system_admin" and sess.user_id != user_id:
+                    raise PermissionError(
+                        f"跨用户越权阻断: Session {session_id} 归属 {sess.user_id}，拒绝 {user_id} 访问"
+                    )
                 sess._manager = self
                 return sess
             sess = AgentReviewSession(session_id, tenant_id, user_id)
@@ -734,14 +743,11 @@ class AgentReviewManager:
                 raise PermissionError(
                     f"跨租户越权阻断: Session {session_id} 归属 {sess.tenant_id}，拒绝 {tenant_id} 访问"
                 )
-            if (
-                user_id is not None
-                and sess.user_id != user_id
-                and user_id != "anonymous"
-            ):
-                raise PermissionError(
-                    f"跨用户越权阻断: Session {session_id} 归属 {sess.user_id}，拒绝 {user_id} 访问"
-                )
+            if user_id is not None and user_id != "system_admin":
+                if sess.user_id != user_id:
+                    raise PermissionError(
+                        f"跨用户越权阻断: Session {session_id} 归属 {sess.user_id}，拒绝 {user_id} 访问"
+                    )
             return sess
 
     # 兼容现有调用 API
@@ -766,9 +772,13 @@ class AgentReviewManager:
         return sess.subscribe()
 
     def unsubscribe_events(
-        self, q: queue.Queue, session_id: str = "default_session"
+        self,
+        q: queue.Queue,
+        session_id: str = "default_session",
+        tenant_id: str | None = None,
+        user_id: str | None = None,
     ) -> None:
-        sess = self.get_session(session_id)
+        sess = self.get_session(session_id, tenant_id=tenant_id, user_id=user_id)
         if sess:
             sess.unsubscribe(q)
 
