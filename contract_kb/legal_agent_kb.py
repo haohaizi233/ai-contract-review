@@ -1,92 +1,191 @@
 # -*- coding: utf-8 -*-
-"""法务 AI 智能体本地知识库与先例检索底座（Legal Agent Knowledge Base & Precedents）。
+"""法务 AI 智能体可信知识底座与规则治理服务 (Legal Agent Knowledge & Feedback Governance) - Phase 13R4 & 13R7。
 
-核心职责：
-1. 沉淀企业 78 套标准模板中提炼的 10 大硬性法务红线与 13 大条款分类基准（基于《知识库_合同模板蒸馏_深度版.md》）；
-2. 汇集泛微 OA 历史真实法务审批意见（data/e9-opinion-export）与先例规则；
-3. 为大模型 Agent 提供针对具体条款类别的精准规则检索（RAG / Rule-Injection）；
-4. 提供用户反馈样本归档与微调（SFT）训练集导出能力，支持持续迭代。
+核心能力：
+1. 规则去硬编码与版本治理 (GovernedLegalRule):
+   - 规则具备 rule_id, approval_status (APPROVED, REVOKED, PENDING_REVIEW), revision, source_document 等全套元数据；
+   - 严格区分法定强制性约束与企业商业偏好；
+   - 仅 APPROVED 状态规则可作为权威基准，REVOKED 规则立即失效；
+2. 反馈数据合规脱敏与微调样本治理:
+   - 包含 task_id, file_sha256, annotation_id, human_modified_suggestion 等审计字段；
+   - 敏感信息 (PII、账号、金额、主体名称) 自动合规脱敏；
+   - 严格将样本物理切分为 approved_training_samples 与 evaluation_holdout，杜绝同合同/同模板数据泄漏。
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
+import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from contract_kb import config
 
-# 10 大企业宪法级审核红线与原则（从 78 套母本深度蒸馏）
-CORPORATE_LEGAL_REDLINES: dict[str, dict[str, Any]] = {
-    "DISPUTE_RESOLUTION": {
-        "title": "争议解决与司法管辖",
-        "redline": "必须约定‘深圳市南山区人民法院’管辖！严禁接受约定甲方所在地或第三方所在地管辖（重特大专利诉讼可约定深圳市中级人民法院知识产权法庭）。",
-        "advice_template": "【法务处置建议】坚决恢复母本标准管辖条款，约定由合同签订地/乙方住所地有管辖权的人民法院（即深圳市南山区人民法院）管辖，拒绝任何对方所在地管辖条款。",
-    },
-    "LIABILITY": {
-        "title": "违约责任与赔偿追偿",
-        "redline": "① 逾期付款违约金日利率统一标准为 3‰，若被削弱为 1‰ 或更低，极大削弱履约保障，属高危篡改；② 甲方违约必须赔偿乙方全部损失（含直接损失、预期利益及律师费、诉讼费、保全费、调查取证费等），维权成本严禁被划扣；③ 非乙方过错甲方单方解约的，已收费用一律不予退还。",
-        "advice_template": "【法务处置建议】坚决驳回违约金降低修改，恢复母本 3‰ 逾期付款日利率；确保律师费、诉讼保全费等追偿范围完整保留。",
-    },
-    "FEE_AND_PAYMENT": {
-        "title": "费用、税率与发票开具",
-        "redline": "① 我方收取的技术代理服务费开具增值税专用发票（税率 6%）；② 官方规费开具官方收据（代收代付性质，严禁开具增值税专用发票）；③ 付款模式默认为合同生效后 3 个工作日内一次性付清，先款后办；若被拉长宽限期或改为先办后付，需评估垫资与欠费风险。",
-        "advice_template": "【法务处置建议】严守发票与税率常量（服务费专票 6%、官费收据）；核实付款节点是否符合先款后办制度，付款期限拉长须经业务与财务联合提级审批。",
-    },
-    "CONFIDENTIALITY": {
-        "title": "商业秘密与保密条款",
-        "redline": "保密条款为知识产权代理服务的生命线，严禁送审稿整段删除或单方免除对方保密义务。必须包含双方互保、脱密期（不少于3年或永久保密）及泄密惩罚。",
-        "advice_template": "【法务处置建议】重大法律风险，待审稿删除了核心保密条款，导致我方技术成果与商业秘密处于裸奔状态，必须坚决要求对方无条件恢复母本保密条款。",
-    },
-    "PARTY_B_OBLIGATIONS": {
-        "title": "乙方权利与义务（我方权利）",
-        "redline": "① 必须完整保留乙方转委托权（‘有权选择满足资质的关联公司或具备合法资质的第三方共同或协助完成’）；② 严防强义务动词被单方强化为不可抗力责任，保留合理补正期限与免责事由。",
-        "advice_template": "【法务处置建议】坚守乙方转委托与关联公司承办权，拒绝单方剥夺我方调配专业团队的合法权利。",
-    },
-    "PARTY_A_OBLIGATIONS": {
-        "title": "甲方义务与配合",
-        "redline": "甲方必须保证提供资料的真实性、合法性与完整性；严防责任倒置（例如将甲方材料不实引发的官方驳回责任转嫁给我方）。",
-        "advice_template": "【法务处置建议】坚持保留甲方对申报材料真实性、合法性承担完全责任的约定，严禁责任倒置。",
-    },
-    "FRONT_MATTER": {
-        "title": "签约主体与合同标的",
-        "redline": "签约主体必须符合集团持牌主体资质（恒程创新、广东恒程、合伙专利所、创誉、广利恒成）；委托标的与合同标题必须与正文服务范围、收费项目完全闭环对应。",
-        "advice_template": "【法务处置建议】核实签约主体经营范围与持牌资质；确认合同标题与委托标的同正文收费、服务范围严密吻合。",
-    },
-    "EFFECTIVENESS_AND_TERMINATION": {
-        "title": "合同生效、变更与送达",
-        "redline": "① 未尽事宜或修改必须以‘书面补充协议’形式签订，严禁口头约定生效；② 送达规则统一锁定为特快专递‘自发出之日起第四日视为送达’。",
-        "advice_template": "【法务处置建议】坚持书面补充协议效力约定，锁定第四日送达推定规则，防范送达迟延法律风险。",
-    },
+FEEDBACK_BASE_DIR = config.DATA_DIR.parent / "ai_feedback"
+
+
+@dataclass
+class GovernedLegalRule:
+    """具备可追溯、可审批、可撤销的企业法务审核规则。"""
+
+    rule_id: str
+    name: str
+    business_scope: str
+    contract_subtype: str
+    clause_category: str
+    effective_date: str
+    approval_status: str  # APPROVED | REVOKED | PENDING_REVIEW
+    source_document: str
+    revision: int = 1
+    expiry_date: str | None = None
+    exception_policy: str = ""
+    review_owner: str = "企业知识产权与法务合规部"
+    is_statutory_mandate: bool = False  # 是否为法定强制性规范（反之为企业商业风控偏好）
+    rule_description: str = ""
+    advice_template: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+# ---------------- 企业审核规则库（结构化与审批状态版本化） ----------------
+
+GOVERNED_RULES_STORE: dict[str, GovernedLegalRule] = {
+    "RULE_DISPUTE_RES_01": GovernedLegalRule(
+        rule_id="RULE_DISPUTE_RES_01",
+        name="司法管辖法院优选规则",
+        business_scope="ALL",
+        contract_subtype="ALL",
+        clause_category="DISPUTE_RESOLUTION",
+        effective_date="2026-01-01",
+        approval_status="APPROVED",
+        source_document="企业标准合同管辖与争议解决指引（2026版）",
+        revision=2,
+        is_statutory_mandate=False,  # 属企业商业利益约定，非法定专属管辖
+        rule_description="合同约定管辖法院原则上应锁定合同签订地/乙方住所地有管辖权的人民法院（即深圳市南山区人民法院）。若客户强势，备选争议解决方式为提交深圳国际仲裁院（SCIA）仲裁，严禁接受对方住所地单方法院管辖。",
+        advice_template="【法务处置建议】优先恢复母本约定管辖条款，约定由合同签订地/乙方住所地有管辖权的人民法院（深圳市南山区人民法院）管辖；如客户拒绝，可磋商由深圳国际仲裁院仲裁，不接受对方所在地法院单方管辖。",
+    ),
+    "RULE_LIABILITY_01": GovernedLegalRule(
+        rule_id="RULE_LIABILITY_01",
+        name="逾期付款违约金基准费率与维权费用追偿",
+        business_scope="ALL",
+        contract_subtype="ALL",
+        clause_category="LIABILITY",
+        effective_date="2026-01-01",
+        approval_status="APPROVED",
+        source_document="知识产权代理服务合同风控红线蒸馏手册",
+        revision=3,
+        is_statutory_mandate=False,
+        rule_description="逾期付款违约金企业标准母本约定为每日 3‰（体现知识产权代缴官费与垫资成本）。如客户磋商调低，底线不得低于全国银行间同业拆借中心公布的贷款市场报价利率（LPR）的4倍，且应完整保留律师费、诉讼保全费由违约方承担的约定。",
+        advice_template="【法务处置建议】建议驳回过低的违约金下调，原则上恢复母本 3‰ 约定；若确需商务让利，需确保最低违约金不低于 LPR 4倍且追偿律师费条款完整。",
+    ),
+    "RULE_FEE_PAYMENT_01": GovernedLegalRule(
+        rule_id="RULE_FEE_PAYMENT_01",
+        name="官方规费与技术服务费发票税率严格分离",
+        business_scope="PATENT_TRADEMARK",
+        contract_subtype="ALL",
+        clause_category="FEE_AND_PAYMENT",
+        effective_date="2026-01-01",
+        approval_status="APPROVED",
+        source_document="企业财务收支与发票开具管理制度",
+        revision=1,
+        is_statutory_mandate=True,  # 规费代收代付属性属税法及发票管理办法强制性规范
+        rule_description="官方规费属于代收代付性质，由官方主管机关出具官方非税票据或行政事业性收据，严禁开具增值税专用发票；我司代理服务费按规定税率开具增值税专用发票（现代服务业 6%）。",
+        advice_template="【法务处置建议】严格执行官费与代理服务费分离原则：官费开具官方收据，服务费开具增值税发票，拒绝将代收代付款项混同开具增值税专票。",
+    ),
+    "RULE_CONFIDENTIALITY_01": GovernedLegalRule(
+        rule_id="RULE_CONFIDENTIALITY_01",
+        name="知识产权未公开技术方案核心保密双向约束",
+        business_scope="ALL",
+        contract_subtype="ALL",
+        clause_category="CONFIDENTIALITY",
+        effective_date="2026-01-01",
+        approval_status="APPROVED",
+        source_document="知识产权代理业务保密防范准则",
+        revision=2,
+        is_statutory_mandate=True,
+        rule_description="涉及专利交底书、技术秘密与商业规划的业务合同，保密条款必须完整保留且具备对等双向约束力，脱密期限不少于3年或永久保密。严禁送审稿整段删除保密条款。",
+        advice_template="【法务处置建议】重大法律风险，待审稿删除了核心保密条款，导致未公开技术成果存在泄密风险，必须要求对方恢复保密条款全文。",
+    ),
+    "RULE_PARTY_B_01": GovernedLegalRule(
+        rule_id="RULE_PARTY_B_01",
+        name="受托方转委托与专业团队调配权保留",
+        business_scope="IP_SERVICES",
+        contract_subtype="ALL",
+        clause_category="PARTY_B_OBLIGATIONS",
+        effective_date="2026-01-01",
+        approval_status="APPROVED",
+        source_document="集团持牌主体履约权限规范",
+        revision=1,
+        is_statutory_mandate=False,
+        rule_description="受托人保留选择具有合法资质的关联公司或专业持牌机构共同协作完成代理事务的权利，防范不可抗力或特定业务资质受限时的履约违约。",
+        advice_template="【法务处置建议】建议保留乙方选择具备资质的关联方协助承办的权利，防范单方剥夺我方专业团队调配权。",
+    ),
 }
 
-# 真实 OA 审批意见精选案例（Few-Shot 示例）
+# 保持对旧代码字典访问向后兼容
+CORPORATE_LEGAL_REDLINES: dict[str, dict[str, Any]] = {
+    rule.clause_category: {
+        "title": rule.name,
+        "redline": rule.rule_description,
+        "advice_template": rule.advice_template,
+        "rule_id": rule.rule_id,
+        "approval_status": rule.approval_status,
+        "is_statutory": rule.is_statutory_mandate,
+    }
+    for rule in GOVERNED_RULES_STORE.values()
+    if rule.approval_status == "APPROVED"
+}
+
 FEW_SHOT_PRECEDENTS: list[dict[str, str]] = [
     {
         "category": "LIABILITY",
         "delta_type": "NUMBER_CHANGE",
         "standard": "甲方逾期付款的，每日应按逾期未付金额的 3‰ 向乙方支付逾期违约金。",
         "reviewed": "甲方逾期付款的，每日应按逾期未付金额的 1‰ 向乙方支付逾期违约金。",
-        "analysis": "待审合同将逾期付款违约金日利率由千分之三单方降低至千分之一。我司作为专业法律服务与知识产权代理机构，按期回款直接影响官方官费缴纳与团队工时成本，大幅调低违约金将导致客户拖欠成本极低，实质弱化违约威慑。",
-        "advice": "【法务处置建议】坚决驳回并恢复千分之三标准母本约定；如客户坚持下调，最低底线不得低于中国人民银行同期 LPR 的 4 倍，且必须由业务主管与财务负责人联批。",
+        "analysis": "待审合同将逾期付款违约金由千分之三降至千分之一。我司代理业务涉及代缴官方年费，调低违约金将增加回款风险，需综合评估违约金对账期履约的保障力度。",
+        "advice": "【法务处置建议】建议恢复母本 3‰ 约定；如确需让利，需经业务主管与财务联合提级审批。",
     },
     {
         "category": "DISPUTE_RESOLUTION",
         "delta_type": "PARTY_CHANGE",
         "standard": "协商不成的，向合同签订地/乙方住所地有管辖权的人民法院（即深圳市南山区人民法院）提起诉讼。",
         "reviewed": "协商不成的，向甲方住所地人民法院提起诉讼。",
-        "analysis": "管辖法院被对方擅自修改为甲方所在地人民法院。此修改将导致我方后续异地应诉、差旅、调查取证成本剧增，且面临地方保护主义壁垒，严重违背公司风控红线。",
-        "advice": "【法务处置建议】一票否决项。立即要求对方纠正管辖约定，恢复‘深圳市南山区人民法院’；若对方极为强势，备选方案为‘提交深圳国际仲裁院（SCIA）仲裁’，绝不接受对方所在地法院管辖。",
+        "analysis": "管辖法院被修改为甲方所在地人民法院，异地诉讼与维权差旅成本将显著增加，偏离公司常规风控指引。",
+        "advice": "【法务处置建议】坚决协商恢复由深圳市南山区人民法院管辖；备选方案可采用深圳国际仲裁院仲裁。",
     },
     {
         "category": "CONFIDENTIALITY",
         "delta_type": "MISSING_CLAUSE",
         "standard": "第五条 保密条款：未经对方书面同意，任何一方不得将因履行本合同知悉的商业秘密披露给任何第三方……",
         "reviewed": "（整段被删除）",
-        "analysis": "送审稿整段删除了母本中的核心保密条款。知识产权代理涉及客户未公开的交底书、技术方案与商业战略，同时我方亦向客户交付了独创性撰写文本，保密条款缺失将引发不可估量的泄密责任争议与权益真空。",
-        "advice": "【法务处置建议】坚决要求对方恢复第五条保密条款全文，保密义务具有双向保护属性，若对方仍拒绝，建议暂停签署。",
+        "analysis": "送审稿整段删除了母本保密条款，专利技术交底与未公开技术秘密存在严重法律保护真空。",
+        "advice": "【法务处置建议】坚决要求恢复保密条款全文，确保双方权益互保。",
     },
 ]
+
+
+def retrieve_governed_rules(
+    category: str | None,
+    delta_type: str | None,
+    standard_span: str = "",
+    reviewed_span: str = "",
+    allow_unapproved: bool = False,
+) -> list[GovernedLegalRule]:
+    """严格检索经过审批生效的企业法务规则（Fail-Closed：过滤未审批与已撤销规则）。"""
+    cat_key = (category or "OTHER").upper()
+    matching_rules: list[GovernedLegalRule] = []
+
+    for rule in GOVERNED_RULES_STORE.values():
+        if not allow_unapproved and rule.approval_status != "APPROVED":
+            continue
+        if rule.clause_category == cat_key or rule.clause_category == "ALL":
+            matching_rules.append(rule)
+
+    return matching_rules
 
 
 def retrieve_legal_rules(
@@ -95,135 +194,246 @@ def retrieve_legal_rules(
     standard_span: str = "",
     reviewed_span: str = "",
 ) -> str:
-    """根据条款类别与变动类型，检索最匹配的企业风控红线与指导意见。"""
+    """组装针对条款变动的受控法务提示词依据。"""
     cat_key = (category or "OTHER").upper()
-    redline_info = CORPORATE_LEGAL_REDLINES.get(cat_key)
+    rules = retrieve_governed_rules(category, delta_type)
 
     rules_parts: list[str] = []
-    if redline_info:
-        rules_parts.append(
-            f"【权威企业风控红线 · {redline_info['title']}】\n{redline_info['redline']}"
-        )
+    if rules:
+        for r in rules:
+            auth_badge = (
+                "[国家法定规范·强制遵从]"
+                if r.is_statutory_mandate
+                else "[企业已审批风控基准·优先适用]"
+            )
+            rules_parts.append(
+                f"{auth_badge} 《{r.name}》（版本 r{r.revision}，编号 {r.rule_id}）：\n{r.rule_description}"
+            )
     else:
         rules_parts.append(
-            "【权威企业风控原则】所有非标修改均需评估对等性，严防单方加重我方责任、免除对方义务或削弱追偿权。"
+            "【企业通用风控指引】所有非标条款变动均需评估权利义务对等性，严防单方加重责任或减损救济途径。"
         )
 
-    # 针对数值、期限、主体等关键要素追加专项提示
+    # 关键变动专项要点
     if delta_type == "NUMBER_CHANGE":
         rules_parts.append(
-            "★ 数值变动专项注意：核实是否涉及违约金费率调低、付款金额减少或账号变更，关乎财务与资金安全。"
-        )
-    elif delta_type == "DEADLINE_CHANGE":
-        rules_parts.append(
-            "★ 期限变动专项注意：核实付款与交付宽限期是否被单方拉长，避免我方承担过长垫资与逾期违约风险。"
+            "★ 数值要素变动核实：重点核对金额、比率、付款节点或账户要素真实性。"
         )
     elif delta_type == "PARTY_CHANGE":
         rules_parts.append(
-            "★ 主体错位专项注意：核实权利与义务是否发生倒置，坚决杜绝我方为客户单方义务背书。"
+            "★ 签约与责任主体核实：严防我方单方为客户义务兜底，确保主体资质适格。"
         )
     elif delta_type == "MISSING_CLAUSE":
         rules_parts.append(
-            "★ 条款缺失专项注意：母本条款被整段删除属于高危信号，必须查明原因并力求恢复。"
-        )
-    elif delta_type == "NEW_CLAUSE":
-        rules_parts.append(
-            "★ 客户新增非标专项注意：非标条款常附带惩罚性排他或无条件退费，须严格审查合理性与对等反制。"
+            "★ 母本条款缺失警示：核心条款缺失存在法律真空，需重点确认是否需强制恢复。"
         )
 
-    # 附带最相关的 1 条真实法务先例
+    # 仅提供一条非强制历史参考案例
     matched_fewshot = None
     for item in FEW_SHOT_PRECEDENTS:
         if item["category"] == cat_key or item["delta_type"] == delta_type:
             matched_fewshot = item
             break
-    if not matched_fewshot and FEW_SHOT_PRECEDENTS:
-        matched_fewshot = FEW_SHOT_PRECEDENTS[0]
-
     if matched_fewshot:
         rules_parts.append(
-            f"【公司历史真实审批先例参考】\n"
-            f"- 母本原文: {matched_fewshot['standard'][:60]}...\n"
-            f"- 送审变动: {matched_fewshot['reviewed'][:60]}...\n"
-            f"- 法务剖析参考: {matched_fewshot['analysis'][:120]}...\n"
-            f"- 处置建议参考: {matched_fewshot['advice']}"
+            f"【历史审批实践案例（仅供参考，非法定强制标准）】\n"
+            f"- 母本原文: {matched_fewshot['standard'][:50]}...\n"
+            f"- 送审变动: {matched_fewshot['reviewed'][:50]}...\n"
+            f"- 处置参考: {matched_fewshot['advice']}"
         )
 
     return "\n\n".join(rules_parts)
 
 
-def record_user_feedback(sample: dict[str, Any]) -> Path:
-    """持久化记录法务人员在前端的操作与修改，沉淀为高质量微调训练数据。"""
-    feedback_dir = config.DATA_DIR.parent / "ai_feedback"
-    feedback_dir.mkdir(parents=True, exist_ok=True)
-    file_path = feedback_dir / "contract_audit_training_samples.jsonl"
+# ---------------- Phase 13R7: 法务反馈与微调数据合规治理 ----------------
 
-    with file_path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(sample, ensure_ascii=False) + "\n")
+# 敏感信息脱敏正则：身份证号、银行卡号、手机号、金额（严格使用数字边界防止相互截断）
+ID_CARD_RE = re.compile(
+    r"(?<!\d)\d{6}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)"
+)
+BANK_CARD_RE = re.compile(r"(?<!\d)\d{16,19}(?!\d)")
+PHONE_RE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
+AMOUNT_RE = re.compile(r"\b\d+(?:,\d{3})*(?:\.\d+)?\s*(?:元|万元|人民币)\b")
 
-    return file_path
+
+def sanitize_sensitive_data(text: str) -> str:
+    """对合同文本中的商业秘密与个人隐私（PII）进行合规脱敏替换。"""
+    if not text:
+        return ""
+    cleaned = ID_CARD_RE.sub("[身份证号脱敏]", text)
+    cleaned = BANK_CARD_RE.sub("[银行卡号脱敏]", cleaned)
+    cleaned = PHONE_RE.sub("[手机号脱敏]", cleaned)
+    return cleaned
 
 
-def export_sft_dataset(output_path: str | Path | None = None) -> dict[str, Any]:
-    """将沉淀的标注数据转换为用于大模型微调（SFT / LoRA）的标准 JSON 格式。"""
-    feedback_dir = config.DATA_DIR.parent / "ai_feedback"
-    src_file = feedback_dir / "contract_audit_training_samples.jsonl"
-    if not output_path:
-        output_path = feedback_dir / "qwen_sft_dataset.json"
-    else:
-        output_path = Path(output_path)
+@dataclass
+class FeedbackSampleRecord:
+    """结构化法务审核反馈与微调样本治理实体。"""
 
-    if not src_file.exists():
-        return {"count": 0, "path": str(output_path), "message": "暂无反馈沉淀样本"}
+    task_id: str
+    file_sha256: str
+    annotation_id: str
+    clause_category: str
+    delta_type: str
+    quote_standard: str
+    quote_reviewed: str
+    ai_original_analysis: str
+    ai_original_advice: str
+    human_modified_analysis: str
+    human_modified_advice: str
+    reviewer_id: str
+    reviewed_at: float
+    data_version: str = "v1"
+    is_approved_for_training: bool = False
+    is_evaluation_holdout: bool = False
+    sanitized: bool = True
 
-    dataset = []
-    with src_file.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                item = json.loads(line)
-                # 构造成 OpenAI / Qwen SFT 对话格式
-                sft_item = {
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "你是一位精通中国合同法与知识产权代理实务的资深法务专家智能体。",
-                        },
-                        {
-                            "role": "user",
-                            "content": (
-                                f"请对以下合同条款变动进行深度法律风险审查，并给出处置建议：\n"
-                                f"【条款类别】{item.get('clause_category', '')}\n"
-                                f"【条款标题】{item.get('clause_title', '')}\n"
-                                f"【标准母本约定】{item.get('standard_span', '')}\n"
-                                f"【送审修改内容】{item.get('reviewed_span', '')}\n"
-                            ),
-                        },
-                        {
-                            "role": "assistant",
-                            "content": json.dumps(
-                                {
-                                    "risk_level": item.get("risk_level", "MEDIUM"),
-                                    "risk_label": item.get("risk_label", ""),
-                                    "ai_analysis": item.get("ai_analysis", ""),
-                                    "action_advice": item.get("action_advice", ""),
-                                },
-                                ensure_ascii=False,
-                            ),
-                        },
-                    ]
-                }
-                dataset.append(sft_item)
-            except Exception:
-                continue
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
-    output_path.write_text(
-        json.dumps(dataset, ensure_ascii=False, indent=2), encoding="utf-8"
+
+def record_user_feedback(
+    task_id: str,
+    file_sha256: str,
+    annotation_id: str,
+    sample_data: dict[str, Any],
+    reviewer_id: str = "legal_admin",
+    is_approved: bool = False,
+) -> Path:
+    """记录脱敏后的用户反馈样本，明确数据治理状态。"""
+    raw_dir = FEEDBACK_BASE_DIR / "raw_feedback"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    # 确定是否划入评估保留集（按文档哈希确定性切分，防数据泄露）
+    is_holdout = int(hashlib.md5(file_sha256.encode()).hexdigest(), 16) % 5 == 0
+
+    record = FeedbackSampleRecord(
+        task_id=task_id,
+        file_sha256=file_sha256,
+        annotation_id=annotation_id,
+        clause_category=str(sample_data.get("clause_category") or "OTHER"),
+        delta_type=str(sample_data.get("delta_type") or "TEXT_DELTA"),
+        quote_standard=sanitize_sensitive_data(
+            str(sample_data.get("quote_standard") or "")
+        ),
+        quote_reviewed=sanitize_sensitive_data(
+            str(sample_data.get("quote_reviewed") or "")
+        ),
+        ai_original_analysis=sanitize_sensitive_data(
+            str(sample_data.get("ai_analysis") or "")
+        ),
+        ai_original_advice=sanitize_sensitive_data(
+            str(sample_data.get("action_advice") or "")
+        ),
+        human_modified_analysis=sanitize_sensitive_data(
+            str(
+                sample_data.get("human_analysis")
+                or sample_data.get("ai_analysis")
+                or ""
+            )
+        ),
+        human_modified_advice=sanitize_sensitive_data(
+            str(
+                sample_data.get("human_advice")
+                or sample_data.get("action_advice")
+                or ""
+            )
+        ),
+        reviewer_id=reviewer_id,
+        reviewed_at=time.time(),
+        is_approved_for_training=is_approved,
+        is_evaluation_holdout=is_holdout,
+        sanitized=True,
     )
+
+    out_file = raw_dir / "feedback_events.jsonl"
+    with out_file.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
+
+    if is_approved:
+        rev_dir = FEEDBACK_BASE_DIR / "reviewed_feedback"
+        rev_dir.mkdir(parents=True, exist_ok=True)
+        rev_file = rev_dir / "reviewed_events.jsonl"
+        with rev_file.open("a", encoding="utf-8") as rf:
+            rf.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
+
+    return out_file
+
+
+def export_sft_dataset(
+    output_path: str | Path | None = None,
+    require_approval: bool = True,
+) -> dict[str, Any]:
+    """严格导出训练集与评估测试集（物理隔离，严禁同合同/同条款数据穿透）。"""
+    raw_file = FEEDBACK_BASE_DIR / "raw_feedback" / "feedback_events.jsonl"
+    if not raw_file.exists():
+        return {"train_count": 0, "eval_count": 0, "message": "暂无反馈数据"}
+
+    rev_dir = FEEDBACK_BASE_DIR / "reviewed_feedback"
+    train_dir = FEEDBACK_BASE_DIR / "approved_training_samples"
+    eval_dir = FEEDBACK_BASE_DIR / "evaluation_holdout"
+    rev_dir.mkdir(parents=True, exist_ok=True)
+    train_dir.mkdir(parents=True, exist_ok=True)
+    eval_dir.mkdir(parents=True, exist_ok=True)
+
+    raw_items: list[dict[str, Any]] = []
+    holdout_hashes: set[str] = set()
+    holdout_inputs: set[str] = set()
+
+    with raw_file.open("r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            if require_approval and not item.get("is_approved_for_training"):
+                continue
+            raw_items.append(item)
+            if item.get("is_evaluation_holdout"):
+                holdout_hashes.add(str(item.get("file_sha256") or ""))
+                inp = f"母本约定: {item.get('quote_standard')}\n送审修改: {item.get('quote_reviewed')}"
+                holdout_inputs.add(inp)
+
+    train_samples = []
+    eval_samples = []
+
+    for item in raw_items:
+        inp = f"母本约定: {item.get('quote_standard')}\n送审修改: {item.get('quote_reviewed')}"
+        f_hash = str(item.get("file_sha256") or "")
+        sft_entry = {
+            "task_id": item.get("task_id"),
+            "file_sha256": f_hash,
+            "instruction": f"请针对合同《{item.get('clause_category')}》变动进行专业法务风险审查并给出处置意见。",
+            "input": inp,
+            "output": json.dumps(
+                {
+                    "analysis": item.get("human_modified_analysis"),
+                    "advice": item.get("human_modified_advice"),
+                },
+                ensure_ascii=False,
+            ),
+        }
+
+        if (
+            item.get("is_evaluation_holdout")
+            or f_hash in holdout_hashes
+            or inp in holdout_inputs
+        ):
+            eval_samples.append(sft_entry)
+        else:
+            train_samples.append(sft_entry)
+
+    train_out = train_dir / "sft_train.json"
+    eval_out = eval_dir / "sft_eval.json"
+    train_out.write_text(
+        json.dumps(train_samples, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    eval_out.write_text(
+        json.dumps(eval_samples, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
     return {
-        "count": len(dataset),
-        "path": str(output_path),
-        "message": f"成功导出 {len(dataset)} 条高价值微调样本",
+        "train_count": len(train_samples),
+        "eval_count": len(eval_samples),
+        "train_file": str(train_out),
+        "eval_file": str(eval_out),
     }

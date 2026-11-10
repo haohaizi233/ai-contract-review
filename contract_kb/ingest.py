@@ -123,65 +123,6 @@ def security_check_file(path: Path) -> SecurityCheckResult:
             res.passed = False
             res.rejected_reason = "bad_magic"
     return res
-    res.checks.append(
-        {
-            "check": "extension",
-            "value": path.suffix.lower(),
-            "passed": path.suffix.lower() == ".docx",
-        }
-    )
-    if path.suffix.lower() != ".docx":
-        res.passed = False
-        res.rejected_reason = "bad_extension"
-        return res
-    # MIME：以魔数校验（DOCX=PK\x03\x04）
-    with open(path, "rb") as _fh:
-        head = _fh.read(4)
-    res.checks.append(
-        {"check": "magic_bytes", "value": head.hex(), "passed": head == b"PK\x03\x04"}
-    )
-    if head != b"PK\x03\x04":
-        res.passed = False
-        res.rejected_reason = "bad_magic"
-        return res
-    # ZIP 边界：条目数、压缩比、路径穿越
-    try:
-        with zipfile.ZipFile(path) as z:
-            names = z.namelist()
-            res.checks.append(
-                {
-                    "check": "zip_entry_count",
-                    "value": len(names),
-                    "limit": 500,
-                    "passed": len(names) <= 500,
-                }
-            )
-            total_c = sum(i.compress_size for i in z.infolist()) or 1
-            total_u = sum(i.file_size for i in z.infolist())
-            ratio = total_u / total_c
-            res.checks.append(
-                {
-                    "check": "zip_compression_ratio",
-                    "value": round(ratio, 2),
-                    "limit": 200,
-                    "passed": ratio <= 200,
-                }
-            )
-            traversal = [n for n in names if n.startswith("/") or ".." in Path(n).parts]
-            res.checks.append(
-                {
-                    "check": "zip_path_traversal",
-                    "value": traversal,
-                    "passed": not traversal,
-                }
-            )
-            if len(names) > 500 or ratio > 200 or traversal:
-                res.passed = False
-                res.rejected_reason = "zip_boundary_violation"
-    except zipfile.BadZipFile:
-        res.passed = False
-        res.rejected_reason = "bad_zip"
-    return res
 
 
 def _matter_text(parsed: ParsedDocument) -> str:
