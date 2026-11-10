@@ -139,3 +139,14 @@ def test_enterprise_mode_signature_verification(web_test_server, monkeypatch):
     )
     with urllib.request.urlopen(req_valid) as resp:
         assert resp.status == 200
+
+
+def test_root_html_preserves_trusted_origin_cors(web_test_server):
+    request = urllib.request.Request(
+        web_test_server + "/", headers={"Origin": "http://localhost:3000"}
+    )
+    with urllib.request.urlopen(request) as response:
+        assert (
+            response.headers.get("Access-Control-Allow-Origin")
+            == "http://localhost:3000"
+        )

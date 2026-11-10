@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from contract_kb.ingest import import_template_file
+from contract_kb.modules.document_processing.ingestion import import_template_file
 from tools.contract_diff_web import execute_current_diff
 from tools.material_catalog import (
     DEFAULT_MERGED_DIR,

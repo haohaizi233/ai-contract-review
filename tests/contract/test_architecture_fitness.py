@@ -102,7 +102,16 @@ def test_zero_reverse_dependencies_and_zero_raw_sql_leaks():
     raw_sql: list[str] = []
     for f in PKG_ROOT.rglob("*.py"):
         src = f.read_text(encoding="utf-8")
-        if f.name not in ("storage.py", "storage_pg.py") and ".conn.execute" in src:
+        if (
+            f.name
+            not in (
+                "storage.py",
+                "storage_pg.py",
+                "sqlite_storage.py",
+                "postgres_storage.py",
+            )
+            and ".conn.execute" in src
+        ):
             raw_sql.append(str(f.relative_to(REPO_ROOT)))
         if "template_5th_layer_data" in src:
             rev_deps.append(str(f.relative_to(REPO_ROOT)))

@@ -5,13 +5,14 @@ from __future__ import annotations
 
 
 from contract_kb.domain.models.review_identity import HumanReviewStatus
-from contract_kb.legal_agent_kb import record_user_feedback
+from contract_kb.application.agents.knowledge_adapter import record_user_feedback
 
 
 def test_record_user_feedback_signature_compatibility(tmp_path, monkeypatch):
     """测试修复后：支持以单个 dict 或多参数调用 record_user_feedback，成功记录且无崩溃。"""
     monkeypatch.setattr(
-        "contract_kb.legal_agent_kb.FEEDBACK_BASE_DIR", tmp_path / "feedback"
+        "contract_kb.application.agents.knowledge_adapter.FEEDBACK_BASE_DIR",
+        tmp_path / "feedback",
     )
 
     data = {

@@ -378,7 +378,7 @@ class ReviewPipeline:
         prov = getattr(llm_stage, "_llm_provider", None)
         prov_name = str(getattr(prov, "name", "none") if prov else "none")
         model_name = str(getattr(prov, "model", "none") if prov else "none")
-        from ...llm_review import PROMPT_SYSTEM
+        from ...infrastructure.ai.llm_providers import PROMPT_SYSTEM
 
         prompt_ver = hashlib.sha256(PROMPT_SYSTEM.encode("utf-8")).hexdigest()[:12]
         stage_schemas = ":".join(

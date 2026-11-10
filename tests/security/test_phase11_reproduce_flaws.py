@@ -21,8 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from contract_kb import config
-from contract_kb.clause_extractor import extract_clauses
-from contract_kb.docx_parser import ASTNode, ParsedDocument
+from contract_kb.modules.document_processing.clause_extractor import extract_clauses
+from contract_kb.modules.document_processing.docx_parser import ASTNode, ParsedDocument
 from contract_kb.modules.retrieval.citation import CitationVerifier
 from contract_kb.modules.retrieval.governance import (
     KnowledgeGovernancePolicy,

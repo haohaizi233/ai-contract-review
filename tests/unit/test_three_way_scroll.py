@@ -11,7 +11,9 @@ def test_three_way_scroll_controller():
     node = shutil.which("node")
     if not node:
         pytest.skip("Node is required for inline JavaScript regression tests")
-    source = Path("tools/contract_diff_web.py").read_text(encoding="utf-8")
+    source = Path("contract_kb/interfaces/web/static/js/review_workspace.js").read_text(
+        encoding="utf-8"
+    )
     script = source.split(
         "// ==================== 三栏双向协同联动滚动 ===================="
     )[1].split("function renderAnnotationsSidebar()")[0]

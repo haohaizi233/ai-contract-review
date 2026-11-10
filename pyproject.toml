@@ -22,6 +22,11 @@ dependencies = [
     "pypdf>=4.0.0",
 ]
 
+[project.scripts]
+contract-kb = "contract_kb.interfaces.cli.main:main"
+contract-kb-web = "contract_kb.interfaces.web.app:main"
+contract-kb-gui = "contract_kb.interfaces.desktop.app:main"
+
 [project.optional-dependencies]
 postgres = [
     "psycopg2-binary>=2.9",
@@ -69,3 +74,10 @@ ignore_missing_imports = true
 
 [tool.setuptools.packages.find]
 include = ["contract_kb*"]
+
+[tool.setuptools.package-data]
+contract_kb = [
+    "interfaces/web/templates/*.html",
+    "interfaces/web/static/css/*.css",
+    "interfaces/web/static/js/*.js",
+]

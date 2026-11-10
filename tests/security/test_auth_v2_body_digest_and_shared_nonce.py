@@ -11,7 +11,10 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import contract_kb.api as api
-from contract_kb.auth import TrustedHeaderAuth, compute_auth_signature_v2
+from contract_kb.interfaces.http.auth import (
+    TrustedHeaderAuth,
+    compute_auth_signature_v2,
+)
 from contract_kb.storage import Storage
 
 SHARED_KEY = "synthetic-auth-v2-remediation-key"

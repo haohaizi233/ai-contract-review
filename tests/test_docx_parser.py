@@ -141,7 +141,7 @@ def test_order_table_interleaving(parsed_docs):
 
 @pytest.mark.real_corpus
 def test_real_corpus_26_templates(real_corpus_dir):
-    from contract_kb.docx_parser import parse_docx
+    from contract_kb.modules.document_processing.docx_parser import parse_docx
 
     files = [
         f
@@ -157,7 +157,7 @@ def test_real_corpus_26_templates(real_corpus_dir):
 
 @pytest.mark.real_corpus
 def test_real_corpus_unique_hashes(real_corpus_dir):
-    from contract_kb.docx_parser import sha256_file
+    from contract_kb.modules.document_processing.docx_parser import sha256_file
 
     files = [
         f

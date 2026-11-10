@@ -34,14 +34,17 @@ from ...domain.models.review import (
     FindingSource,
     PipelineContext,
 )
-from ...ingest import import_template_file, security_check_file
+from ...modules.document_processing.ingestion import (
+    import_template_file,
+    security_check_file,
+)
 from ...modules.rules import (
     ConflictResolver,
     PolicyEvaluator,
     RuleRegistry,
 )
-from ...rule_engine import ReviewContext as DbRuleContext
-from ...rule_engine import RuleEngine, RuleSpec
+from ...modules.rules.engine import ReviewContext as DbRuleContext
+from ...modules.rules.engine import RuleEngine, RuleSpec
 from .checkpoints import CheckpointCorruptedError
 from .format_adapter import audit_format_from_record
 
@@ -897,7 +900,11 @@ class LLMSemanticReviewStage(ReviewStage):
         self._budget_service = budget_service
 
     def execute(self, ctx: PipelineContext) -> dict[str, Any]:
-        from ...llm_review import LLMFailure, LLMReviewResult, LLMSemanticReviewer
+        from ...infrastructure.ai.llm_providers import (
+            LLMFailure,
+            LLMReviewResult,
+            LLMSemanticReviewer,
+        )
 
         llm = self._llm_reviewer or LLMSemanticReviewer(provider=self._llm_provider)
         contract_text = "\n".join(c.get("original_text", "") for c in ctx.clauses)

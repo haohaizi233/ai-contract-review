@@ -5,7 +5,7 @@ import io
 
 import pytest
 
-from contract_kb.ingest import security_check_file
+from contract_kb.modules.document_processing.ingestion import security_check_file
 
 
 def test_security_rejects_bad_extension(tmp_path):

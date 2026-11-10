@@ -12,7 +12,7 @@
 """
 
 from contract_kb.domain.models.source_node import ContractSourceNode
-from contract_kb.table_aligner import (
+from contract_kb.modules.contract_comparison.table_aligner import (
     ExtractedTable,
     align_contract_tables,
     build_table_diff_block,

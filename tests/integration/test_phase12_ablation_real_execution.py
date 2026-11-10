@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from contract_kb.ablation_study import run_full_ablation_study
+from contract_kb.evaluation.benchmarks.ablation_study import run_full_ablation_study
 
 
 def test_ablation_study_full_matrix_contract_execution(tmp_path: Path) -> None:

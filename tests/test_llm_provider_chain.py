@@ -12,7 +12,7 @@
 
 import pytest
 
-from contract_kb.llm_review import (
+from contract_kb.infrastructure.ai.llm_providers import (
     LLMConfigError,
     LLMNotConfigured,
     LLMSemanticReviewer,

@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 
 
-from contract_kb.agent_checkpoint import (
+from contract_kb.infrastructure.checkpoints.storage import (
     _compute_checkpoint_signature,
     compute_annotations_fingerprint,
 )

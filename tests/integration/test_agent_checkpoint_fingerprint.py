@@ -5,7 +5,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from contract_kb.agent_checkpoint import (
+from contract_kb.infrastructure.checkpoints.storage import (
     CheckpointStorage,
     compute_annotations_fingerprint,
 )

@@ -4,7 +4,7 @@
 import tempfile
 from pathlib import Path
 
-from contract_kb.agent_queue_manager import AgentReviewManager
+from contract_kb.application.agents.review_sessions import AgentReviewManager
 
 
 def test_concurrent_sessions_isolated_queues() -> None:

@@ -6,7 +6,7 @@ from __future__ import annotations
 import statistics
 import time
 
-from contract_kb.evaluate import eval_rag
+from contract_kb.evaluation.review.evaluate import eval_rag
 from contract_kb.review_engine import ReviewEngine
 
 
