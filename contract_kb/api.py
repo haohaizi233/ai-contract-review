@@ -449,7 +449,7 @@ def approve_document_knowledge(
         raise HTTPException(status_code=403, detail="仅法务或管理员有权审批知识版本")
     storage = get_storage()
     try:
-        from .storage_errors import OptimisticLockConflictError
+        from .infrastructure.persistence.errors import OptimisticLockConflictError
 
         res = storage.approve_knowledge_version(
             tenant_id=p.tenant_id,
@@ -477,7 +477,7 @@ def revoke_document_knowledge(
         raise HTTPException(status_code=403, detail="仅法务或管理员有权撤销知识版本")
     storage = get_storage()
     try:
-        from .storage_errors import OptimisticLockConflictError
+        from .infrastructure.persistence.errors import OptimisticLockConflictError
 
         res = storage.revoke_knowledge_version(
             tenant_id=p.tenant_id,
