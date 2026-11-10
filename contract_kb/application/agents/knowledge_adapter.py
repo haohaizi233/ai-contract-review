@@ -438,10 +438,9 @@ def record_user_feedback(
     2. 严格忽略客户端/传入 payload 中的 is_approved=True 字段，严防自提自批；
     3. 仅当显式传入具备 admin 或 reviewer 角色的 approver_principal 时，才允许直接入库。
     """
-    is_payload_dict = isinstance(task_id, dict)
-    if is_payload_dict:
-        payload = dict(task_id)
-        task_id = str(payload.get("task_id") or "unspecified_task")
+    if isinstance(task_id, dict):
+        payload = task_id
+        final_task_id = str(payload.get("task_id") or "unspecified_task")
         file_sha256 = str(payload.get("file_sha256") or file_sha256 or "0" * 64)
         annotation_id = str(
             payload.get("annotation_id") or annotation_id or "unspecified_ann"
@@ -451,13 +450,16 @@ def record_user_feedback(
         tenant_id = str(payload.get("tenant_id") or tenant_id or "default")
         # 客户端 payload 字典传入的自批请求必须直接降级为 False，严防自提自批
         is_approved = False
+        is_payload_dict = True
     else:
+        final_task_id = str(task_id)
         sample_data = sample_data or {}
         tenant_id = str(sample_data.get("tenant_id") or tenant_id or "default")
         if not file_sha256:
             file_sha256 = str(sample_data.get("file_sha256") or "0" * 64)
         if not annotation_id:
             annotation_id = str(sample_data.get("annotation_id") or "unspecified_ann")
+        is_payload_dict = False
 
     # 服务层授权检查：拒绝无凭证的自审批
     can_approve = False
@@ -494,7 +496,7 @@ def record_user_feedback(
     is_holdout = int(hashlib.md5(file_sha256.encode()).hexdigest(), 16) % 5 == 0
 
     record = FeedbackSampleRecord(
-        task_id=task_id,
+        task_id=final_task_id,
         file_sha256=file_sha256,
         annotation_id=annotation_id,
         clause_category=str(sample_data.get("clause_category") or "OTHER"),

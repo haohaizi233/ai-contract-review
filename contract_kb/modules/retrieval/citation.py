@@ -509,11 +509,15 @@ class CitationVerifier:
                     c_row = None
                 if c_row is not None and type(c_row).__name__ != "MagicMock":
                     c_dict = dict(c_row)
-                    c_status = str(
-                        c_dict.get("approval_status")
-                        or c_dict.get("doc_status")
-                        or "ACTIVE"
-                    ).strip().upper()
+                    c_status = (
+                        str(
+                            c_dict.get("approval_status")
+                            or c_dict.get("doc_status")
+                            or "ACTIVE"
+                        )
+                        .strip()
+                        .upper()
+                    )
                     if c_status not in ("ACTIVE", "APPROVED"):
                         return EvidenceVerificationResult(
                             verified=False,

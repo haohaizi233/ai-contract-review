@@ -10,7 +10,7 @@
 try:
     active_rules = storage.get_rules(...)
 except Exception:
-    pass # 异常被静默吞掉，cache_valid 保持 True！
+    pass  # 异常被静默吞掉，cache_valid 保持 True！
 ```
 若数据库发生网络闪断、连接池耗尽或读超时，系统不仅没有安全阻断，反而将过时甚至已撤销规则绑定的旧缓存直接放行，返回给前端用户。
 
@@ -20,7 +20,7 @@ except Exception:
 try:
     active_rules_now = storage.get_rules(...)
 except Exception:
-    pass # 异常被吞，继续执行 self._cache[cache_key] = result！
+    pass  # 异常被吞，继续执行 self._cache[cache_key] = result！
 ```
 在数据库故障时，无法确认规则是否在推理期间被管理员撤销，但代码依然将模型结论标记为 `AI_REVIEW_COMPLETED` 并持久化落入磁盘缓存，导致错误结论长期污染系统。
 
