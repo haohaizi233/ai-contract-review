@@ -16,7 +16,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from PIL import Image
 
-ROOT = Path(__file__).resolve().parents[1]
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 WORK = ROOT / "tmp/image_recovery_20261109"
 BASE = ROOT / "data/contract_merged"
 
@@ -282,7 +286,7 @@ def main():
 
 
 def load_context(urls, missing):
-    from tender_case_quality import image_sources
+    from tools.integrations.tender.tender_case_quality import image_sources
 
     context = {}
     source = WORK / "fresh_source_opinions.jsonl"

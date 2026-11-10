@@ -1,8 +1,8 @@
-import sys
 from pathlib import Path
+import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from tender_case_quality import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.integrations.tender.tender_case_quality import (  # noqa: E402
     merge_oa_logs,
     group_process_links,
     image_coverage,
@@ -53,7 +53,7 @@ def test_html_error_is_not_an_image(tmp_path):
 
 def test_actual_case_counts_missing_old_image():
     from types import SimpleNamespace
-    from tender_case_export import Case
+    from tools.integrations.tender.tender_case_export import Case
 
     class Resources:
         def lookup(self, url):
@@ -72,7 +72,7 @@ def test_data_image_is_persisted_and_verified(tmp_path):
     import base64
     import io
     from PIL import Image
-    from tender_case_quality import OldResources
+    from tools.integrations.tender.tender_case_quality import OldResources
 
     buffer = io.BytesIO()
     Image.new("RGB", (2, 2), "pink").save(buffer, format="PNG")
@@ -86,7 +86,7 @@ def test_data_image_is_persisted_and_verified(tmp_path):
 
 
 def test_login_page_is_not_saved_as_resource(tmp_path):
-    from tender_case_quality import OldResources
+    from tools.integrations.tender.tender_case_quality import OldResources
 
     class Reply:
         def __enter__(self):
@@ -117,7 +117,7 @@ def test_login_page_is_not_saved_as_resource(tmp_path):
 
 def test_redirect_drops_credentials_on_other_origin():
     import urllib.request
-    from tender_case_quality import CookieSafeRedirect
+    from tools.integrations.tender.tender_case_quality import CookieSafeRedirect
 
     req = urllib.request.Request(
         "http://oa.test/file", headers={"Cookie": "private", "Authorization": "secret"}
@@ -129,7 +129,7 @@ def test_redirect_drops_credentials_on_other_origin():
 
 
 def test_transient_error_cache_is_retryable(tmp_path):
-    from tender_case_quality import OldResources
+    from tools.integrations.tender.tender_case_quality import OldResources
 
     store = OldResources(tmp_path, tmp_path / "out", "http://example.test")
     url = "http://example.test/img"
@@ -151,7 +151,7 @@ def test_mapped_requests_are_loaded_before_cache_coverage(tmp_path):
     import pickle
     from types import SimpleNamespace
     from unittest.mock import patch
-    import tender_case_export as export
+    from tools.integrations.tender import tender_case_export as export
 
     cache = {"form": {(-130, 5): [2]}, "covered_reqs": {1}, "covered_files": set()}
     (tmp_path / "oa.pkl").write_bytes(pickle.dumps(cache))
@@ -177,7 +177,7 @@ def test_mapped_requests_are_loaded_before_cache_coverage(tmp_path):
 
 def test_external_fileid_cannot_reuse_oa_image(tmp_path):
     from PIL import Image
-    from tender_case_quality import OldResources
+    from tools.integrations.tender.tender_case_quality import OldResources
 
     folder = tmp_path / "data/e9-opinion-export/images"
     folder.mkdir(parents=True)
@@ -188,7 +188,7 @@ def test_external_fileid_cannot_reuse_oa_image(tmp_path):
 
 
 def test_markdown_oa_image_is_a_download_source():
-    from tender_case_quality import image_sources
+    from tools.integrations.tender.tender_case_quality import image_sources
 
     assert image_sources("![](/weaver/weaver.file.FileDownload?fileid=3)") == [
         "/weaver/weaver.file.FileDownload?fileid=3"
@@ -198,7 +198,7 @@ def test_markdown_oa_image_is_a_download_source():
 def test_external_login_logo_is_not_oa_auth_failure(tmp_path):
     import io
     from PIL import Image
-    from tender_case_quality import OldResources
+    from tools.integrations.tender.tender_case_quality import OldResources
 
     buffer = io.BytesIO()
     Image.new("RGB", (2, 2)).save(buffer, format="PNG")
@@ -230,7 +230,7 @@ def test_external_login_logo_is_not_oa_auth_failure(tmp_path):
 
 
 def test_wrong_sized_attachment_is_not_counted_as_valid(tmp_path):
-    from tender_case_quality import OldResources
+    from tools.integrations.tender.tender_case_quality import OldResources
 
     store = OldResources(tmp_path, tmp_path / "out", "http://oa.test")
     f = tmp_path / "short.bin"

@@ -39,7 +39,9 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 ENVF = os.path.join(ROOT, "data", ".db_env")
 SYNC_DIR = os.path.join(ROOT, "data", "tender_sync")
 TABLES_DIR = os.path.join(SYNC_DIR, "tables")

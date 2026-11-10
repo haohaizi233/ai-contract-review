@@ -18,9 +18,14 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from PIL import Image
-from tender_case_quality import merge_oa_logs, valid_file
+import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.integrations.tender.tender_case_quality import merge_oa_logs, valid_file  # noqa: E402
+
 DATA = ROOT / "data"
 MD_LINK = re.compile(r"(!?\[[^\]\n]*\])\((<[^>]*>|(?:[^()\n]|\([^()\n]*\))*)\)")
 
@@ -221,7 +226,7 @@ def load_oa(contracts, refresh):
     )
     todo = sorted(ids - covered - extra["covered"])
     if refresh and todo:
-        from live_db_merge import load_env
+        from tools.data_ops.live_db_merge import load_env
         import pytds
 
         env = load_env()
@@ -459,7 +464,7 @@ def build(out, refresh=False, legacy=None):
                     "- 操作类型（原值）：" + str(row.get("logtype", "")),
                     "",
                 ]
-                from tender_case_export import html_to_md
+                from tools.integrations.tender.tender_case_export import html_to_md
 
                 body = html_to_md(str(row.get("remark") or ""))
                 lines += [

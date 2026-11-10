@@ -26,7 +26,9 @@ import sys
 from collections import defaultdict
 from datetime import datetime
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 ENVF = os.path.join(ROOT, "data", ".db_env")
 E9_INDEX = os.path.join(ROOT, "data", "e9-opinion-export", "_index.csv")
 MANIFEST = os.path.join(ROOT, "data", "tender_sync", "manifest.csv")

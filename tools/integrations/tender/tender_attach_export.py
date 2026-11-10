@@ -20,7 +20,9 @@ import sys
 import urllib.parse
 import urllib.request
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 ENVF = os.path.join(ROOT, "data", ".db_env")
 
 

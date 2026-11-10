@@ -17,7 +17,9 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 DEFAULT_PROGRESS = os.path.join(ROOT, "data", "tender_sync", "progress.json")
 BG_PATH = os.path.join(ROOT, "tools", "assets", "sync-background.png")
 

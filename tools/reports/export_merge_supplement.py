@@ -2,7 +2,7 @@ import shutil
 import sys
 from pathlib import Path
 
-import tender_case_export as exporter
+from tools.integrations.tender import tender_case_export as exporter
 
 out = Path("data/contract_merge_supplement").resolve()
 cache = out / "_cache"

@@ -21,7 +21,7 @@ from openpyxl.utils import get_column_letter
 sys.path.insert(
     0, str(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 )
-from tender_fullsync import load_env
+from tools.integrations.tender.tender_fullsync import load_env
 from tools.reports.export_contract_mappings_excel import write_styled_xlsx
 from contract_kb.modules.templates.catalog_data import (
     TEMPLATE_5TH_LAYER_RULES,

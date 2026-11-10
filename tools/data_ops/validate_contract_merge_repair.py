@@ -6,12 +6,12 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from PIL import Image
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from contract_merge_repair import MD_LINK
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tools.data_ops.contract_merge_repair import MD_LINK  # noqa: E402
 
 
 def validate(base):
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     records = [
         json.loads(line)
         for line in (base / "contracts_merged.jsonl")

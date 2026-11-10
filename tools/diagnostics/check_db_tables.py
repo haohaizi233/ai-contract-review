@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path("tools").resolve()))
-from tender_fullsync import load_env
+from tools.integrations.tender.tender_fullsync import load_env
 import pymysql
 
 env = load_env()
