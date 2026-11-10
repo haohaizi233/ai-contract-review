@@ -12,17 +12,18 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import hmac
 import os
+import sys
 import time
-import urllib.parse
 from typing import Any
-from dataclasses import dataclass
+import urllib.parse
 
 from fastapi import HTTPException, Request
 
-from . import config
+from contract_kb import config
 
 ROLE_VIEWER = config.ROLE_VIEWER
 ROLE_REVIEWER = config.ROLE_REVIEWER
@@ -258,12 +259,12 @@ class TrustedHeaderAuth:
                 if nonce in self._seen_nonces:
                     raise HTTPException(401, "认证请求重放（Nonce 已被使用）")
 
-                st = self.storage
+                st = self.storage() if callable(self.storage) else self.storage
                 if st is None:
                     try:
-                        import contract_kb.api as api_mod
-
-                        st = getattr(api_mod, "get_storage", lambda: None)()
+                        api_mod = sys.modules.get("contract_kb.api")
+                        if api_mod is not None:
+                            st = getattr(api_mod, "get_storage", lambda: None)()
                     except Exception:
                         st = None
 

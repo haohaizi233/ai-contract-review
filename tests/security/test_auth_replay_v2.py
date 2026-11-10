@@ -17,7 +17,7 @@ from fastapi import HTTPException
 import pytest
 from starlette.requests import Request
 
-from contract_kb.auth import (
+from contract_kb.interfaces.http.auth import (
     TrustedHeaderAuth,
     compute_auth_signature_v2,
 )

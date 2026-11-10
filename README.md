@@ -38,25 +38,51 @@ uvicorn contract_kb.api:app --host 127.0.0.1 --port 8000
 ## 核心架构视图与目录组织
 
 ```text
-contract_kb/
-  domain/                  # 核心领域层（纯净零外部依赖）
-    models/                # CanonicalContract 标准合同聚合根、ReviewResult、Finding
-    value_objects/         # ContractNumber（前缀解析）、Decimal 精确金额
-    ports/                 # 仓储与外部组件抽象接口（ReviewStoragePort / EmbedderPort）
-  application/             # 应用编排层
-    pipeline/              # 14 阶段可组合审查流水线（ReviewPipeline / ReviewStage）
-    workflow/              # 受控审查 Agent 8 状态机（ControlledReviewAgentWorkflow / Budget）
-  modules/                 # 领域业务模块层（Bounded Contexts）
-    rules/                 # 策略红线守卫、规则策略注册表、多源冲突消解、带审计人工覆写
-    retrieval/             # RAG 知识来源分级治理、RRF 倒数排名融合、词法加权重排、引用核验
-    cases/                 # 历史案卷交叉对账纯函数、SHA-256 安全缓存（SafeJsonCache）
-    integrations/          # 泛微 e9、新系统 tender、MinIO、企微微盘只读防腐适配器
-  infrastructure/          # 基础设施层
-    persistence/           # 双库工作单元（UnitOfWork / Savepoint 原子事务）
-    task_queue/            # 轻量持久化异步执行器（PersistentTaskRunner / 指数退避 / DLQ）
-    observability/         # 脱敏日志（StructuredJsonFormatter）与指标收集器（MetricsCollector）
-  interfaces/              # 外部接口层
-    http/                  # OpenAPI v1 模式、中间件、统一错误信封 ErrorEnvelope
+ai-contract-review/
+├── contract_kb/
+│   ├── domain/                  # 核心领域层（纯净零外部依赖）
+│   │   ├── models/              # CanonicalContract 标准合同聚合根、ReviewResult、Finding
+│   │   ├── value_objects/       # ContractNumber、Decimal 精确金额、ExecutionDeadline/CancelToken
+│   │   └── ports/               # 领域仓储端口契约
+│   ├── application/             # 应用编排层
+│   │   ├── pipeline/            # 14 阶段可组合审查流水线（ReviewPipeline / ReviewStage）
+│   │   ├── agents/              # 法务审查 Agent、SSE 队列会话管理、知识库治理适配器
+│   │   ├── workflow/            # 受控审查 Agent 8 状态机（ControlledReviewAgentWorkflow / Budget）
+│   │   ├── security/            # 幂等键与安全门禁服务
+│   │   └── ports/               # Embedding / Reranker / LLM 抽象端口
+│   ├── modules/                 # 领域业务模块层（Bounded Contexts）
+│   │   ├── document_processing/ # DOCX/PDF/DOC 解析、条款提取、五级业务分类、受控导入
+│   │   ├── contract_comparison/ # 逐条款 Diff、全文双栏 Diff、表格对齐、排版格式审核
+│   │   ├── retrieval/           # RAG 知识来源分级治理、RRF 融合、重排、引用核验
+│   │   ├── rules/               # 策略红线守卫、规则引擎、冲突消解、带审计人工覆写
+│   │   ├── templates/           # 模板知识蒸馏、五级分类路由规则、标准素材目录
+│   │   ├── cases/               # 历史案卷交叉对账纯函数、SHA-256 安全缓存
+│   │   └── integrations/        # 泛微 e9、新系统 tender、MinIO、企微微盘只读防腐适配器
+│   ├── infrastructure/          # 基础设施适配层
+│   │   ├── persistence/         # SQLite / PostgreSQL+pgvector 双引擎存储与 UnitOfWork
+│   │   ├── ai/                  # Embedding / Reranker / LLM 具体 Provider 实现
+│   │   ├── checkpoints/         # Agent 断点续传与防篡改快照存储
+│   │   ├── task_queue/          # 轻量持久化异步执行器（PersistentTaskRunner）
+│   │   └── observability/       # 脱敏日志与指标收集器（MetricsCollector）
+│   ├── interfaces/              # 外部交互接口层
+│   │   ├── http/                # FastAPI OpenAPI v1 模式、HMAC-V2 鉴权、中间件与错误信封
+│   │   ├── web/                 # 合同比对与 AI 批注可视化工作台（Server / Routes / Services / 静态资源）
+│   │   ├── desktop/             # Tkinter 桌面自动化运维控制台（MainWindow / ProcessRunner / Commands）
+│   │   └── cli/                 # 命令行入口（import / refresh / inventory）
+│   └── evaluation/              # 离线评测与基准度量层（生产代码零反向依赖）
+│       ├── datasets/            # 黄金查询集、合成模板语料与变异样本生成
+│       ├── retrieval/           # RAG 检索基准评测
+│       ├── review/              # 端到端审核质量与延迟评估
+│       └── benchmarks/          # 多路检索与重排消融实验
+├── tools/                       # 工程辅助与运维脚本（按职责分包 + 根目录保留 8 个薄兼容入口）
+│   ├── diagnostics/             # 数据库结构与微盘诊断工具
+│   ├── templates/               # 模板规则分析与下载工具
+│   ├── integrations/            # 企微/微盘同步 CLI (wecom/) 与新系统同步工具 (tender/)
+│   ├── data_ops/                # 历史案卷合并、修复与全量复验工具
+│   ├── reports/                 # 知识图谱 HTML、Excel 映射表与报告生成工具
+│   └── maintenance/             # 单合同命令行微观比对工具
+├── scripts/                     # 架构静态审计与自动化工程脚本
+└── tests/                       # 自动化测试套件（unit / integration / contract / architecture / security / e2e / performance）
 ```
 
 ## 关键配置（授权后启用）

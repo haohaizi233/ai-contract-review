@@ -329,7 +329,7 @@ class PipelineContext:
 
     def get_deadline(self) -> Any:
         if self.deadline is None:
-            from ...application.pipeline.deadline import ExecutionDeadline
+            from ..value_objects.deadline import ExecutionDeadline
 
             self.deadline = ExecutionDeadline(
                 timeout_seconds=self.timeout_seconds,
@@ -341,7 +341,7 @@ class PipelineContext:
 
     def get_cancel_token(self) -> Any:
         if self.cancel_token is None:
-            from ...application.pipeline.deadline import CancelToken
+            from ..value_objects.deadline import CancelToken
 
             self.cancel_token = CancelToken(check_fn=lambda: self.cancel_requested)
         return self.cancel_token

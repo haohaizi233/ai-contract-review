@@ -37,17 +37,11 @@ from pydantic import BaseModel
 
 from . import config
 from .application.security.idempotency import IdempotencyConflictError
-from .auth import (
-    ROLE_ADMIN,
-    ROLE_REVIEWER,
-    Principal,
-    TrustedHeaderAuth,
-    authorize,
-    enforce_input_limits,
-)
 from .infrastructure.observability import GLOBAL_METRICS
 from .infrastructure.task_queue import PersistentTaskRunner
 from .interfaces.http import (
+    ROLE_ADMIN,
+    ROLE_REVIEWER,
     CompareReq,
     ErrorEnvelope,
     FeedbackIn,
@@ -55,10 +49,14 @@ from .interfaces.http import (
     FormatStandardIn,
     HealthResponse,
     PaginatedResponse,
+    Principal,
     ReadinessResponse,
     ReviewTaskIn,
     RuleIn,
     SearchReq,
+    TrustedHeaderAuth,
+    authorize,
+    enforce_input_limits,
     install_observability_and_error_handlers,
 )
 from .modules.rules.governance import HumanOverrideConflictError, HumanOverrideService
@@ -69,7 +67,7 @@ _lock = threading.Lock()
 _storage: Any = None
 _runner: PersistentTaskRunner | None = None
 _runner_storage_ref: Any = None
-_auth = TrustedHeaderAuth()
+_auth = TrustedHeaderAuth(storage=lambda: get_storage())
 _override_service = HumanOverrideService()
 
 UPLOAD_CHUNK_SIZE = 64 * 1024
