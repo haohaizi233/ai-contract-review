@@ -281,6 +281,7 @@ window.addEventListener('resize', () => {
 let activeDriver = null;
 let syncListenerAttached = false;
 let syncFrame = 0;
+let resyncFrame = 0;
 let scrollGeometry = null;
 let scrollPanes = null;
 const followerPositions = new WeakMap();
@@ -294,7 +295,9 @@ function scrollLimit(pane) { return Math.max(0, pane.scrollHeight - pane.clientH
 function invalidateScrollGeometry() { scrollGeometry = null; }
 function resetThreeWaySyncScroll() {
   cancelAnimationFrame(syncFrame);
+  cancelAnimationFrame(resyncFrame);
   syncFrame = 0;
+  resyncFrame = 0;
   activeDriver = null;
   invalidateScrollGeometry();
   if (scrollPanes) Object.values(scrollPanes).forEach(pane => {
@@ -319,19 +322,16 @@ function highlightAnnotation(annId) {
   if (indicator) indicator.innerText = `批注 ${ann.index || index + 1} / ${currentData.annotations.length}`;
 }
 
-function highlightScrollPosition(source, position) {
+// `readingY` is a content coordinate: highlight the clause/card under the pane's reading line.
+function highlightScrollPosition(source, readingY) {
   const stops = scrollGeometry.annotationStops[source];
   if (!stops.length) return;
   let low = 0, high = stops.length;
   while (low < high) {
     const mid = (low + high) >> 1;
-    if (stops[mid].position <= position) low = mid + 1; else high = mid;
+    if (stops[mid].position <= readingY) low = mid + 1; else high = mid;
   }
-  // Use the clause at the reading line, or the closest card to the sidebar center.
-  let index = Math.max(0, low - 1);
-  if (source === 'detail' && low < stops.length
-      && Math.abs(stops[low].position - position) < Math.abs(stops[index].position - position)) index = low;
-  highlightAnnotation(stops[index].id);
+  highlightAnnotation(stops[Math.max(0, low - 1)].id);
 }
 
 function mapScrollPosition(position, anchors) {
@@ -347,61 +347,149 @@ function mapScrollPosition(position, anchors) {
   return a[1] + (b[1] - a[1]) * (position - a[0]) / (b[0] - a[0]);
 }
 
+function invertAnchors(anchors) { return anchors.map(([a, b]) => [b, a]); }
+
+// Reading line (after Meld's calc_syncpoint): the viewport top in the first half screen, the
+// viewport middle in the body, the viewport bottom in the last half screen. It maps scrollTop
+// [0, max] one-to-one onto content [0, scrollHeight], so clauses in the first and last screen
+// can still be aligned instead of being clipped away. Returns null for a non-scrollable pane.
+function readingLineAnchors(pane) {
+  const max = scrollLimit(pane), view = pane.clientHeight;
+  if (max <= 0 || view <= 0) return null;
+  const ramp = Math.min(view / 2, max / 2);
+  const knots = [[0, 0], [ramp, ramp + view / 2]];
+  if (max - ramp > ramp) knots.push([max - ramp, max - ramp + view / 2]);
+  knots.push([max, max + view]);
+  return knots;
+}
+
+// Longest chain strictly increasing in both coordinates (patience LIS, O(n log n)). A single
+// out-of-order anchor is dropped instead of blocking every later anchor, which is what made the
+// greedy filter collapse the sidebar-to-document map into one flat segment.
+function monotoneAnchors(points, endX, endY) {
+  const inside = points.filter(([x, y]) => x > 0 && y > 0 && x < endX && y < endY)
+    .sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  const tails = [], previous = new Array(inside.length);
+  for (let i = 0; i < inside.length; i++) {
+    let low = 0, high = tails.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (inside[tails[mid]][1] < inside[i][1]) low = mid + 1; else high = mid;
+    }
+    previous[i] = low ? tails[low - 1] : -1;
+    tails[low] = i;
+  }
+  const chain = [];
+  for (let i = tails.length ? tails[tails.length - 1] : -1; i >= 0; i = previous[i]) chain.push(inside[i]);
+  return [[0, 0], ...chain.reverse(), [endX, endY]];
+}
+
+// Every pane is mapped to ONE shared coordinate: the reviewed document's content (hub, the middle
+// pane, as in Meld's three-way view). Each pane owns a monotone bijection to the hub, so any pane
+// can drive the other two, and A->B->A round trips are exact: switching driver never jumps.
 function buildScrollGeometry() {
-  const result = {annotationStops: {std: [], rev: [], detail: []}};
+  const result = {annotationStops: {std: [], rev: [], detail: []}, reading: {}, curves: {}};
+  const hubPane = scrollPanes.rev, hubEnd = hubPane.scrollHeight;
   const blocks = currentData?.aligned_blocks || [];
   const annotations = new Map((currentData?.annotations || []).map(a => [a.id, a]));
+  const blockBox = {std: new Map(), rev: new Map()};
+  for (const key of ['std', 'rev']) {
+    if (scrollPanes[key].scrollHeight <= 0) continue;
+    for (const block of blocks) {
+      const elem = document.getElementById(`${key}-${block.block_id}`);
+      if (!elem) continue;
+      const top = contentTop(elem, scrollPanes[key]), h = elem.getBoundingClientRect().height;
+      blockBox[key].set(block.block_id, {top, center: top + h / 2, bottom: top + h});
+    }
+  }
+
+  // Annotation stops for reading-line highlights.
   for (const card of scrollPanes.detail.querySelectorAll('.annotation-card')) {
     const ann = annotations.get(card.id.replace('card-', ''));
     if (!ann) continue;
-    result.annotationStops.detail.push({id: ann.id, position: contentTop(card, scrollPanes.detail)
-      + card.getBoundingClientRect().height / 2 - scrollPanes.detail.clientHeight / 2});
+    result.annotationStops.detail.push({id: ann.id,
+      position: contentTop(card, scrollPanes.detail) + card.getBoundingClientRect().height / 2});
     for (const key of ['std', 'rev']) {
-      const block = document.getElementById(`${key}-${ann.block_id}`);
-      if (block) result.annotationStops[key].push({id: ann.id, position: contentTop(block, scrollPanes[key]) - 30});
+      const box = blockBox[key].get(ann.block_id);
+      if (box) result.annotationStops[key].push({id: ann.id, position: box.center});
     }
   }
   Object.values(result.annotationStops).forEach(stops => stops.sort((a, b) => a.position - b.position));
-  for (const source of Object.keys(scrollPanes)) {
-    result[source] = {};
-    for (const target of Object.keys(scrollPanes)) {
-      if (target === source) continue;
-      const from = scrollPanes[source], to = scrollPanes[target];
-      const maxFrom = scrollLimit(from), maxTo = scrollLimit(to);
-      const candidates = [];
-      if (source !== 'detail' && target !== 'detail') {
-        for (const block of blocks) {
-          const a = document.getElementById(`${source}-${block.block_id}`);
-          const b = document.getElementById(`${target}-${block.block_id}`);
-          if (a && b) candidates.push([contentTop(a, from) - 30, contentTop(b, to) - 30]);
-        }
-      } else {
-        // Only rendered cards participate: filters and missing annotations are safe.
-        for (const card of scrollPanes.detail.querySelectorAll('.annotation-card')) {
-          const ann = annotations.get(card.id.replace('card-', ''));
-          if (!ann) continue;
-          const docKey = source === 'detail' ? target : source;
-          const block = document.getElementById(`${docKey}-${ann.block_id}`);
-          if (!block) continue;
-          const docPosition = contentTop(block, scrollPanes[docKey]) - 30;
-          const cardPosition = contentTop(card, scrollPanes.detail)
-            + card.getBoundingClientRect().height / 2 - scrollPanes.detail.clientHeight / 2;
-          candidates.push(source === 'detail' ? [cardPosition, docPosition] : [docPosition, cardPosition]);
-        }
-      }
-      candidates.sort((a, b) => a[0] - b[0]);
-      const anchors = [[0, 0]];
-      for (const point of candidates) {
-        const previous = anchors[anchors.length - 1];
-        // Duplicate clauses, reordered cards and clipped endpoints cannot reverse scrolling.
-        if (point[0] > previous[0] && point[1] > previous[1]
-            && point[0] < maxFrom && point[1] < maxTo) anchors.push(point);
-      }
-      anchors.push([maxFrom, maxTo]);
-      result[source][target] = anchors;
+
+  // Monotone reading lines: convert scrollTop -> reading line content Y and back.
+  for (const [key, pane] of Object.entries(scrollPanes)) {
+    const line = readingLineAnchors(pane);
+    result.reading[key] = line ? {line, scroll: invertAnchors(line)} : null;
+  }
+
+  // Pane -> Hub (rev content) curves.
+  result.curves.rev = {toPane: [[0, 0], [hubEnd, hubEnd]], toHub: [[0, 0], [hubEnd, hubEnd]]};
+  for (const key of ['std', 'detail']) {
+    const pane = scrollPanes[key], end = pane.scrollHeight;
+    if (end <= 0 || hubEnd <= 0) {
+      result.curves[key] = {toPane: [[0, 0], [end, hubEnd]], toHub: [[0, 0], [hubEnd, end]]};
+      continue;
     }
+    const points = [];
+    if (key === 'std') {
+      for (const block of blocks) {
+        const a = blockBox.std.get(block.block_id), b = blockBox.rev.get(block.block_id);
+        if (a && b) points.push([a.center, b.center]);
+      }
+    } else {
+      for (const card of pane.querySelectorAll('.annotation-card')) {
+        const ann = annotations.get(card.id.replace('card-', ''));
+        if (!ann) continue;
+        const b = blockBox.rev.get(ann.block_id);
+        if (!b) continue;
+        const cardCenter = contentTop(card, pane) + card.getBoundingClientRect().height / 2;
+        points.push([cardCenter, b.center]);
+      }
+    }
+    const toHub = monotoneAnchors(points, end, hubEnd);
+    const toPane = invertAnchors(toHub);
+    result.curves[key] = {toPane, toHub};
   }
   return result;
+}
+
+// Target scrollTop for `target` when `source` sits at `position`; null when either side cannot scroll.
+function syncedScrollTop(source, position, target) {
+  const from = scrollGeometry.reading[source], fromCurve = scrollGeometry.curves[source];
+  const to = scrollGeometry.reading[target], toCurve = scrollGeometry.curves[target];
+  if (!from || !fromCurve) return null;
+  if (!to || !toCurve) return 0;
+  const hubY = mapScrollPosition(mapScrollPosition(position, from.line), fromCurve.toHub);
+  const top = mapScrollPosition(mapScrollPosition(hubY, toCurve.toPane), to.scroll);
+  return Math.max(0, Math.min(scrollLimit(scrollPanes[target]), top));
+}
+
+// Move every follower to the position implied by `source`; follower echoes are recorded so they never drive back.
+function applySync(source) {
+  if (!scrollGeometry) scrollGeometry = buildScrollGeometry();
+  const pane = scrollPanes[source];
+  const position = Math.max(0, Math.min(scrollLimit(pane), pane.scrollTop));
+  const reading = scrollGeometry.reading[source];
+  if (reading) highlightScrollPosition(source, mapScrollPosition(position, reading.line));
+  for (const [target, other] of Object.entries(scrollPanes)) {
+    if (target === source) continue;
+    const top = syncedScrollTop(source, position, target);
+    if (top === null) continue;
+    if (Math.abs(other.scrollTop - top) > 0.5) other.scrollTop = top;
+    followerPositions.set(other, other.scrollTop);
+  }
+}
+
+// Layout changed (filter, streamed card text, resize): rebuild once and re-align followers to the
+// current driver, so the next gesture starts from a consistent state instead of jumping.
+function scheduleResync() {
+  invalidateScrollGeometry();
+  if (resyncFrame || !scrollPanes) return;
+  resyncFrame = requestAnimationFrame(() => {
+    resyncFrame = 0;
+    if (activeDriver === 'navigation' || syncFrame) return;
+    applySync(activeDriver && scrollPanes[activeDriver] ? activeDriver : 'rev');
+  });
 }
 
 function claimDriver(source) {
@@ -419,16 +507,20 @@ function claimDriver(source) {
 
 function setupThreeWaySyncScroll() {
   resetThreeWaySyncScroll();
-  if (syncListenerAttached) return;
+  if (syncListenerAttached) {
+    // A new render keeps the listeners; re-align followers to the reviewed document once laid out.
+    scheduleResync();
+    return;
+  }
   syncListenerAttached = true;
   scrollPanes = {
     std: document.getElementById('colStandardContainer'),
     rev: document.getElementById('colReviewedContainer'),
     detail: document.getElementById('annotationsList')
   };
-  const resizeObserver = new ResizeObserver(invalidateScrollGeometry);
+  const resizeObserver = new ResizeObserver(scheduleResync);
   const mutationObserver = new MutationObserver(() => {
-    invalidateScrollGeometry();
+    scheduleResync();
     // Release removed cards before observing the current render.
     resizeObserver.disconnect();
     // Observe new cards as well as existing cards whose content expands asynchronously.
@@ -457,28 +549,22 @@ function setupThreeWaySyncScroll() {
       syncFrame = requestAnimationFrame(() => {
         syncFrame = 0;
         if (activeDriver !== key) return;
-        if (!scrollGeometry) scrollGeometry = buildScrollGeometry();
-        const position = Math.max(0, Math.min(scrollLimit(pane), pane.scrollTop));
-        highlightScrollPosition(key, position);
-        for (const [target, other] of Object.entries(scrollPanes)) {
-          if (target === key) continue;
-          const top = mapScrollPosition(position, scrollGeometry[key][target]);
-          if (Math.abs(other.scrollTop - top) > 0.5) other.scrollTop = top;
-          followerPositions.set(other, other.scrollTop);
-        }
+        applySync(key);
       });
     }, {passive: true});
     resizeObserver.observe(pane);
     mutationObserver.observe(pane, {childList: true, subtree: true, characterData: true});
     pane.querySelectorAll('.annotation-card, .contract-paper-canvas').forEach(el => resizeObserver.observe(el));
   }
-  window.addEventListener('resize', invalidateScrollGeometry);
-  document.fonts?.ready.then(invalidateScrollGeometry);
+  window.addEventListener('resize', scheduleResync);
+  document.fonts?.ready.then(scheduleResync);
 }
 
 
 function renderAnnotationsSidebar() {
   const container = document.getElementById('annotationsList');
+  // Streamed agent updates re-render the list; keep the reader's place instead of snapping to the top.
+  const keptScrollTop = container.scrollTop;
   container.innerHTML = '';
 
   const anns = currentData.annotations || [];
@@ -588,6 +674,7 @@ function renderAnnotationsSidebar() {
 
     container.appendChild(card);
   });
+  container.scrollTop = keptScrollTop;
 }
 
 function selectAnnotation(annId) {
