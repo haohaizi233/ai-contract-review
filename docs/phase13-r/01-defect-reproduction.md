@@ -11,13 +11,15 @@
 ```python
 from contract_kb.full_diff import _enhance_diff_tables
 
-blocks = [{
-    "clause_title": "双方主体与基本信息",
-    "standard_text": "甲方：甲公司\n乙方：乙公司",
-    "reviewed_text": "甲方：北京量子跃迁智能科技有限公司\n乙方：上海领航航天科技合伙企业",
-    "status": "DIFF",
-    "annotation_ids": ["ann-1"],
-}]
+blocks = [
+    {
+        "clause_title": "双方主体与基本信息",
+        "standard_text": "甲方：甲公司\n乙方：乙公司",
+        "reviewed_text": "甲方：北京量子跃迁智能科技有限公司\n乙方：上海领航航天科技合伙企业",
+        "status": "DIFF",
+        "annotation_ids": ["ann-1"],
+    }
+]
 nb, na = _enhance_diff_tables(blocks, [])
 ```
 

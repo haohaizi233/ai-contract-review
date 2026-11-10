@@ -442,7 +442,7 @@ class LegalReviewAgent:
 
         # 6. 调用前预算预留
         est_input_tokens = len(system_prompt) + len(user_prompt)
-        max_out = min(self.max_tokens, 1500)
+        max_out = min(int(self.max_tokens or 1500), 1500)
         reservation = None
         try:
             reservation = self.budget_ledger.reserve_budget(
@@ -476,7 +476,7 @@ class LegalReviewAgent:
                 raw_resp = provider.complete(
                     system=system_prompt,
                     user=user_prompt,
-                    timeout=float(self.timeout),
+                    timeout=float(self.timeout or 30.0),
                     max_tokens=max_out,
                 )
                 if isinstance(raw_resp, dict):

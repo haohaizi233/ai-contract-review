@@ -69,8 +69,11 @@ class ProcessRunner:
                 break
 
             self.status_callback(f"[{idx}/{total}] 正在执行: {title} ...", is_busy=True)
+            display_cmd = " ".join(
+                "<inline-python-script>" if "\n" in str(c) else str(c) for c in cmd
+            )
             self.log_callback(
-                f"\n{'=' * 70}\n>>> [{idx}/{total}] 任务开始: {title}\n>>> 执行指令: {' '.join(str(c) for c in cmd)}\n{'=' * 70}\n",
+                f"\n{'=' * 70}\n>>> [{idx}/{total}] 任务开始: {title}\n>>> 执行指令: {display_cmd}\n{'=' * 70}\n",
                 tag="header",
             )
 
@@ -81,9 +84,13 @@ class ProcessRunner:
                 if sys.platform == "win32":
                     creationflags = subprocess.CREATE_NO_WINDOW
 
+                env = os.environ.copy()
+                env["PYTHONUNBUFFERED"] = "1"
+
                 self.current_process = subprocess.Popen(
                     cmd,
                     cwd=str(PROJECT_ROOT),
+                    env=env,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,
@@ -157,8 +164,9 @@ class ProcessRunner:
     @staticmethod
     def _categorize_line(line: str) -> str:
         lower = line.lower()
+        cleaned = lower.replace("failures=0", "").replace("failed=0", "")
         if any(
-            w in lower for w in ["fail", "error", "traceback", "exception", "failed"]
+            w in cleaned for w in ["fail", "error", "traceback", "exception", "failed"]
         ):
             return "error"
         if any(
@@ -795,18 +803,31 @@ class StartGUI:
         self.runner.run_command("老旧 .doc 一键批量转为 .docx", cmd)
 
     def _get_convert_doc_cmd(self) -> list[str]:
-        # 通过 Python 脚本驱动以保证跨平台稳定性
-        code = (
-            "import os, subprocess; from pathlib import Path; "
-            "script = Path('tools/deploy/convert_legacy_doc.ps1').resolve(); "
-            "docs = [f for f in Path('参考').rglob('*') if f.suffix.lower() == '.doc']; "
-            "print(f'共扫描到 {len(docs)} 个 .doc 待转换文件...'); "
-            "for i, f in enumerate(docs, 1): "
-            "    tgt = f.with_suffix('.docx'); "
-            "    cmd = ['powershell.exe', '-NoProfile', '-NonInteractive', '-File', str(script), '-Source', str(f.resolve()), '-Destination', str(tgt.resolve())]; "
-            "    p = subprocess.run(cmd, capture_output=True); "
-            "    print(f'[{i}/{len(docs)}] ' + ('OK: ' + f.name if p.returncode == 0 else 'FAIL: ' + f.name)); "
-            "print('转换任务处理完成。')"
+        # 通过 Python 脚本驱动以保证跨平台稳定性（使用换行符分隔复合语句，并对已转换的最新 .docx 自动幂等跳过）
+        code = "\n".join(
+            [
+                "import subprocess",
+                "from pathlib import Path",
+                "script = Path('tools/deploy/convert_legacy_doc.ps1').resolve()",
+                "docs = sorted(f for f in Path('参考').rglob('*') if f.is_file() and f.suffix.lower() == '.doc' and not f.name.startswith('~'))",
+                "print(f'共扫描到 {len(docs)} 个 .doc 待转换文件...', flush=True)",
+                "converted = skipped = failed = 0",
+                "for i, f in enumerate(docs, 1):",
+                "    tgt = f.with_suffix('.docx')",
+                "    if tgt.exists() and tgt.stat().st_size > 0 and tgt.stat().st_mtime >= f.stat().st_mtime:",
+                "        skipped += 1",
+                "        print(f'[{i}/{len(docs)}] OK (已存在最新 .docx): {f.name}', flush=True)",
+                "        continue",
+                "    cmd = ['powershell.exe', '-NoProfile', '-NonInteractive', '-File', str(script), '-Source', str(f.resolve()), '-Destination', str(tgt.resolve())]",
+                "    p = subprocess.run(cmd, capture_output=True)",
+                "    if p.returncode == 0:",
+                "        converted += 1",
+                "        print(f'[{i}/{len(docs)}] OK: {f.name}', flush=True)",
+                "    else:",
+                "        failed += 1",
+                "        print(f'[{i}/{len(docs)}] FAIL: {f.name}', flush=True)",
+                "print(f'转换任务处理完成: converted={converted} skipped={skipped} failures={failed}', flush=True)",
+            ]
         )
         return [str(PYTHON_EXE), "-c", code]
 
