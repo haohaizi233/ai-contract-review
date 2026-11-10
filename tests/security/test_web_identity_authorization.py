@@ -11,7 +11,7 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
-from contract_kb.auth import compute_auth_signature_v2
+from contract_kb.interfaces.http.auth import compute_auth_signature_v2
 from tools.contract_diff_web import (
     DiffVisualizerHandler,
     get_session_dir,

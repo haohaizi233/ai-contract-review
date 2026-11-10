@@ -15,7 +15,10 @@ import time
 from typing import Any
 import urllib.parse
 
-from contract_kb.auth import compute_auth_signature_v2, EMPTY_BODY_SHA256
+from contract_kb.interfaces.http.auth import (
+    compute_auth_signature_v2,
+    EMPTY_BODY_SHA256,
+)
 from contract_kb import config
 from contract_kb.application.agents.review_sessions import get_agent_manager
 from contract_kb.modules.templates.material_catalog import (

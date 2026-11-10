@@ -100,3 +100,29 @@ def test_web_static_assets_present() -> None:
         assert asset.is_file() and asset.stat().st_size > 100, (
             f"Missing or empty web asset: {asset}"
         )
+
+
+def test_internal_imports_resolve_inside_this_checkout() -> None:
+    """An editable install of another checkout must not hide imports of removed modules."""
+    missing: list[str] = []
+    for root in ("contract_kb", "tests", "tools"):
+        for file in (PROJECT_ROOT / root).rglob("*.py"):
+            tree = ast.parse(file.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and not node.level:
+                    modules = [node.module or ""]
+                elif isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                else:
+                    continue
+                for module in modules:
+                    if module != "contract_kb" and not module.startswith(
+                        "contract_kb."
+                    ):
+                        continue
+                    target = PROJECT_ROOT.joinpath(*module.split("."))
+                    if not target.is_dir() and not target.with_suffix(".py").is_file():
+                        missing.append(
+                            f"{file.relative_to(PROJECT_ROOT)}:{node.lineno}: {module}"
+                        )
+    assert not missing, "Internal imports missing from checkout:\n" + "\n".join(missing)

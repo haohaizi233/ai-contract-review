@@ -203,9 +203,16 @@ def test_pg_rollback_and_delete(pg):
     v2 = _doc(sid, h2, ["回滚测试条款 v2：三十个工作日内支付。"], source_file=src)
     v2["template_id"] = f"pgs_{sid}_v2"
     v2["clauses"][0]["clause_id"] = f"pgs_{sid}_v2_c0"
-    pg.upsert_document(v1, tenant="t1")
-    pg.upsert_document(v2, tenant="t1")
-    assert pg.rollback_to_version(f"pgs_{sid}_v2", h1) is True, "回滚必须成功"
+    did_v1, _ = pg.upsert_document(v1, tenant="t1")
+    assert pg.rollback_to_version(did_v1, h1, tenant_id="t1") is False, (
+        "未审批条款不得通过回滚激活"
+    )
+    pg.approve_knowledge_version("t1", did_v1, "legal_admin")
+    did_v2, _ = pg.upsert_document(v2, tenant="t1")
+    pg.approve_knowledge_version("t1", did_v2, "legal_admin")
+    assert pg.rollback_to_version(did_v2, h1, tenant_id="t1") is True, (
+        "已审批历史版本回滚必须成功"
+    )
     pg.delete_document(f"pgs_{sid}_v1")
     pg.delete_document(f"pgs_{sid}_v2")
 

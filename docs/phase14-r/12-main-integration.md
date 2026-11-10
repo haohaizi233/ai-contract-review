@@ -31,3 +31,9 @@ Web 修复分配到对应应用入口和路由：签名身份校验、拒绝越�
 本地串行全量验证：`pytest tests tools/wecom_wedrive_probe/tests` 为 **589 passed、38 skipped**（59.61 秒）；有 1 条第三方 FastAPI/Starlette 测试客户端弃用提示。跳过项由真实 PG、真实语料、真实模型及本机素材库配置决定。
 
 `ruff check .`、`ruff format --check .`（485 文件）和 `mypy contract_kb --ignore-missing-imports --no-error-summary` 均通过。源码无残留冲突标记，`git diff --cached --check` 通过。首次全量曾出现共享合成语料目录在两个测试进程间重建的哈希不一致；停止并行测试后完整串行复测通过，未修改业务逻辑以绕过幂等断言。
+
+## CI 首轮反馈与修复
+
+首轮远端 CI 暴露本地旧 editable 安装掩盖的两处 `contract_kb.auth` 导入，已改为 `contract_kb.interfaces.http.auth`。新增架构测试按当前仓库的物理文件核验内部绝对导入，避免从其他工作区意外加载已删除模块。使用 `python -S` 加载依赖但不执行旧 editable `.pth`，完整串行复测为 **590 passed、38 skipped**。
+
+真实 PG 测试原先直接要求包含 PENDING_REVIEW 条款的版本回滚成功，与 Phase 14 新增的回滚审批校验冲突。两处 PG 测试夹具改为调用公开审批接口，先验证未审批回滚被拒绝，再验证已审批历史版本回滚成功；未放宽生产审批检查。最终 PG 与 CI 门禁结果以 PR 检查为准。
