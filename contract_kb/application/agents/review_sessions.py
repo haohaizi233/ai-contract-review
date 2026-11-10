@@ -46,6 +46,7 @@ class AgentReviewSession:
         session_id: str,
         tenant_id: str = "default",
         user_id: str = "anonymous",
+        storage: Any = None,
     ):
         self.session_id = session_id
         self.tenant_id = tenant_id
@@ -67,6 +68,7 @@ class AgentReviewSession:
         self._fingerprint: ReviewExecutionFingerprint | None = None
         self._checkpoint_storage = CheckpointStorage(base_dir=CHECKPOINT_DIR)
         self._manager: Any = None
+        self._storage: Any = storage
 
         # 代际与看门狗
         self._worker_generation: int = 0
@@ -86,6 +88,23 @@ class AgentReviewSession:
             name=f"Watchdog-{session_id[:8]}",
         )
         self._watchdog_thread.start()
+
+    def set_storage(self, storage: Any) -> None:
+        """显式注入或更新受信任 Storage 实例/工厂。"""
+        with self._lock:
+            self._storage = storage
+
+    def get_storage(self) -> Any:
+        """获取与当前会话绑定的受信任 Storage（运行时绝不注入 JSON/SSE）。"""
+        with self._lock:
+            st = self._storage
+        if st is None and self._manager is not None:
+            get_st_fn = getattr(self._manager, "get_storage", None)
+            if callable(get_st_fn):
+                st = get_st_fn(tenant_id=self.tenant_id)
+        if callable(st):
+            return st()
+        return st
 
     def subscribe(self) -> queue.Queue:
         q: queue.Queue = queue.Queue(maxsize=200)
@@ -419,6 +438,7 @@ class AgentReviewSession:
 
     def _background_worker_loop(self, my_generation: int) -> None:
         agent = get_legal_agent()
+        storage = self.get_storage()
         while not self._stop_event.is_set():
             self._pause_event.wait()
 
@@ -455,16 +475,49 @@ class AgentReviewSession:
             )
 
             try:
-                res = agent.review_clause(
-                    annotation=ann_item,
-                    doc_context=self.doc_context,
-                )
+                review_fn = agent.review_clause
+                review_kwargs: dict[str, Any] = {
+                    "annotation": ann_item,
+                    "doc_context": self.doc_context,
+                }
+                try:
+                    import inspect
+
+                    target_fn = getattr(review_fn, "side_effect", None) or review_fn
+                    if not callable(target_fn):
+                        target_fn = review_fn
+                    sig = inspect.signature(target_fn)
+                    accepts_kwargs = any(
+                        p.kind == inspect.Parameter.VAR_KEYWORD
+                        for p in sig.parameters.values()
+                    )
+                    if accepts_kwargs or "storage" in sig.parameters:
+                        review_kwargs["storage"] = storage
+                    if accepts_kwargs or "tenant_id" in sig.parameters:
+                        review_kwargs["tenant_id"] = self.tenant_id
+                except Exception:
+                    review_kwargs["storage"] = storage
+                    review_kwargs["tenant_id"] = self.tenant_id
+
+                try:
+                    res = review_fn(**review_kwargs)
+                except TypeError as te:
+                    if "unexpected keyword argument" in str(te) and (
+                        "storage" in review_kwargs or "tenant_id" in review_kwargs
+                    ):
+                        review_kwargs.pop("storage", None)
+                        review_kwargs.pop("tenant_id", None)
+                        res = review_fn(**review_kwargs)
+                    else:
+                        raise
             except Exception as e:
                 res = agent.build_high_precision_fallback(
                     annotation=ann_item,
                     error_msg=f"线程异常崩溃兜底: {e}",
                     source="WORKER_EXCEPTION_FALLBACK",
                     elapsed_sec=0.05,
+                    tenant_id=self.tenant_id,
+                    storage=storage,
                 )
 
             with self._lock:
@@ -484,6 +537,7 @@ class AgentReviewSession:
                 target["action_advice"] = res.get(
                     "action_advice", target.get("action_advice")
                 )
+                target["evidence_references"] = res.get("evidence_references", [])
                 target["_reasoning"] = res.get("reasoning", "")
                 target["_source"] = res.get("source", "AI_AGENT")
                 target["_elapsedSec"] = res.get("elapsed_sec", 0)
@@ -531,11 +585,14 @@ class AgentReviewSession:
                 self._card_start_time = 0.0
 
             agent = get_legal_agent()
+            storage = self.get_storage()
             fallback_res = agent.build_high_precision_fallback(
                 annotation=ann_item,
                 error_msg=f"看门狗抢救超时 ({round(elapsed, 1)}s > {self.card_timeout_seconds}s)",
                 source="WATCHDOG_EMERGENCY_FALLBACK",
                 elapsed_sec=elapsed,
+                tenant_id=self.tenant_id,
+                storage=storage,
             )
 
             with self._lock:
@@ -615,15 +672,40 @@ class AgentReviewSession:
 class AgentReviewManager:
     """企业级多租户与多会话法务智能体审查管理器。"""
 
-    def __init__(self) -> None:
+    def __init__(self, storage_provider: Any = None) -> None:
         self._lock = threading.RLock()
         self._sessions: dict[str, AgentReviewSession] = {}
+        self._storage_provider: Any = storage_provider
+
+    def set_storage_provider(self, provider: Any) -> None:
+        """显式绑定或更新全局持久化存储句柄/工厂。"""
+        with self._lock:
+            self._storage_provider = provider
+
+    def get_storage(self, tenant_id: str | None = None) -> Any:
+        """安全解析受信任知识库 Storage（支持惰性工厂与线程安全连接管理）。"""
+        with self._lock:
+            provider = self._storage_provider
+        if provider is None:
+            try:
+                from contract_kb.infrastructure.persistence.sqlite_storage import (
+                    create_storage,
+                )
+
+                return create_storage()
+            except Exception:
+                return None
+        if callable(provider):
+            return provider()
+        return provider
 
     def get_or_create_session(
         self,
         session_id: str = "default_session",
         tenant_id: str = "default",
         user_id: str = "anonymous",
+        storage: Any = None,
+        is_admin: bool = False,
     ) -> AgentReviewSession:
         with self._lock:
             sess = self._sessions.get(session_id)
@@ -632,13 +714,21 @@ class AgentReviewManager:
                     raise PermissionError(
                         f"跨租户越权阻断: Session {session_id} 归属 {sess.tenant_id}，拒绝 {tenant_id} 访问"
                     )
-                if user_id != "system_admin" and sess.user_id != user_id:
+                if not is_admin and sess.user_id != user_id:
                     raise PermissionError(
                         f"跨用户越权阻断: Session {session_id} 归属 {sess.user_id}，拒绝 {user_id} 访问"
                     )
                 sess._manager = self
+                if storage is not None:
+                    sess.set_storage(storage)
                 return sess
-            sess = AgentReviewSession(session_id, tenant_id, user_id)
+            effective_storage = storage or self.get_storage(tenant_id)
+            sess = AgentReviewSession(
+                session_id,
+                tenant_id,
+                user_id,
+                storage=effective_storage,
+            )
             sess._manager = self
             self._sessions[session_id] = sess
             return sess
@@ -734,6 +824,7 @@ class AgentReviewManager:
         session_id: str = "default_session",
         tenant_id: str | None = None,
         user_id: str | None = None,
+        is_admin: bool = False,
     ) -> AgentReviewSession | None:
         with self._lock:
             sess = self._sessions.get(session_id)
@@ -743,7 +834,7 @@ class AgentReviewManager:
                 raise PermissionError(
                     f"跨租户越权阻断: Session {session_id} 归属 {sess.tenant_id}，拒绝 {tenant_id} 访问"
                 )
-            if user_id is not None and user_id != "system_admin":
+            if user_id is not None and not is_admin:
                 if sess.user_id != user_id:
                     raise PermissionError(
                         f"跨用户越权阻断: Session {session_id} 归属 {sess.user_id}，拒绝 {user_id} 访问"
@@ -758,17 +849,31 @@ class AgentReviewManager:
         session_id: str = "default_session",
         tenant_id: str = "default",
         user_id: str = "anonymous",
-    ) -> None:
-        sess = self.get_or_create_session(session_id, tenant_id, user_id)
+        storage: Any = None,
+        is_admin: bool = False,
+    ) -> AgentReviewSession:
+        sess = self.get_or_create_session(
+            session_id,
+            tenant_id,
+            user_id,
+            storage=storage,
+            is_admin=is_admin,
+        )
+        if storage is not None:
+            sess.set_storage(storage)
         sess.start_review(diff_data, force_restart=force_restart)
+        return sess
 
     def subscribe_events(
         self,
         session_id: str = "default_session",
         tenant_id: str = "default",
         user_id: str = "anonymous",
+        is_admin: bool = False,
     ) -> queue.Queue:
-        sess = self.get_or_create_session(session_id, tenant_id, user_id)
+        sess = self.get_or_create_session(
+            session_id, tenant_id, user_id, is_admin=is_admin
+        )
         return sess.subscribe()
 
     def unsubscribe_events(
@@ -777,8 +882,11 @@ class AgentReviewManager:
         session_id: str = "default_session",
         tenant_id: str | None = None,
         user_id: str | None = None,
+        is_admin: bool = False,
     ) -> None:
-        sess = self.get_session(session_id, tenant_id=tenant_id, user_id=user_id)
+        sess = self.get_session(
+            session_id, tenant_id=tenant_id, user_id=user_id, is_admin=is_admin
+        )
         if sess:
             sess.unsubscribe(q)
 
@@ -787,8 +895,11 @@ class AgentReviewManager:
         session_id: str = "default_session",
         tenant_id: str | None = None,
         user_id: str | None = None,
+        is_admin: bool = False,
     ) -> dict[str, Any]:
-        sess = self.get_session(session_id, tenant_id=tenant_id, user_id=user_id)
+        sess = self.get_session(
+            session_id, tenant_id=tenant_id, user_id=user_id, is_admin=is_admin
+        )
         if not sess:
             agent = get_legal_agent()
             return {
@@ -807,8 +918,11 @@ class AgentReviewManager:
         session_id: str = "default_session",
         tenant_id: str | None = None,
         user_id: str | None = None,
+        is_admin: bool = False,
     ) -> bool:
-        sess = self.get_session(session_id, tenant_id=tenant_id, user_id=user_id)
+        sess = self.get_session(
+            session_id, tenant_id=tenant_id, user_id=user_id, is_admin=is_admin
+        )
         return sess.prioritize_card(ann_id) if sess else False
 
     def retry_card(
@@ -817,8 +931,11 @@ class AgentReviewManager:
         session_id: str = "default_session",
         tenant_id: str | None = None,
         user_id: str | None = None,
+        is_admin: bool = False,
     ) -> bool:
-        sess = self.get_session(session_id, tenant_id=tenant_id, user_id=user_id)
+        sess = self.get_session(
+            session_id, tenant_id=tenant_id, user_id=user_id, is_admin=is_admin
+        )
         return sess.retry_card(ann_id) if sess else False
 
     def skip_card(
@@ -827,8 +944,11 @@ class AgentReviewManager:
         session_id: str = "default_session",
         tenant_id: str | None = None,
         user_id: str | None = None,
+        is_admin: bool = False,
     ) -> bool:
-        sess = self.get_session(session_id, tenant_id=tenant_id, user_id=user_id)
+        sess = self.get_session(
+            session_id, tenant_id=tenant_id, user_id=user_id, is_admin=is_admin
+        )
         return sess.skip_card(ann_id) if sess else False
 
     def toggle_pause(
@@ -836,8 +956,11 @@ class AgentReviewManager:
         session_id: str = "default_session",
         tenant_id: str | None = None,
         user_id: str | None = None,
+        is_admin: bool = False,
     ) -> str:
-        sess = self.get_session(session_id, tenant_id=tenant_id, user_id=user_id)
+        sess = self.get_session(
+            session_id, tenant_id=tenant_id, user_id=user_id, is_admin=is_admin
+        )
         return sess.toggle_pause() if sess else "IDLE"
 
     def cancel_task(
@@ -845,8 +968,11 @@ class AgentReviewManager:
         session_id: str = "default_session",
         tenant_id: str | None = None,
         user_id: str | None = None,
+        is_admin: bool = False,
     ) -> bool:
-        sess = self.get_session(session_id, tenant_id=tenant_id, user_id=user_id)
+        sess = self.get_session(
+            session_id, tenant_id=tenant_id, user_id=user_id, is_admin=is_admin
+        )
         if sess:
             sess.cancel()
             return True

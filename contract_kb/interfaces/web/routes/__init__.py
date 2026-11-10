@@ -12,7 +12,11 @@ from .agents import (
     handle_post_toggle_pause,
 )
 from .contracts import handle_get_sample, handle_post_upload
-from .feedback import handle_post_export_training_data, handle_post_feedback
+from .feedback import (
+    handle_post_approve_feedback,
+    handle_post_export_training_data,
+    handle_post_feedback,
+)
 from .materials import (
     handle_get_materials_case_detail,
     handle_get_materials_cases,
@@ -38,6 +42,7 @@ __all__ = [
     "handle_get_sample",
     "handle_get_templates_list",
     "handle_post_cancel",
+    "handle_post_approve_feedback",
     "handle_post_export_training_data",
     "handle_post_feedback",
     "handle_post_human_decision",

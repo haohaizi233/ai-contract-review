@@ -19,7 +19,7 @@ import os
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 import urllib.parse
 
 from fastapi import HTTPException, Request
@@ -92,12 +92,42 @@ class Principal:
         )
 
 
-class InMemoryAndDbNonceStore:
-    """防重放 Nonce 内存与数据库联合存储服务（原子消费与过期清理）。"""
+@runtime_checkable
+class NonceStoreProtocol(Protocol):
+    """防重放 Nonce 存储协议接口。"""
 
-    def __init__(self) -> None:
+    def record_and_check(
+        self,
+        nonce: str,
+        tenant: str,
+        user: str,
+        expires_at: float,
+        storage: Any = None,
+    ) -> bool: ...
+
+
+class InMemoryAndDbNonceStore:
+    """防重放 Nonce 内存与数据库联合存储服务（原子消费、过期清理与 Fail-Closed 降级）。"""
+
+    def __init__(self, storage: Any = None) -> None:
         self._lock = threading.Lock()
         self._seen: dict[str, float] = {}
+        self._storage = storage
+
+    def set_storage(self, storage: Any) -> None:
+        """显式注入受信任存储实例或存储工厂。"""
+        self._storage = storage
+
+    def get_storage(self) -> Any:
+        """获取当前配置的存储实例。"""
+        st = self._storage
+        if (
+            st is not None
+            and not hasattr(st, "record_and_check_nonce")
+            and callable(st)
+        ):
+            return st()
+        return st
 
     def record_and_check(
         self,
@@ -115,26 +145,55 @@ class InMemoryAndDbNonceStore:
                 return False
             self._seen[key] = expires_at
 
-        st = storage() if callable(storage) else storage
+        # 优先使用显式传入的 storage，其次使用自身持有的 storage
+        st = storage
+        if (
+            st is not None
+            and not hasattr(st, "record_and_check_nonce")
+            and callable(st)
+        ):
+            st = st()
+        if st is None:
+            st = self.get_storage()
+
+        # 若仍为 None 且存在默认存储工厂，尝试显式创建，严禁从 sys.modules 隐式猜测
         if st is None:
             try:
-                api_mod = sys.modules.get("contract_kb.api")
-                if api_mod is not None:
-                    st = getattr(api_mod, "get_storage", lambda: None)()
+                from contract_kb.storage import create_storage
+
+                st = create_storage()
+                self._storage = st
             except Exception:
                 st = None
 
         if st is not None and hasattr(st, "record_and_check_nonce"):
-            db_ok = st.record_and_check_nonce(nonce, tenant, user, expires_at)
-            if not db_ok:
-                return False
+            try:
+                db_ok = st.record_and_check_nonce(nonce, tenant, user, expires_at)
+                if not db_ok:
+                    return False
+            except Exception as e:
+                # 数据库异常 fail-closed：严禁吞异常放行
+                raise PermissionError(
+                    f"持久化 Nonce 存储校验出现异常，安全降级阻断: {e}"
+                ) from e
         elif os.environ.get("CONTRACT_KB_ENV") == "production":
-            raise PermissionError("生产环境下持久化 Nonce 存储不可用")
+            raise PermissionError("生产环境下持久化 Nonce 存储不可用或未显式初始化")
 
         return True
 
 
-_GLOBAL_WEB_NONCE_STORE = InMemoryAndDbNonceStore()
+_GLOBAL_WEB_NONCE_STORE: NonceStoreProtocol = InMemoryAndDbNonceStore()
+
+
+def set_global_web_nonce_store(store: NonceStoreProtocol) -> None:
+    """全局设置或替换 Web 防重放 Nonce 存储服务。"""
+    global _GLOBAL_WEB_NONCE_STORE
+    _GLOBAL_WEB_NONCE_STORE = store
+
+
+def get_global_web_nonce_store() -> NonceStoreProtocol:
+    """获取当前全局 Web 防重放 Nonce 存储服务。"""
+    return _GLOBAL_WEB_NONCE_STORE
 
 
 def _get_hdr(headers: Any, name: str) -> str:

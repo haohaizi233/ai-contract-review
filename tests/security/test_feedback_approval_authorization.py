@@ -36,35 +36,122 @@ def web_feedback_server():
     server.shutdown()
 
 
-def test_client_cannot_self_approve_training_data():
-    """Case 09: 普通用户发送 is_approved=True / is_approved_for_training=True，绝不自动进入已审批训练集。"""
-    unique_doc = f"doc_self_approve_{time.time_ns()}"
+def test_client_cannot_self_approve_training_data(web_feedback_server, monkeypatch):
+    """Case 09: 普通用户发送 is_approved=True / is_approved_for_training=True，绝不自动进入已审批训练集。
+
+    真实业务链路核验：
+    1. 直接通过 record_user_feedback 传入 is_approved=True 但无合法审批人，必须降级并禁止写入 reviewed_events.jsonl。
+    2. 通过 HTTP 接口 /api/diff/feedback 提交带 is_approved=True 的数据，仅入 raw_feedback。
+    3. 严格解析 reviewed_events.jsonl 每行 JSON，确保绝对不含该 task_id / annotation_id。
+    """
+    unique_task = f"task_self_approve_{time.time_ns()}"
+    unique_ann = f"ann_self_approve_{time.time_ns()}"
+    tenant = "tenant_test_approval"
+
     sample_data = {
-        "doc_id": unique_doc,
-        "annotation_id": "ann-self-1",
+        "task_id": unique_task,
+        "annotation_id": unique_ann,
+        "doc_id": "doc_contract_001",
         "human_decision": "MODIFIED",
         "human_modified_suggestion": "人工修改：严格按3‰执行",
-        "tenant_id": "tenant_test_approval",
+        "tenant_id": tenant,
         "reviewer_id": "normal_user_bob",
-        "is_approved": True,  # 攻击者尝试自提自批
+        "is_approved": True,  # 攻击者尝试直接自提自批
         "is_approved_for_training": True,
     }
 
-    # 通过受控 record_user_feedback 处理
-    saved_path = record_user_feedback(sample_data, is_approved=False)
+    # 1. 尝试直接调用 service 函数并传递 is_approved=True，但无合法 approver_principal
+    saved_path = record_user_feedback(
+        sample_data, is_approved=True, approver_principal=None
+    )
     assert saved_path is not None
-    assert "raw_feedback" in str(saved_path)
+    assert "raw_feedback" in str(saved_path), (
+        "未经授权审批人的请求必须落入 raw_feedback"
+    )
 
-    # 验证 reviewed_events.jsonl 中绝无此条自批记录
+    # 2. 检查 reviewed_events.jsonl 文件：逐行解析 JSON 结构
     rev_file = (
-        FEEDBACK_BASE_DIR
-        / "tenant_test_approval"
-        / "reviewed_feedback"
-        / "reviewed_events.jsonl"
+        FEEDBACK_BASE_DIR / tenant / "reviewed_feedback" / "reviewed_events.jsonl"
     )
     if rev_file.exists():
-        content = rev_file.read_text(encoding="utf-8")
-        assert unique_doc not in content, "普通用户提交的反馈绝不得进入已审批训练集"
+        for line in rev_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            assert rec.get("task_id") != unique_task, (
+                "普通用户提交的反馈绝不得进入已审批训练集"
+            )
+            assert rec.get("annotation_id") != unique_ann, (
+                "普通用户提交的反馈绝不得进入已审批训练集"
+            )
+
+    # 3. 通过真实 HTTP 接口发送 payload 中包含 is_approved=True
+    shared_key = "secret_for_feedback_self_approve_test"
+    monkeypatch.setenv("DIFF_WEB_MODE", "ENTERPRISE")
+    monkeypatch.setenv("CONTRACT_KB_AUTH_SHARED_KEY", shared_key)
+
+    http_task = f"task_http_self_{time.time_ns()}"
+    http_ann = f"ann_http_self_{time.time_ns()}"
+    body_dict = {
+        "task_id": http_task,
+        "annotation_id": http_ann,
+        "doc_id": "doc_002",
+        "human_decision": "ACCEPTED",
+        "tenant_id": tenant,
+        "reviewer_id": "normal_user_bob",
+        "is_approved": True,
+        "is_approved_for_training": True,
+    }
+    raw_bytes = json.dumps(body_dict).encode("utf-8")
+    b_hash = hashlib.sha256(raw_bytes).hexdigest()
+    ts = str(time.time())
+    nonce = f"nonce_http_fb_{time.time_ns()}"
+    path = "/api/diff/feedback"
+    sig = compute_auth_signature_v2(
+        key=shared_key,
+        method="POST",
+        path=path,
+        query="",
+        user="normal_user_bob",
+        roles="reviewer",
+        tenant=tenant,
+        timestamp=ts,
+        nonce=nonce,
+        body_sha256=b_hash,
+    )
+    req = urllib.request.Request(
+        f"{web_feedback_server}{path}",
+        data=raw_bytes,
+        headers={
+            "Content-Type": "application/json",
+            "X-User": "normal_user_bob",
+            "X-Roles": "reviewer",
+            "X-Tenant": tenant,
+            "X-Auth-Signature": sig,
+            "X-Auth-Timestamp": ts,
+            "X-Auth-Nonce": nonce,
+            "X-Content-SHA256": b_hash,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as resp:
+        assert resp.status == 200
+        res_json = json.loads(resp.read().decode("utf-8"))
+        assert res_json.get("success") is True
+        assert "raw_feedback" in res_json.get("saved_to", "")
+
+    # 再次逐行验证 reviewed_events.jsonl，严禁出现 http_task
+    if rev_file.exists():
+        for line in rev_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            assert rec.get("task_id") != http_task, (
+                "HTTP 提交自批样本绝不得进入已审批训练集"
+            )
+            assert rec.get("annotation_id") != http_ann
 
 
 def test_forged_feedback_identity_rejected(web_feedback_server, monkeypatch):

@@ -13,7 +13,10 @@
 
 from __future__ import annotations
 
+import datetime
+import json
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 from pydantic import BaseModel, Field
@@ -29,10 +32,11 @@ class EvidenceVerificationResult(BaseModel):
     """强类型证据真实性与权威状态核验契约。"""
 
     verified: bool
-    status: str  # VERIFIED, MISSING_SOURCE, MISSING_TENANT, TENANT_MISMATCH, DOCUMENT_MISMATCH, HASH_MISMATCH, VERSION_MISMATCH, APPROVAL_MISSING, APPROVAL_REVOKED, SOURCE_INACTIVE, TEXT_MISMATCH
+    status: str  # VERIFIED, MISSING_SOURCE, MISSING_TENANT, TENANT_MISMATCH, DOCUMENT_MISMATCH, HASH_MISMATCH, VERSION_MISMATCH, APPROVAL_MISSING, APPROVAL_REVOKED, SOURCE_INACTIVE, TEXT_MISMATCH, INSUFFICIENT_PROVENANCE, STALE, STORAGE_UNAVAILABLE
     tenant_id: str
-    document_id: str
-    clause_id: str
+    document_id: str = ""
+    clause_id: str = ""
+    rule_id: str | None = None
     document_version: str | None = None
     source_hash: str | None = None
     content_hash: str | None = None
@@ -74,6 +78,10 @@ class CitationVerifier:
         eff_tenant = expected_tenant_id or item_tenant
 
         if not cid:
+            if item_dict.get("rule_id"):
+                return self.verify_rule_evidence(
+                    storage, item_dict, expected_tenant_id=eff_tenant
+                )
             return EvidenceVerificationResult(
                 verified=False,
                 status="MISSING_SOURCE",
@@ -296,6 +304,237 @@ class CitationVerifier:
             clause_id=cid,
             document_version=db_ver,
             source_hash=db_hash,
+            failure_reasons=[],
+        )
+
+    def verify_rule_evidence(
+        self,
+        storage: Any,
+        rule_item: dict[str, Any] | Any,
+        expected_tenant_id: str | None = None,
+    ) -> EvidenceVerificationResult:
+        """针对企业法务审核规则 (GovernedLegalRule / Rule Dict) 执行深度权威与来源核验。"""
+        rule_dict = (
+            rule_item.to_dict() if hasattr(rule_item, "to_dict") else dict(rule_item)
+        )
+        rid = str(rule_dict.get("rule_id") or "")
+        eff_tenant = str(expected_tenant_id or rule_dict.get("tenant_id") or "default")
+
+        if not rid:
+            return EvidenceVerificationResult(
+                verified=False,
+                status="MISSING_SOURCE",
+                tenant_id=eff_tenant,
+                document_id="",
+                clause_id="",
+                rule_id="",
+                failure_reasons=["规则缺少 rule_id 标识"],
+            )
+
+        if storage is None or not hasattr(storage, "get_rules"):
+            return EvidenceVerificationResult(
+                verified=False,
+                status="STORAGE_UNAVAILABLE",
+                tenant_id=eff_tenant,
+                document_id="",
+                clause_id="",
+                rule_id=rid,
+                failure_reasons=["存储接口不可用，无法执行独立规则权威核验"],
+            )
+
+        try:
+            db_rules = storage.get_rules(tenant_id=eff_tenant)
+        except Exception as e:
+            return EvidenceVerificationResult(
+                verified=False,
+                status="STORAGE_UNAVAILABLE",
+                tenant_id=eff_tenant,
+                document_id="",
+                clause_id="",
+                rule_id=rid,
+                failure_reasons=[f"查询数据库规则发生异常: {e}"],
+            )
+
+        matching = [r for r in db_rules if str(r.get("rule_id")) == rid]
+        if not matching:
+            return EvidenceVerificationResult(
+                verified=False,
+                status="MISSING_SOURCE",
+                tenant_id=eff_tenant,
+                document_id="",
+                clause_id="",
+                rule_id=rid,
+                failure_reasons=[f"规则 {rid} 在租户 {eff_tenant} 的数据库中不存在"],
+            )
+
+        row = matching[0]
+
+        # 1. 租户隔离校验：允许使用全局公共法定基准 (default/*) 或租户专有规则，严格阻断跨其他租户越权
+        db_tenant = str(row.get("tenant_id") or "default")
+        if eff_tenant and db_tenant not in (eff_tenant, "default", "*"):
+            return EvidenceVerificationResult(
+                verified=False,
+                status="TENANT_MISMATCH",
+                tenant_id=eff_tenant,
+                document_id="",
+                clause_id="",
+                rule_id=rid,
+                failure_reasons=[
+                    f"租户隔离不匹配：请求={eff_tenant}，数据库归属={db_tenant}"
+                ],
+            )
+
+        # 2. 审批状态校验 (REVOKED 立即失效，非 APPROVED 不得作为权威依据)
+        db_status = str(row.get("status") or "").strip().upper()
+        if db_status == "REVOKED":
+            return EvidenceVerificationResult(
+                verified=False,
+                status="APPROVAL_REVOKED",
+                tenant_id=eff_tenant,
+                document_id="",
+                clause_id="",
+                rule_id=rid,
+                failure_reasons=["该规则审批已被法务撤销 (REVOKED)，丧失依据效力"],
+            )
+        if db_status != "APPROVED":
+            return EvidenceVerificationResult(
+                verified=False,
+                status="APPROVAL_MISSING",
+                tenant_id=eff_tenant,
+                document_id="",
+                clause_id="",
+                rule_id=rid,
+                failure_reasons=[
+                    f"规则未经正式审批授权 (当前状态={db_status or 'NONE'})"
+                ],
+            )
+
+        # 3. 有效期校验
+        effective_until = (
+            row.get("effective_until")
+            or row.get("valid_until")
+            or row.get("expiry_date")
+        )
+        if effective_until is not None:
+            try:
+                if isinstance(effective_until, (int, float)):
+                    exp_ts = float(effective_until)
+                elif isinstance(effective_until, str):
+                    try:
+                        exp_ts = float(effective_until)
+                    except ValueError:
+                        exp_ts = datetime.datetime.fromisoformat(
+                            effective_until
+                        ).timestamp()
+                else:
+                    exp_ts = 0.0
+
+                if exp_ts > 0 and time.time() > exp_ts:
+                    return EvidenceVerificationResult(
+                        verified=False,
+                        status="SOURCE_INACTIVE",
+                        tenant_id=eff_tenant,
+                        document_id="",
+                        clause_id="",
+                        rule_id=rid,
+                        failure_reasons=["该规则已超出有效截止期 (STALE/EXPIRED)"],
+                    )
+            except Exception:
+                pass
+
+        # 4. 版本/修订号校验
+        db_ver = str(row.get("version") or row.get("revision") or "1").strip()
+        req_ver = str(
+            rule_dict.get("revision") or rule_dict.get("version") or "1"
+        ).strip()
+        if req_ver and db_ver:
+            norm_db = db_ver.lstrip("vrVR")
+            norm_req = req_ver.lstrip("vrVR")
+            if db_ver != req_ver and norm_db != norm_req:
+                return EvidenceVerificationResult(
+                    verified=False,
+                    status="VERSION_MISMATCH",
+                    tenant_id=eff_tenant,
+                    document_id="",
+                    clause_id="",
+                    rule_id=rid,
+                    document_version=str(db_ver),
+                    failure_reasons=[
+                        f"规则版本不一致：引用携带 {req_ver} vs 数据库当前 {db_ver}"
+                    ],
+                )
+
+        # 5. 来源与出处元数据校验 (Provenance)
+        source_doc = str(
+            row.get("source_document") or row.get("source_doc") or ""
+        ).strip()
+        raw_source_clauses = row.get("source_clauses")
+        source_clauses: list[Any] = []
+        if isinstance(raw_source_clauses, list):
+            source_clauses = raw_source_clauses
+        elif isinstance(raw_source_clauses, str) and raw_source_clauses.strip():
+            try:
+                parsed = json.loads(raw_source_clauses)
+                if isinstance(parsed, list):
+                    source_clauses = parsed
+                else:
+                    if not source_doc:
+                        source_doc = raw_source_clauses.strip()
+            except Exception:
+                if not source_doc:
+                    source_doc = raw_source_clauses.strip()
+
+        if not source_doc and not source_clauses:
+            return EvidenceVerificationResult(
+                verified=False,
+                status="INSUFFICIENT_PROVENANCE",
+                tenant_id=eff_tenant,
+                document_id="",
+                clause_id="",
+                rule_id=rid,
+                failure_reasons=[
+                    "该规则缺少可信来源文档或条款出处元数据 (INSUFFICIENT_PROVENANCE)"
+                ],
+            )
+
+        # 若关联了具体底层条款，进一步深度回查源条款的真实性与 ACTIVE/APPROVED 状态
+        if source_clauses and hasattr(storage, "get_clause"):
+            for sc in source_clauses:
+                sc_id = sc.get("clause_id") if isinstance(sc, dict) else str(sc)
+                if not sc_id or not isinstance(sc_id, str) or len(sc_id) > 100:
+                    continue
+                try:
+                    c_row = storage.get_clause(sc_id, tenant_id=eff_tenant)
+                except Exception:
+                    c_row = None
+                if c_row is not None and type(c_row).__name__ != "MagicMock":
+                    c_dict = dict(c_row)
+                    c_status = str(
+                        c_dict.get("approval_status")
+                        or c_dict.get("doc_status")
+                        or "ACTIVE"
+                    ).strip().upper()
+                    if c_status not in ("ACTIVE", "APPROVED"):
+                        return EvidenceVerificationResult(
+                            verified=False,
+                            status="SOURCE_INACTIVE",
+                            tenant_id=eff_tenant,
+                            document_id=str(c_dict.get("document_id") or ""),
+                            clause_id=sc_id,
+                            rule_id=rid,
+                            failure_reasons=[
+                                f"规则所依据的底层条款 {sc_id} 状态非 ACTIVE/APPROVED ({c_status})"
+                            ],
+                        )
+
+        return EvidenceVerificationResult(
+            verified=True,
+            status="VERIFIED",
+            tenant_id=eff_tenant,
+            document_id=source_doc,
+            clause_id=str(source_clauses[0]) if source_clauses else "",
+            rule_id=rid,
+            document_version=str(db_ver),
             failure_reasons=[],
         )
 

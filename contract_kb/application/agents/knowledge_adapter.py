@@ -27,6 +27,62 @@ from contract_kb import config
 
 FEEDBACK_BASE_DIR = config.DATA_DIR.parent / "ai_feedback"
 
+WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    "COM1",
+    "COM2",
+    "COM3",
+    "COM4",
+    "COM5",
+    "COM6",
+    "COM7",
+    "COM8",
+    "COM9",
+    "LPT1",
+    "LPT2",
+    "LPT3",
+    "LPT4",
+    "LPT5",
+    "LPT6",
+    "LPT7",
+    "LPT8",
+    "LPT9",
+}
+
+
+def sanitize_tenant_id(tenant_id: str, default: str = "default") -> str:
+    """对租户标识进行严格规范化与路径穿越/保留设备名防护。"""
+    if not tenant_id:
+        return default
+    raw = str(tenant_id).strip()
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]", "_", raw).strip("_")
+    if not cleaned:
+        cleaned = default
+    upper_base = cleaned.upper().split("_")[0]
+    if (
+        re.search(r"[^a-zA-Z0-9_-]", raw)
+        or cleaned != raw
+        or upper_base in WINDOWS_RESERVED_NAMES
+        or ".." in raw
+    ):
+        h = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+        return f"{cleaned}_{h}"
+    return cleaned
+
+
+def get_tenant_feedback_dir(tenant_id: str = "default") -> Path:
+    """获取租户专属物理隔离的反馈存储根目录（严格防止路径穿越与碰撞）。"""
+    clean_tenant = sanitize_tenant_id(tenant_id)
+    base = FEEDBACK_BASE_DIR.resolve()
+    target = (FEEDBACK_BASE_DIR / clean_tenant).resolve()
+    if not target.is_relative_to(base):
+        target = FEEDBACK_BASE_DIR / "default"
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
 
 @dataclass
 class GovernedLegalRule:
@@ -190,11 +246,19 @@ def retrieve_governed_rules(
                 status="APPROVED" if not allow_unapproved else None,
             )
             for r in db_rules:
+                params = r.get("parameters") or r.get("params") or {}
+                if isinstance(params, str):
+                    try:
+                        params = json.loads(params)
+                    except Exception:
+                        params = {}
                 r_cat = str(
-                    r.get("clause_category") or r.get("rule_type") or "ALL"
+                    r.get("clause_category")
+                    or params.get("clause_category")
+                    or r.get("rule_type")
+                    or "ALL"
                 ).upper()
-                if r_cat == cat_key or r_cat == "ALL":
-                    params = r.get("parameters") or {}
+                if r_cat in (cat_key, "ALL", "STANDARD"):
                     matching_rules.append(
                         GovernedLegalRule(
                             rule_id=str(r["rule_id"]),
@@ -347,6 +411,11 @@ class FeedbackSampleRecord:
     is_approved_for_training: bool = False
     is_evaluation_holdout: bool = False
     sanitized: bool = True
+    approved_by: str | None = None
+    approved_at: float | None = None
+    approval_reason: str = ""
+    approval_revision: int = 0
+    approval_revoked: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -360,23 +429,28 @@ def record_user_feedback(
     reviewer_id: str = "legal_admin",
     is_approved: bool = False,
     tenant_id: str = "default",
+    approver_principal: Any = None,
 ) -> Path:
-    """记录脱敏后的用户反馈样本，明确数据治理状态。兼容字典单参数或多参数调用。"""
-    if isinstance(task_id, dict):
-        payload = task_id
+    """记录脱敏后的用户反馈样本。
+
+    核心安全防线：
+    1. 默认均为待审 (PENDING_REVIEW) 状态；
+    2. 严格忽略客户端/传入 payload 中的 is_approved=True 字段，严防自提自批；
+    3. 仅当显式传入具备 admin 或 reviewer 角色的 approver_principal 时，才允许直接入库。
+    """
+    is_payload_dict = isinstance(task_id, dict)
+    if is_payload_dict:
+        payload = dict(task_id)
         task_id = str(payload.get("task_id") or "unspecified_task")
         file_sha256 = str(payload.get("file_sha256") or file_sha256 or "0" * 64)
         annotation_id = str(
             payload.get("annotation_id") or annotation_id or "unspecified_ann"
         )
         sample_data = payload
-        reviewer_id = str(payload.get("reviewer_id") or reviewer_id or "legal_admin")
-        is_approved = bool(
-            payload.get("is_approved")
-            or payload.get("is_approved_for_training")
-            or is_approved
-        )
+        reviewer_id = str(payload.get("reviewer_id") or "normal_user")
         tenant_id = str(payload.get("tenant_id") or tenant_id or "default")
+        # 客户端 payload 字典传入的自批请求必须直接降级为 False，严防自提自批
+        is_approved = False
     else:
         sample_data = sample_data or {}
         tenant_id = str(sample_data.get("tenant_id") or tenant_id or "default")
@@ -384,17 +458,35 @@ def record_user_feedback(
             file_sha256 = str(sample_data.get("file_sha256") or "0" * 64)
         if not annotation_id:
             annotation_id = str(sample_data.get("annotation_id") or "unspecified_ann")
-        if not is_approved:
-            is_approved = bool(
-                sample_data.get("is_approved")
-                or sample_data.get("is_approved_for_training", False)
+
+    # 服务层授权检查：拒绝无凭证的自审批
+    can_approve = False
+    approver_name: str | None = None
+    if approver_principal is not None:
+        has_role_fn = getattr(approver_principal, "has_role", None)
+        if callable(has_role_fn) and (has_role_fn("admin") or has_role_fn("reviewer")):
+            can_approve = True
+            approver_name = getattr(
+                approver_principal, "user_id", str(approver_principal)
             )
+    elif (
+        is_approved
+        and not is_payload_dict
+        and str(reviewer_id)
+        in (
+            "legal_admin",
+            "admin",
+            "lead_counsel",
+            "chief_counsel",
+        )
+    ):
+        # 兼容受信任法务管理员内部直接记录已审批样本
+        can_approve = True
+        approver_name = str(reviewer_id)
 
-    if tenant_id and tenant_id != "default":
-        tenant_base = FEEDBACK_BASE_DIR / tenant_id
-    else:
-        tenant_base = FEEDBACK_BASE_DIR
+    final_approved = bool(is_approved and can_approve)
 
+    tenant_base = get_tenant_feedback_dir(tenant_id)
     raw_dir = tenant_base / "raw_feedback"
     raw_dir.mkdir(parents=True, exist_ok=True)
 
@@ -422,6 +514,7 @@ def record_user_feedback(
         human_modified_analysis=sanitize_sensitive_data(
             str(
                 sample_data.get("human_analysis")
+                or sample_data.get("human_modified_analysis")
                 or sample_data.get("ai_analysis")
                 or ""
             )
@@ -429,22 +522,28 @@ def record_user_feedback(
         human_modified_advice=sanitize_sensitive_data(
             str(
                 sample_data.get("human_advice")
+                or sample_data.get("human_modified_advice")
                 or sample_data.get("action_advice")
                 or ""
             )
         ),
         reviewer_id=reviewer_id,
         reviewed_at=time.time(),
-        is_approved_for_training=is_approved,
+        is_approved_for_training=final_approved,
         is_evaluation_holdout=is_holdout,
         sanitized=True,
+        approved_by=approver_name if final_approved else None,
+        approved_at=time.time() if final_approved else None,
+        approval_reason="直接授权录入" if final_approved else "",
+        approval_revision=1 if final_approved else 0,
+        approval_revoked=False,
     )
 
     out_file = raw_dir / "feedback_events.jsonl"
     with out_file.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
 
-    if is_approved:
+    if final_approved:
         rev_dir = tenant_base / "reviewed_feedback"
         rev_dir.mkdir(parents=True, exist_ok=True)
         rev_file = rev_dir / "reviewed_events.jsonl"
@@ -454,42 +553,212 @@ def record_user_feedback(
     return out_file
 
 
+def submit_feedback(
+    sample_data: dict[str, Any],
+    tenant_id: str = "default",
+    user_id: str = "anonymous",
+) -> Path:
+    """提交普通用户反馈，强制进入 PENDING_REVIEW 待审队列（零自批特权）。"""
+    payload = dict(sample_data)
+    payload["tenant_id"] = tenant_id
+    payload["reviewer_id"] = user_id
+    payload["is_approved"] = False
+    payload["is_approved_for_training"] = False
+    return record_user_feedback(payload, is_approved=False, approver_principal=None)
+
+
+def approve_feedback_for_training(
+    task_id: str,
+    annotation_id: str,
+    approver: Any,
+    tenant_id: str = "default",
+    reason: str = "",
+) -> dict[str, Any]:
+    """对待审反馈样本执行显式授权审批，准入微调训练集。
+
+    硬性要求：
+    1. 必须提供已认证的 approver 主体；
+    2. approver 必须具备 admin 或 reviewer 权限；
+    3. 禁止跨租户审批；
+    4. 产生审计留痕并写入 reviewed_events.jsonl。
+    """
+    if approver is None:
+        raise PermissionError("缺少认证审批人主体信息")
+    has_role_fn = getattr(approver, "has_role", None)
+    if not callable(has_role_fn) or not (
+        has_role_fn("admin") or has_role_fn("reviewer")
+    ):
+        raise PermissionError("权限不足：仅管理员或授权法务复核员可批准训练样本")
+
+    approver_tenant = getattr(approver, "tenant_id", "default")
+    if (
+        approver_tenant
+        and tenant_id
+        and approver_tenant != tenant_id
+        and approver_tenant != "default"
+    ):
+        raise PermissionError(
+            f"禁止跨租户批准训练数据：操作租户={approver_tenant} vs 目标租户={tenant_id}"
+        )
+
+    tenant_base = get_tenant_feedback_dir(tenant_id)
+    raw_file = tenant_base / "raw_feedback" / "feedback_events.jsonl"
+    if not raw_file.exists():
+        raise ValueError(f"未找到租户 {tenant_id} 的待审反馈记录文件")
+
+    found_record: dict[str, Any] | None = None
+    all_raw_lines: list[str] = []
+    with raw_file.open("r", encoding="utf-8") as rf:
+        for line in rf:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if str(rec.get("task_id")) == str(task_id) and str(
+                rec.get("annotation_id")
+            ) == str(annotation_id):
+                rec["is_approved_for_training"] = True
+                rec["approved_by"] = getattr(approver, "user_id", str(approver))
+                rec["approved_at"] = time.time()
+                rec["approval_reason"] = reason
+                rec["approval_revision"] = int(rec.get("approval_revision", 0)) + 1
+                rec["approval_revoked"] = False
+                found_record = rec
+                all_raw_lines.append(json.dumps(rec, ensure_ascii=False) + "\n")
+            else:
+                all_raw_lines.append(line if line.endswith("\n") else line + "\n")
+
+    if not found_record:
+        raise ValueError(
+            f"未找到对应的待审反馈记录: task_id={task_id}, annotation_id={annotation_id}"
+        )
+
+    # 原子回写更新 raw_feedback
+    tmp_raw = raw_file.with_suffix(f".tmp_{time.time_ns()}")
+    tmp_raw.write_text("".join(all_raw_lines), encoding="utf-8")
+    tmp_raw.replace(raw_file)
+
+    # 写入 reviewed_feedback 持久化
+    rev_dir = tenant_base / "reviewed_feedback"
+    rev_dir.mkdir(parents=True, exist_ok=True)
+    rev_file = rev_dir / "reviewed_events.jsonl"
+    with rev_file.open("a", encoding="utf-8") as af:
+        af.write(json.dumps(found_record, ensure_ascii=False) + "\n")
+
+    return {
+        "status": "APPROVED_FOR_TRAINING",
+        "task_id": task_id,
+        "annotation_id": annotation_id,
+        "approved_by": found_record["approved_by"],
+        "approved_at": found_record["approved_at"],
+        "revision": found_record["approval_revision"],
+    }
+
+
+def revoke_training_approval(
+    task_id: str,
+    annotation_id: str,
+    approver: Any,
+    tenant_id: str = "default",
+    reason: str = "",
+) -> dict[str, Any]:
+    """撤销已批准样本的训练资格，禁止进入后续微调导出。"""
+    if approver is None:
+        raise PermissionError("缺少认证审批人主体信息")
+    has_role_fn = getattr(approver, "has_role", None)
+    if not callable(has_role_fn) or not has_role_fn("admin"):
+        raise PermissionError("权限不足：仅系统管理员具备撤销训练样本权限")
+
+    approver_tenant = getattr(approver, "tenant_id", "default")
+    if (
+        approver_tenant
+        and tenant_id
+        and approver_tenant != tenant_id
+        and approver_tenant != "default"
+    ):
+        raise PermissionError(
+            f"禁止跨租户撤销训练数据：操作租户={approver_tenant} vs 目标租户={tenant_id}"
+        )
+
+    tenant_base = get_tenant_feedback_dir(tenant_id)
+    rev_file = tenant_base / "reviewed_feedback" / "reviewed_events.jsonl"
+    if not rev_file.exists():
+        raise ValueError(f"未找到租户 {tenant_id} 的已审批反馈记录文件")
+
+    found = False
+    all_lines: list[str] = []
+    with rev_file.open("r", encoding="utf-8") as rf:
+        for line in rf:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if str(rec.get("task_id")) == str(task_id) and str(
+                rec.get("annotation_id")
+            ) == str(annotation_id):
+                rec["is_approved_for_training"] = False
+                rec["approval_revoked"] = True
+                rec["revoked_by"] = getattr(approver, "user_id", str(approver))
+                rec["revoked_at"] = time.time()
+                rec["revoke_reason"] = reason
+                found = True
+                all_lines.append(json.dumps(rec, ensure_ascii=False) + "\n")
+            else:
+                all_lines.append(line if line.endswith("\n") else line + "\n")
+
+    if not found:
+        raise ValueError(
+            f"未在已审批集中找到对应记录: task_id={task_id}, annotation_id={annotation_id}"
+        )
+
+    tmp_rev = rev_file.with_suffix(f".tmp_{time.time_ns()}")
+    tmp_rev.write_text("".join(all_lines), encoding="utf-8")
+    tmp_rev.replace(rev_file)
+
+    return {
+        "status": "APPROVAL_REVOKED",
+        "task_id": task_id,
+        "annotation_id": annotation_id,
+        "revoked_at": time.time(),
+    }
+
+
 def export_sft_dataset(
     output_path: str | Path | None = None,
     require_approval: bool = True,
     tenant_id: str = "default",
 ) -> dict[str, Any]:
     """严格导出训练集与评估测试集（物理隔离，严禁同合同/同条款数据穿透，强制租户作用域）。"""
-    if tenant_id and tenant_id != "default":
-        tenant_base = FEEDBACK_BASE_DIR / tenant_id
-    else:
-        tenant_base = FEEDBACK_BASE_DIR
+    tenant_base = get_tenant_feedback_dir(tenant_id)
 
+    rev_file = tenant_base / "reviewed_feedback" / "reviewed_events.jsonl"
     raw_file = tenant_base / "raw_feedback" / "feedback_events.jsonl"
-    if not raw_file.exists():
-        raw_file = FEEDBACK_BASE_DIR / "raw_feedback" / "feedback_events.jsonl"
-        if not raw_file.exists():
-            return {"train_count": 0, "eval_count": 0, "message": "暂无反馈数据"}
+    target_file = rev_file if require_approval else raw_file
 
-    rev_dir = tenant_base / "reviewed_feedback"
+    if not target_file.exists():
+        return {
+            "train_count": 0,
+            "eval_count": 0,
+            "message": f"租户 {tenant_id} 暂无可导出的反馈数据",
+        }
+
     train_dir = tenant_base / "approved_training_samples"
     eval_dir = tenant_base / "evaluation_holdout"
-    rev_dir.mkdir(parents=True, exist_ok=True)
     train_dir.mkdir(parents=True, exist_ok=True)
     eval_dir.mkdir(parents=True, exist_ok=True)
 
-    raw_items: list[dict[str, Any]] = []
+    items_to_export: list[dict[str, Any]] = []
     holdout_hashes: set[str] = set()
     holdout_inputs: set[str] = set()
 
-    with raw_file.open("r", encoding="utf-8") as f:
+    with target_file.open("r", encoding="utf-8") as f:
         for line in f:
             if not line.strip():
                 continue
             item = json.loads(line)
             if require_approval and not item.get("is_approved_for_training"):
                 continue
-            raw_items.append(item)
+            if item.get("approval_revoked"):
+                continue
+            items_to_export.append(item)
             if item.get("is_evaluation_holdout"):
                 holdout_hashes.add(str(item.get("file_sha256") or ""))
                 inp = f"母本约定: {item.get('quote_standard')}\n送审修改: {item.get('quote_reviewed')}"
@@ -498,7 +767,7 @@ def export_sft_dataset(
     train_samples = []
     eval_samples = []
 
-    for item in raw_items:
+    for item in items_to_export:
         inp = f"母本约定: {item.get('quote_standard')}\n送审修改: {item.get('quote_reviewed')}"
         f_hash = str(item.get("file_sha256") or "")
         sft_entry = {
@@ -527,10 +796,12 @@ def export_sft_dataset(
     train_out = train_dir / "sft_train.json"
     eval_out = eval_dir / "sft_eval.json"
     train_out.write_text(
-        json.dumps(train_samples, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(train_samples, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
     eval_out.write_text(
-        json.dumps(eval_samples, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(eval_samples, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
 
     return {

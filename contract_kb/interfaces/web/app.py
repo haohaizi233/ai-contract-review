@@ -38,6 +38,7 @@ from .routes import (
     handle_get_ref_templates_catalog,
     handle_get_sample,
     handle_get_templates_list,
+    handle_post_approve_feedback,
     handle_post_cancel,
     handle_post_export_training_data,
     handle_post_feedback,
@@ -116,31 +117,37 @@ def generate_rendered_html(
         except Exception:
             data_json = "null"
 
-    try:
-        catalog = get_ranked_templates_catalog(CURRENT_SESSION_FILE)
-        catalog_json = _safe_json_embed(catalog)
-    except Exception:
+    if is_enterprise:
+        # 企业模式下严禁向未认证用户泄露母本清单、参考母本库以及敏感真实案例元数据
         catalog_json = "[]"
-
-    try:
-        ref_catalog = get_ref_templates_catalog()
-        ref_json = _safe_json_embed(ref_catalog)
-    except Exception:
         ref_json = "[]"
-
-    try:
-        mgr = get_material_manager()
-        stats = mgr.get_stats()
-        initial_cases = mgr.search_cases(
-            category="ALL", has_word_only=True, page=1, page_size=20
-        )
-        material_data = {
-            "stats": stats,
-            "initial_cases": initial_cases,
-        }
-        material_json = _safe_json_embed(material_data)
-    except Exception:
         material_json = "{}"
+    else:
+        try:
+            catalog = get_ranked_templates_catalog(CURRENT_SESSION_FILE)
+            catalog_json = _safe_json_embed(catalog)
+        except Exception:
+            catalog_json = "[]"
+
+        try:
+            ref_catalog = get_ref_templates_catalog()
+            ref_json = _safe_json_embed(ref_catalog)
+        except Exception:
+            ref_json = "[]"
+
+        try:
+            mgr = get_material_manager()
+            stats = mgr.get_stats()
+            initial_cases = mgr.search_cases(
+                category="ALL", has_word_only=True, page=1, page_size=20
+            )
+            material_data = {
+                "stats": stats,
+                "initial_cases": initial_cases,
+            }
+            material_json = _safe_json_embed(material_data)
+        except Exception:
+            material_json = "{}"
 
     html = HTML_TEMPLATE.replace("__INITIAL_DATA_PLACEHOLDER__", data_json)
     html = html.replace("__ALL_TEMPLATES_PLACEHOLDER__", catalog_json)
@@ -262,6 +269,24 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             self._cached_raw_body = b""
         return self._cached_raw_body
 
+    _storage_provider: Any = None
+
+    @classmethod
+    def set_storage_provider(cls, provider: Any) -> None:
+        """显式注入受信任 Storage 实例或 Storage Provider。"""
+        cls._storage_provider = provider
+
+    @classmethod
+    def get_storage(cls) -> Any:
+        """安全解析并获取当前绑定的受信任 Storage 实例。"""
+        prov = cls._storage_provider
+        if callable(prov):
+            try:
+                return prov()
+            except Exception:
+                return None
+        return prov
+
     def get_request_principal(self) -> Principal | None:
         return getattr(self, "_principal", None)
 
@@ -279,12 +304,14 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
 
         raw_body = self.get_request_body()
 
+        st = self.get_storage()
         principal = authenticate_web_request(
             method=self.command,
             path=parsed.path,
             query=parsed.query,
             headers=dict(self.headers),
             raw_body=raw_body,
+            storage=st,
         )
         self._principal = principal
 
@@ -389,6 +416,8 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             handle_post_reset_circuit(self)
         elif parsed.path == "/api/diff/feedback":
             handle_post_feedback(self)
+        elif parsed.path == "/api/diff/feedback/approve":
+            handle_post_approve_feedback(self)
         elif parsed.path == "/api/diff/export_training_data":
             handle_post_export_training_data(self)
         elif parsed.path == "/api/diff/cancel":
@@ -406,7 +435,11 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
 
-def create_web_server(host: str = "127.0.0.1", port: int = 8089) -> ThreadingHTTPServer:
+def create_web_server(
+    host: str = "127.0.0.1",
+    port: int = 8089,
+    storage: Any = None,
+) -> ThreadingHTTPServer:
     """创建多线程合同对比可视化 Web 服务实例（非本机回环必须启用企业认证模式并配置共享密钥）。"""
     is_loopback = host in ("127.0.0.1", "localhost", "::1")
     if not is_loopback:
@@ -419,6 +452,11 @@ def create_web_server(host: str = "127.0.0.1", port: int = 8089) -> ThreadingHTT
                 f"安全阻断: 尝试在无认证/未配置共享密钥的单机模式下监听非本机地址 {host}。"
                 "严禁将未受认证保护的服务暴露给局域网或公网，请启用 DIFF_WEB_MODE=ENTERPRISE 并配置 CONTRACT_KB_AUTH_SHARED_KEY。"
             )
+
+    if storage is not None:
+        DiffVisualizerHandler.set_storage_provider(storage)
+        get_agent_manager().set_storage_provider(storage)
+
     return ThreadingHTTPServer((host, port), DiffVisualizerHandler)
 
 
@@ -426,6 +464,16 @@ def main(argv: list[str] | None = None) -> None:
     try:
         sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
         sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+    except Exception:
+        pass
+
+    # 引导期显式初始化受信任持久化存储
+    try:
+        from contract_kb.storage import create_storage
+
+        st = create_storage()
+        DiffVisualizerHandler.set_storage_provider(st)
+        get_agent_manager().set_storage_provider(st)
     except Exception:
         pass
 

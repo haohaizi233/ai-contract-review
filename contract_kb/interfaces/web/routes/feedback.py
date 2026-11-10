@@ -7,8 +7,9 @@ import json
 from typing import Any
 
 from contract_kb.application.agents.knowledge_adapter import (
+    approve_feedback_for_training,
     export_sft_dataset,
-    record_user_feedback,
+    submit_feedback,
 )
 
 
@@ -40,10 +41,51 @@ def handle_post_feedback(handler: Any) -> None:
         data["is_approved"] = False
         data["is_approved_for_training"] = False
 
-        saved_path = record_user_feedback(data)  # type: ignore[call-arg, arg-type]
+        saved_path = submit_feedback(data, tenant_id=tenant_id, user_id=user_id)
         handler._send_json(200, {"success": True, "saved_to": str(saved_path)})
     except PermissionError as e:
         handler._send_json(403, {"error": str(e)})
+    except Exception as e:
+        handler._send_json(500, {"error": str(e)})
+
+
+def handle_post_approve_feedback(handler: Any) -> None:
+    session_id, tenant_id, user_id = handler._get_request_identity()
+    principal = getattr(handler, "get_request_principal", lambda: None)()
+    if principal is None or not (
+        principal.has_role("admin") or principal.has_role("reviewer")
+    ):
+        handler._send_json(
+            403,
+            {
+                "error": "forbidden",
+                "message": "仅管理员与授权法务复核员具备审批训练样本权限",
+            },
+        )
+        return
+
+    raw_body = handler.get_request_body()
+    try:
+        data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+        task_id = str(data.get("task_id") or "")
+        annotation_id = str(data.get("annotation_id") or "")
+        reason = str(data.get("reason") or "法务主管合规审核通过")
+        if not task_id or not annotation_id:
+            handler._send_json(400, {"error": "缺少 task_id 或 annotation_id"})
+            return
+
+        res = approve_feedback_for_training(
+            task_id=task_id,
+            annotation_id=annotation_id,
+            approver=principal,
+            tenant_id=tenant_id,
+            reason=reason,
+        )
+        handler._send_json(200, res)
+    except PermissionError as e:
+        handler._send_json(403, {"error": str(e)})
+    except ValueError as e:
+        handler._send_json(400, {"error": str(e)})
     except Exception as e:
         handler._send_json(500, {"error": str(e)})
 
