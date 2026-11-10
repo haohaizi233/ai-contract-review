@@ -5,8 +5,8 @@ import tempfile
 from pathlib import Path
 import pytest
 
-from contract_kb.agent_checkpoint import CheckpointStorage
-from contract_kb.agent_queue_manager import AgentReviewManager
+from contract_kb.infrastructure.checkpoints.storage import CheckpointStorage
+from contract_kb.application.agents.review_sessions import AgentReviewManager
 from contract_kb.domain.models.review_identity import ReviewExecutionFingerprint
 
 

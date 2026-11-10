@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from contract_kb.domain.models.review_identity import HumanReviewStatus
-from contract_kb.legal_agent_kb import (
+from contract_kb.application.agents.knowledge_adapter import (
     export_sft_dataset,
     record_user_feedback,
     sanitize_sensitive_data,
@@ -94,7 +94,10 @@ def test_feedback_dataset_export_train_eval_isolation() -> None:
         tmp_base = Path(tmp_dir) / "ai_feedback"
         tmp_base.mkdir(parents=True, exist_ok=True)
 
-        with patch("contract_kb.legal_agent_kb.FEEDBACK_BASE_DIR", tmp_base):
+        with patch(
+            "contract_kb.application.agents.knowledge_adapter.FEEDBACK_BASE_DIR",
+            tmp_base,
+        ):
             # 记录多条反馈数据（包含不同文档哈希，以触发 holdout 切分）
             for idx in range(10):
                 file_hash = f"contract_hash_{idx:03d}"

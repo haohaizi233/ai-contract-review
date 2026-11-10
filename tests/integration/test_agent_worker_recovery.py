@@ -5,7 +5,7 @@ import threading
 import time
 from unittest.mock import patch
 
-from contract_kb.agent_queue_manager import AgentReviewManager
+from contract_kb.application.agents.review_sessions import AgentReviewManager
 
 
 def test_late_worker_result_discarded_on_generation_change() -> None:

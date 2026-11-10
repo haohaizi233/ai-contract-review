@@ -66,9 +66,12 @@ from contract_kb.modules.document_processing.ingestion import (  # noqa: E402
     scan_and_import,
     import_template_file,
 )
-from contract_kb.legal_agent_kb import record_user_feedback, export_sft_dataset  # noqa: E402
-from contract_kb.agent_queue_manager import get_agent_manager  # noqa: E402
-from tools.material_catalog import (  # noqa: E402
+from contract_kb.application.agents.knowledge_adapter import (  # noqa: E402
+    record_user_feedback,
+    export_sft_dataset,
+)
+from contract_kb.application.agents.review_sessions import get_agent_manager  # noqa: E402
+from contract_kb.modules.templates.material_catalog import (  # noqa: E402
     DEFAULT_REF_DIR,
     get_material_manager,
     get_ref_templates_catalog,

@@ -11,7 +11,7 @@ import os
 from unittest.mock import patch
 
 from contract_kb.legal_agent import LegalReviewAgent, _is_safe_endpoint_url
-from contract_kb.legal_agent_kb import (
+from contract_kb.application.agents.knowledge_adapter import (
     GOVERNED_RULES_STORE,
     GovernedLegalRule,
     retrieve_governed_rules,

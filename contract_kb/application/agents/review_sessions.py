@@ -26,7 +26,7 @@ import time
 from typing import Any
 
 from contract_kb import config
-from contract_kb.agent_checkpoint import (
+from contract_kb.infrastructure.checkpoints.storage import (
     CHECKPOINT_DIR,
     CheckpointStorage,
     compute_annotations_fingerprint,
@@ -35,7 +35,7 @@ from contract_kb.domain.models.review_identity import (
     ReviewExecutionFingerprint,
     ReviewSessionIdentity,
 )
-from contract_kb.legal_agent import get_legal_agent
+from .legal_review_agent import get_legal_agent
 
 
 class AgentReviewSession:
