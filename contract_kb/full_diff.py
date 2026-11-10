@@ -162,9 +162,7 @@ def _enhance_diff_tables(
         # Only remove fragments whose entire provenance is covered by reconstructed tables.
         # Text/category coincidence is not evidence: a real body obligation may repeat a cell.
         table_node_ids = {
-            node.node_id
-            for table in std_tables + rev_tables
-            for node in table.nodes
+            node.node_id for table in std_tables + rev_tables for node in table.nodes
         }
         dropped_block_ids: set[str] = set()
         for block in aligned_blocks:
@@ -703,6 +701,7 @@ def build_full_contract_diff(
         # 若未从文件直接解析出 std_nodes，尝试从 AST 持久化缓存中加载，保障表格结构保真
         if not std_nodes:
             import json
+
             doc_id = matched_tpl.get("document_id", "")
             ast_candidates = [
                 config.DATA_DIR / "ast" / f"{doc_id}.json",

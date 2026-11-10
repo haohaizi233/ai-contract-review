@@ -129,3 +129,9 @@ def real_corpus_dir():
 
 def is_real_corpus_marked(request) -> bool:
     return any(m.name == "real_corpus" for m in request.node.own_markers)
+
+
+def pytest_runtest_setup(item):
+    if any(m.name == "real_corpus" for m in item.iter_markers()):
+        if not REAL_CORPUS_ENABLED:
+            pytest.skip("真实语料回归未授权（需设置 CONTRACT_KB_REAL_CORPUS=1）")

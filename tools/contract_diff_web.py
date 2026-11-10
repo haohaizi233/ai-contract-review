@@ -4347,7 +4347,9 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                 mgr = get_material_manager()
                 file_path, att_meta = mgr.get_contract_attachment_file(c_no, att_path)
                 if not file_path or not file_path.exists():
-                    self._send_json(404, {"error": f"未找到案卷 [{c_no}] 的合同附件物理文件"})
+                    self._send_json(
+                        404, {"error": f"未找到案卷 [{c_no}] 的合同附件物理文件"}
+                    )
                     return
 
                 s_file = prepare_session_file(session_id, ext=file_path.suffix)
@@ -4355,10 +4357,18 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
 
                 c_info = mgr.cases_by_no.get(c_no, {})
                 c_name = c_info.get("name") or c_no
-                doc_name = f"《{c_name}》履约合同原件" if not c_name.startswith("《") else c_name
-                save_session_meta(session_id, {"doc_name": doc_name, "forced_template_id": None})
+                doc_name = (
+                    f"《{c_name}》履约合同原件"
+                    if not c_name.startswith("《")
+                    else c_name
+                )
+                save_session_meta(
+                    session_id, {"doc_name": doc_name, "forced_template_id": None}
+                )
 
-                res = execute_current_diff(s_file, forced_template_id=None, doc_name=doc_name)
+                res = execute_current_diff(
+                    s_file, forced_template_id=None, doc_name=doc_name
+                )
                 res["session_id"] = session_id
                 res["contract_no"] = c_no
                 get_agent_manager().start_document_review(
@@ -4386,7 +4396,10 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                     return
 
                 target_file = (DEFAULT_REF_DIR / rel_path).resolve()
-                if not target_file.is_relative_to(DEFAULT_REF_DIR.resolve()) or not target_file.exists():
+                if (
+                    not target_file.is_relative_to(DEFAULT_REF_DIR.resolve())
+                    or not target_file.exists()
+                ):
                     self._send_json(404, {"error": f"模板文件不存在: {rel_path}"})
                     return
 
@@ -4404,7 +4417,10 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                     doc_rec = st.find_document_by_hash(target_sha)
                     if not doc_rec:
                         for d in st.list_documents():
-                            if d.get("source_file") == target_file.name or d.get("file_name") == target_file.name:
+                            if (
+                                d.get("source_file") == target_file.name
+                                or d.get("file_name") == target_file.name
+                            ):
                                 doc_rec = d
                                 break
                     if doc_rec:
@@ -4414,11 +4430,18 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
 
                 if mode == "standard":
                     if not tpl_id:
-                        self._send_json(400, {"error": f"模板 [{target_file.name}] 未在知识库中注册有效 ID"})
+                        self._send_json(
+                            400,
+                            {
+                                "error": f"模板 [{target_file.name}] 未在知识库中注册有效 ID"
+                            },
+                        )
                         return
                     s_file = get_session_file(session_id)
                     if not s_file.exists():
-                        default_sample = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
+                        default_sample = (
+                            config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
+                        )
                         shutil.copyfile(default_sample, s_file)
                     meta = get_session_meta(session_id)
                     meta["forced_template_id"] = tpl_id
@@ -4433,7 +4456,9 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                     s_file = prepare_session_file(session_id, ext=target_file.suffix)
                     shutil.copyfile(target_file, s_file)
                     doc_name = f"《{clean_name}》标准模板自测核验"
-                    save_session_meta(session_id, {"doc_name": doc_name, "forced_template_id": tpl_id})
+                    save_session_meta(
+                        session_id, {"doc_name": doc_name, "forced_template_id": tpl_id}
+                    )
 
                     res = execute_current_diff(
                         s_file,
@@ -4444,7 +4469,9 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                     s_file = prepare_session_file(session_id, ext=target_file.suffix)
                     shutil.copyfile(target_file, s_file)
                     doc_name = f"《{clean_name}》送审原稿"
-                    save_session_meta(session_id, {"doc_name": doc_name, "forced_template_id": None})
+                    save_session_meta(
+                        session_id, {"doc_name": doc_name, "forced_template_id": None}
+                    )
 
                     res = execute_current_diff(
                         s_file,

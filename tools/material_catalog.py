@@ -16,8 +16,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from contract_kb import config
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_REF_DIR = PROJECT_ROOT / "参考"
 DEFAULT_MERGED_DIR = PROJECT_ROOT / "data" / "contract_merged"
@@ -177,9 +175,7 @@ class MaterialLibraryManager:
                         cat_code = (row.get("业务分类代字") or "").strip()
                         cat_name = (row.get("业务分类名称") or "").strip()
                         atts = self.att_by_case.get(no, [])
-                        word_atts = [
-                            a for a in atts if a["ext"] in (".docx", ".doc")
-                        ]
+                        word_atts = [a for a in atts if a["ext"] in (".docx", ".doc")]
                         has_word = len(word_atts) > 0
                         if has_word:
                             self.total_word_contracts += 1
@@ -322,7 +318,9 @@ class MaterialLibraryManager:
         if attachment_local_path:
             p = (self.merged_dir / attachment_local_path).resolve()
             if p.is_relative_to(self.merged_dir.resolve()) and p.exists():
-                meta = next((a for a in atts if a.get("local") == attachment_local_path), None)
+                meta = next(
+                    (a for a in atts if a.get("local") == attachment_local_path), None
+                )
                 if meta:
                     return p, meta
             return None, None
@@ -338,7 +336,17 @@ class MaterialLibraryManager:
                     orig_low = str(a.get("original") or a.get("local") or "").lower()
                     is_draw = any(
                         s in orig_low
-                        for s in (".vsd", ".prt", ".dwg", ".dxf", ".cad", ".step", ".stp", "绘图", "图纸")
+                        for s in (
+                            ".vsd",
+                            ".prt",
+                            ".dwg",
+                            ".dxf",
+                            ".cad",
+                            ".step",
+                            ".stp",
+                            "绘图",
+                            "图纸",
+                        )
                     )
                     ext_priority = 0 if ext == ".docx" else (1 if ext == ".doc" else 2)
                     draw_priority = 1 if is_draw else 0

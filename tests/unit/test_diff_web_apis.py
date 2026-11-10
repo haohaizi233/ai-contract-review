@@ -14,10 +14,10 @@ import pytest
 
 from tools.contract_diff_web import (
     DiffVisualizerHandler,
-    generate_rendered_html,
     export_standalone_html,
+    generate_rendered_html,
 )
-from tools.material_catalog import DEFAULT_REF_DIR
+from tools.material_catalog import DEFAULT_MERGED_DIR, DEFAULT_REF_DIR
 
 
 @pytest.fixture(scope="module")
@@ -43,8 +43,11 @@ def test_get_root_page(web_server):
         assert "refTemplateModal" in html
 
 
+@pytest.mark.real_corpus
 def test_api_ref_templates_catalog(web_server):
     """测试模板库清单 API。"""
+    if not DEFAULT_REF_DIR.exists():
+        pytest.skip("本地未配置受控参考模板库（参考/）")
     req = urllib.request.Request(f"{web_server}/api/ref_templates/catalog")
     with urllib.request.urlopen(req) as resp:
         assert resp.status == 200
@@ -54,8 +57,11 @@ def test_api_ref_templates_catalog(web_server):
         assert len(templates) == 54
 
 
+@pytest.mark.real_corpus
 def test_api_materials_stats(web_server):
     """测试素材库资产统计 API。"""
+    if not (DEFAULT_MERGED_DIR / "attachments_merged.csv").exists():
+        pytest.skip("本地未配置受控素材库（data/contract_merged）")
     req = urllib.request.Request(f"{web_server}/api/materials/stats")
     with urllib.request.urlopen(req) as resp:
         assert resp.status == 200
@@ -65,9 +71,14 @@ def test_api_materials_stats(web_server):
         assert "categories" in stats
 
 
+@pytest.mark.real_corpus
 def test_api_materials_cases_filter(web_server):
     """测试素材库分类筛选与分页 API。"""
-    req = urllib.request.Request(f"{web_server}/api/materials/cases?category=CIP&page=1&page_size=10")
+    if not (DEFAULT_MERGED_DIR / "attachments_merged.csv").exists():
+        pytest.skip("本地未配置受控素材库（data/contract_merged）")
+    req = urllib.request.Request(
+        f"{web_server}/api/materials/cases?category=CIP&page=1&page_size=10"
+    )
     with urllib.request.urlopen(req) as resp:
         assert resp.status == 200
         res = json.loads(resp.read().decode("utf-8"))
@@ -76,9 +87,14 @@ def test_api_materials_cases_filter(web_server):
         assert res["total"] > 100
 
 
+@pytest.mark.real_corpus
 def test_api_materials_case_detail(web_server):
     """测试案卷详情与审批元数据提取 API。"""
-    req = urllib.request.Request(f"{web_server}/api/materials/case_detail?contract_no=BJI260500006")
+    if not (DEFAULT_MERGED_DIR / "attachments_merged.csv").exists():
+        pytest.skip("本地未配置受控素材库（data/contract_merged）")
+    req = urllib.request.Request(
+        f"{web_server}/api/materials/case_detail?contract_no=BJI260500006"
+    )
     with urllib.request.urlopen(req) as resp:
         assert resp.status == 200
         detail = json.loads(resp.read().decode("utf-8"))
@@ -86,8 +102,11 @@ def test_api_materials_case_detail(web_server):
         assert len(detail["attachments"]) >= 1
 
 
+@pytest.mark.real_corpus
 def test_api_materials_load_contract(web_server):
     """测试从素材库载入真实 Word 合同并执行原格式比对。"""
+    if not (DEFAULT_MERGED_DIR / "attachments_merged.csv").exists():
+        pytest.skip("本地未配置受控素材库（data/contract_merged）")
     payload = json.dumps({"contract_no": "BJI260500006"}).encode("utf-8")
     req = urllib.request.Request(
         f"{web_server}/api/materials/load_contract",
@@ -102,12 +121,14 @@ def test_api_materials_load_contract(web_server):
         assert diff_res["display_doc_name"]
 
 
+@pytest.mark.real_corpus
 def test_api_ref_templates_load_self_diff(web_server):
     """测试官方模板 100% 自身回归自测比对（零残存差异）。"""
-    payload = json.dumps({
-        "rel_path": "商标/商标咨询服务合同-事务所.docx",
-        "mode": "self_diff"
-    }).encode("utf-8")
+    if not DEFAULT_REF_DIR.exists():
+        pytest.skip("本地未配置受控参考模板库（参考/）")
+    payload = json.dumps(
+        {"rel_path": "商标/商标咨询服务合同-事务所.docx", "mode": "self_diff"}
+    ).encode("utf-8")
     req = urllib.request.Request(
         f"{web_server}/api/ref_templates/load",
         data=payload,
@@ -122,10 +143,9 @@ def test_api_ref_templates_load_self_diff(web_server):
 
 def test_api_ref_templates_directory_traversal_defense(web_server):
     """测试目录穿越安全防护。"""
-    payload = json.dumps({
-        "rel_path": "../../../etc/passwd",
-        "mode": "reviewed"
-    }).encode("utf-8")
+    payload = json.dumps(
+        {"rel_path": "../../../etc/passwd", "mode": "reviewed"}
+    ).encode("utf-8")
     req = urllib.request.Request(
         f"{web_server}/api/ref_templates/load",
         data=payload,
@@ -138,10 +158,12 @@ def test_api_ref_templates_directory_traversal_defense(web_server):
 
 def test_api_materials_load_contract_traversal_defense(web_server):
     """测试素材库加载合同的路径穿越与越界防护。"""
-    payload = json.dumps({
-        "contract_no": "BJI260500006",
-        "attachment_path": "../../contract_mapping_dictionary.json"
-    }).encode("utf-8")
+    payload = json.dumps(
+        {
+            "contract_no": "BJI260500006",
+            "attachment_path": "../../contract_mapping_dictionary.json",
+        }
+    ).encode("utf-8")
     req = urllib.request.Request(
         f"{web_server}/api/materials/load_contract",
         data=payload,
@@ -154,7 +176,9 @@ def test_api_materials_load_contract_traversal_defense(web_server):
 
 def test_api_materials_case_detail_not_found(web_server):
     """测试不存在案卷号时优雅返回 404。"""
-    req = urllib.request.Request(f"{web_server}/api/materials/case_detail?contract_no=NON_EXISTENT_CASE_999")
+    req = urllib.request.Request(
+        f"{web_server}/api/materials/case_detail?contract_no=NON_EXISTENT_CASE_999"
+    )
     with pytest.raises(urllib.error.HTTPError) as exc_info:
         urllib.request.urlopen(req)
     assert exc_info.value.code == 404
@@ -168,6 +192,9 @@ def test_generate_rendered_html_and_export():
     assert "__REF_TEMPLATES_PLACEHOLDER__" not in html
     assert "__MATERIAL_DATA_PLACEHOLDER__" not in html
     assert len(html) > 100000
+
+    if not DEFAULT_REF_DIR.exists():
+        pytest.skip("本地未配置受控参考模板库（参考/），跳过物理导出检查")
 
     export_standalone_html()
     out1 = Path("data/contract_merged/合同模板条款比对与Diff可视化.html")
