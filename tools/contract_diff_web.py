@@ -65,6 +65,12 @@ from contract_kb.storage import create_storage  # noqa: E402
 from contract_kb.ingest import scan_and_import, import_template_file  # noqa: E402
 from contract_kb.legal_agent_kb import record_user_feedback, export_sft_dataset  # noqa: E402
 from contract_kb.agent_queue_manager import get_agent_manager  # noqa: E402
+from tools.material_catalog import (  # noqa: E402
+    DEFAULT_REF_DIR,
+    get_material_manager,
+    get_ref_templates_catalog,
+    clean_template_title as catalog_clean_title,
+)
 
 # 业务分类中文对照
 CATEGORY_LABELS: dict[str, str] = {
@@ -99,8 +105,29 @@ def get_session_dir(session_id: str) -> Path:
     return s_dir
 
 
-def get_session_file(session_id: str) -> Path:
-    return get_session_dir(session_id) / "contract.docx"
+def get_session_file(session_id: str, ext: str | None = None) -> Path:
+    """获取会话当前的待审文档路径（支持 docx/doc/pdf 多格式）。"""
+    s_dir = get_session_dir(session_id)
+    if ext:
+        clean_ext = ext if ext.startswith(".") else f".{ext}"
+        return s_dir / f"contract{clean_ext}"
+    for candidate in [".docx", ".doc", ".pdf"]:
+        p = s_dir / f"contract{candidate}"
+        if p.exists():
+            return p
+    return s_dir / "contract.docx"
+
+
+def prepare_session_file(session_id: str, ext: str = ".docx") -> Path:
+    """清理并准备全新待审文档物理文件路径，防止格式扩展名错配。"""
+    s_dir = get_session_dir(session_id)
+    for old in s_dir.glob("contract.*"):
+        try:
+            old.unlink(missing_ok=True)
+        except Exception:
+            pass
+    clean_ext = ext if ext.startswith(".") else f".{ext}"
+    return s_dir / f"contract{clean_ext}"
 
 
 def get_session_meta(session_id: str) -> dict[str, Any]:
@@ -612,6 +639,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     overflow-x: hidden;
     padding: 24px 28px 80px 28px;
     scroll-behavior: auto;
+    overscroll-behavior-y: contain;
+    overflow-anchor: none;
   }
 
   /* A4 纸张质感画布 */
@@ -929,6 +958,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     gap: 8px;
     flex: 1;
     scroll-behavior: auto;
+    overscroll-behavior-y: contain;
+    overflow-anchor: none;
   }
 
   .annotation-card {
@@ -1310,6 +1341,243 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* ==================== 8.5 按钮与素材库/模板全景/案卷详情增强样式 ==================== */
+  .btn-emerald {
+    background: linear-gradient(135deg, #059669 0%, #10B981 100%) !important;
+    color: #FFFFFF !important;
+    border: 1px solid #047857 !important;
+    box-shadow: 0 1px 3px rgba(16, 185, 129, 0.25);
+  }
+  .btn-emerald:hover {
+    background: linear-gradient(135deg, #047857 0%, #059669 100%) !important;
+    box-shadow: 0 2px 6px rgba(16, 185, 129, 0.4);
+  }
+  .btn-blue {
+    background: linear-gradient(135deg, #2563EB 0%, #3B82F6 100%) !important;
+    color: #FFFFFF !important;
+    border: 1px solid #1D4ED8 !important;
+    box-shadow: 0 1px 3px rgba(37, 99, 235, 0.25);
+  }
+  .btn-blue:hover {
+    background: linear-gradient(135deg, #1D4ED8 0%, #2563EB 100%) !important;
+    box-shadow: 0 2px 6px rgba(37, 99, 235, 0.4);
+  }
+
+  /* 素材库弹窗与卡片样式 */
+  .mat-modal-card {
+    background: #FFFFFF; border-radius: 12px; width: 92%; max-width: 1180px; height: 88vh;
+    box-shadow: 0 20px 45px rgba(0,0,0,0.2); display: flex; flex-direction: column; overflow: hidden;
+    animation: modalPop 0.2s ease-out; font-family: sans-serif;
+  }
+  .mat-modal-header {
+    padding: 12px 20px; border-bottom: 1px solid var(--border-light);
+    display: flex; justify-content: space-between; align-items: center; background: #FFFFFF;
+  }
+  .mat-header-left { display: flex; align-items: center; gap: 12px; }
+  .mat-stats-pill {
+    font-size: 11.5px; font-weight: 700; background: #ECFDF5; color: #065F46;
+    border: 1px solid #A7F3D0; padding: 2px 10px; border-radius: 999px;
+  }
+  .mat-modal-toolbar {
+    padding: 10px 20px; background: #F8FAFC; border-bottom: 1px solid var(--border-light);
+    display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  .mat-search-wrap { display: flex; gap: 8px; flex: 1; max-width: 680px; }
+  .mat-search-input {
+    flex: 1; padding: 6px 12px; border: 1px solid #CBD5E1; border-radius: 6px;
+    font-size: 13px; font-family: sans-serif; outline: none;
+  }
+  .mat-search-input:focus { border-color: #059669; box-shadow: 0 0 0 2px rgba(5,150,105,0.15); }
+  .mat-toggle-label {
+    display: flex; align-items: center; gap: 6px; font-size: 12px; color: #334155; font-weight: 600; cursor: pointer;
+  }
+  .mat-category-tabs {
+    display: flex; gap: 6px; padding: 8px 20px; background: #FFFFFF;
+    border-bottom: 1px solid var(--border-light); overflow-x: auto; flex-shrink: 0;
+  }
+  .mat-tab-btn {
+    padding: 3px 12px; border-radius: 999px; border: 1px solid var(--border-light);
+    background: #FFF; font-size: 12px; font-weight: 600; color: #475569; cursor: pointer;
+    white-space: nowrap; transition: all 0.15s ease;
+  }
+  .mat-tab-btn:hover { background: #F1F5F9; color: #0F172A; }
+  .mat-tab-btn.active {
+    background: #059669; color: #FFF; border-color: #059669; box-shadow: 0 1px 3px rgba(5,150,105,0.25);
+  }
+  .mat-list-container {
+    flex: 1; overflow-y: auto; padding: 14px 20px; display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 12px; align-content: start;
+    background: #F8FAFC;
+  }
+  .mat-case-card {
+    background: #FFFFFF; border: 1px solid var(--border-light); border-radius: 8px;
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 6px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03); transition: all 0.18s ease;
+  }
+  .mat-case-card:hover {
+    border-color: #059669; box-shadow: 0 4px 12px rgba(5,150,105,0.12); transform: translateY(-1px);
+  }
+  .mat-card-header { display: flex; justify-content: space-between; align-items: center; }
+  .mat-no-tag {
+    font-family: Consolas, monospace; font-size: 11.5px; font-weight: 700;
+    color: #1E293B; background: #E2E8F0; padding: 1px 6px; border-radius: 4px;
+  }
+  .mat-cat-tag {
+    font-size: 11px; font-weight: 600; color: #065F46; background: #D1FAE5; padding: 1px 6px; border-radius: 4px;
+  }
+  .mat-card-title {
+    font-size: 13.5px; font-weight: 700; color: #0F172A; line-height: 1.4;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .mat-card-parties {
+    font-size: 12px; color: #475569; display: flex; flex-direction: column; gap: 2px;
+  }
+  .mat-party-row {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .mat-card-meta {
+    display: flex; justify-content: space-between; font-size: 11px; color: #64748B; margin-top: 2px;
+  }
+  .mat-card-chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .mat-chip {
+    font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 3px;
+  }
+  .mat-chip.docx { background: #DBEAFE; color: #1E40AF; }
+  .mat-chip.doc { background: #E0E7FF; color: #4338CA; }
+  .mat-chip.pdf { background: #FEE2E2; color: #991B1B; }
+  .mat-chip.md { background: #D1FAE5; color: #065F46; }
+  .mat-card-actions {
+    display: flex; gap: 6px; margin-top: 6px; border-top: 1px dashed var(--border-light); padding-top: 8px;
+  }
+  .mat-btn-action {
+    flex: 1; padding: 4px 8px; font-size: 11.5px; font-weight: 700; border-radius: 4px;
+    border: none; cursor: pointer; transition: all 0.15s ease; text-align: center;
+  }
+  .mat-btn-diff {
+    background: #059669; color: #FFF;
+  }
+  .mat-btn-diff:hover { background: #047857; }
+  .mat-btn-detail {
+    background: #F1F5F9; color: #334155; border: 1px solid var(--border-light);
+  }
+  .mat-btn-detail:hover { background: #E2E8F0; }
+  .mat-modal-footer {
+    padding: 10px 20px; border-top: 1px solid var(--border-light);
+    display: flex; justify-content: space-between; align-items: center; background: #FFFFFF;
+  }
+  .mat-pagination-btns { display: flex; align-items: center; gap: 8px; }
+  .mat-cur-page { font-size: 12px; font-weight: 700; color: #0F172A; min-width: 60px; text-align: center; }
+
+  /* 模板全景弹窗样式 */
+  .ref-modal-card {
+    background: #FFFFFF; border-radius: 12px; width: 88%; max-width: 1040px; height: 85vh;
+    box-shadow: 0 20px 45px rgba(0,0,0,0.2); display: flex; flex-direction: column; overflow: hidden;
+    animation: modalPop 0.2s ease-out; font-family: sans-serif;
+  }
+  .ref-modal-header {
+    padding: 12px 20px; border-bottom: 1px solid var(--border-light);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .ref-header-left { display: flex; align-items: center; gap: 12px; }
+  .ref-stats-pill {
+    font-size: 11.5px; font-weight: 700; background: #EFF6FF; color: #1E40AF;
+    border: 1px solid #BFDBFE; padding: 2px 10px; border-radius: 999px;
+  }
+  .ref-modal-toolbar {
+    padding: 10px 20px; background: #F8FAFC; border-bottom: 1px solid var(--border-light);
+    display: flex; align-items: center; gap: 12px;
+  }
+  .ref-search-input {
+    flex: 1; max-width: 480px; padding: 6px 12px; border: 1px solid #CBD5E1;
+    border-radius: 6px; font-size: 13px; font-family: sans-serif; outline: none;
+  }
+  .ref-search-input:focus { border-color: #2563EB; box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
+  .ref-hint-text { font-size: 11.5px; color: #64748B; font-weight: 500; }
+  .ref-category-tabs {
+    display: flex; gap: 6px; padding: 8px 20px; background: #FFFFFF;
+    border-bottom: 1px solid var(--border-light); overflow-x: auto; flex-shrink: 0;
+  }
+  .ref-cat-btn {
+    padding: 3px 12px; border-radius: 999px; border: 1px solid var(--border-light);
+    background: #FFF; font-size: 12px; font-weight: 600; color: #475569; cursor: pointer;
+    white-space: nowrap; transition: all 0.15s ease;
+  }
+  .ref-cat-btn:hover { background: #F1F5F9; color: #0F172A; }
+  .ref-cat-btn.active {
+    background: #2563EB; color: #FFF; border-color: #2563EB; box-shadow: 0 1px 3px rgba(37,99,235,0.25);
+  }
+  .ref-list-container {
+    flex: 1; overflow-y: auto; padding: 14px 20px; display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; align-content: start;
+    background: #F8FAFC;
+  }
+  .ref-card {
+    background: #FFFFFF; border: 1px solid var(--border-light); border-radius: 8px;
+    padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02); transition: all 0.15s ease;
+  }
+  .ref-card:hover {
+    border-color: #2563EB; box-shadow: 0 3px 8px rgba(37,99,235,0.12); transform: translateY(-1px);
+  }
+  .ref-card-header { display: flex; justify-content: space-between; align-items: center; }
+  .ref-folder-tag {
+    font-size: 11px; font-weight: 700; color: #1E40AF; background: #DBEAFE; padding: 1px 6px; border-radius: 4px;
+  }
+  .ref-mb-tag {
+    font-family: Consolas, monospace; font-size: 11px; font-weight: 700; color: #7C3AED; background: #EDE9FE; padding: 1px 6px; border-radius: 4px;
+  }
+  .ref-card-title {
+    font-size: 13.5px; font-weight: 700; color: #0F172A; line-height: 1.4;
+  }
+  .ref-card-meta { font-size: 11px; color: #64748B; }
+  .ref-card-actions { display: flex; gap: 5px; margin-top: 4px; padding-top: 6px; border-top: 1px dashed var(--border-light); }
+  .ref-btn-action {
+    flex: 1; padding: 3px 6px; font-size: 11px; font-weight: 700; border-radius: 4px;
+    border: 1px solid transparent; cursor: pointer; transition: all 0.15s ease; text-align: center;
+  }
+  .ref-btn-primary { background: #2563EB; color: #FFF; }
+  .ref-btn-primary:hover { background: #1D4ED8; }
+  .ref-btn-std { background: #F1F5F9; color: #334155; border-color: var(--border-light); }
+  .ref-btn-std:hover { background: #E2E8F0; }
+  .ref-btn-self { background: #FAF5FF; color: #7C3AED; border-color: #DDD6FE; }
+  .ref-btn-self:hover { background: #EDE9FE; }
+  .ref-modal-footer {
+    padding: 10px 20px; border-top: 1px solid var(--border-light);
+    display: flex; justify-content: space-between; align-items: center; background: #FFFFFF;
+  }
+
+  /* 案卷详情弹窗 */
+  .detail-modal-card {
+    background: #FFFFFF; border-radius: 12px; width: 80%; max-width: 900px; height: 85vh;
+    box-shadow: 0 20px 45px rgba(0,0,0,0.25); display: flex; flex-direction: column; overflow: hidden;
+    animation: modalPop 0.2s ease-out; font-family: sans-serif;
+  }
+  .detail-modal-header {
+    padding: 12px 20px; border-bottom: 1px solid var(--border-light);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .detail-no-pill {
+    font-family: Consolas, monospace; font-size: 12px; font-weight: 700;
+    color: #065F46; background: #D1FAE5; padding: 2px 8px; border-radius: 4px; margin-left: 8px;
+  }
+  .detail-modal-body {
+    flex: 1; overflow-y: auto; padding: 20px; font-size: 13.5px; line-height: 1.7; background: #FFFFFF;
+  }
+  .detail-modal-body table {
+    width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 12.5px;
+  }
+  .detail-modal-body th, .detail-modal-body td {
+    border: 1px solid #CBD5E1; padding: 6px 10px; word-break: break-word;
+  }
+  .detail-modal-body th { background: #F1F5F9; font-weight: 600; text-align: left; }
+  .detail-modal-body h1, .detail-modal-body h2, .detail-modal-body h3 {
+    color: #0F172A; margin: 12px 0 6px 0; font-weight: 700;
+  }
+  .detail-modal-footer {
+    padding: 10px 20px; border-top: 1px solid var(--border-light);
+    display: flex; justify-content: flex-end; align-items: center; gap: 10px; background: #F8FAFC;
+  }
+
   /* 打印样式适配 */
   @media print {
     .header, .toolbar-strip, .annotations-sidebar-panel, .modal-overlay, .column-sticky-header, #toastContainer, .loading-mask { display: none !important; }
@@ -1348,8 +1616,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 
   <div class="header-actions">
-    <button class="btn" id="btnSwitchTemplate" onclick="openTemplateModal()">🔄 更换模板</button>
-    <button class="btn btn-purple" id="btnReloadTemplates" onclick="reloadTemplates()">⚡ 热加载模板库</button>
+    <button class="btn btn-emerald" id="btnOpenMaterialModal" onclick="openMaterialModal()" title="调取 2.1万+ 历史实单案卷及 4,500+ Word 合同原件">📚 历史素材库 (contract_merged)</button>
+    <button class="btn btn-blue" id="btnOpenRefTemplateModal" onclick="openRefTemplateModal()" title="全景浏览【参考/】目录 54 套官方标准模板">📑 模板库全景 (参考/)</button>
+    <button class="btn" id="btnSwitchTemplate" onclick="openTemplateModal()">🔄 更换母本</button>
+    <button class="btn btn-purple" id="btnReloadTemplates" onclick="reloadTemplates()">⚡ 热加载母本库</button>
     <button class="btn btn-primary" onclick="openUploadModal()">📂 上传送审合同</button>
     <button class="btn" onclick="window.print()">🖨️ 导出对比单</button>
   </div>
@@ -1486,8 +1756,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="drop-desc">自动高保真结构解析并秒级对齐母本库，出具原格式增删比对</div>
       </div>
 
-      <div style="font-size:12px; font-weight:700; color:#475569; margin-top:6px;">⚡ 快速加载实测高危用例：</div>
+      <div style="font-size:12px; font-weight:700; color:#475569; margin-top:6px;">⚡ 快速加载实测高危用例 / 连通全量资产库：</div>
       <div class="preset-grid">
+        <button class="preset-btn" style="border-color:#10B981; background:#F0FDF4;" onclick="closeUploadModal(); openMaterialModal();">
+          <span>📚 打开 2.1万+ 历史素材库 (选择真实业务合同比对)</span>
+          <span style="font-size:10.5px; font-weight:700; background:#DCFCE7; color:#166534; padding:1px 6px; border-radius:3px;">全库检索</span>
+        </button>
+        <button class="preset-btn" style="border-color:#3B82F6; background:#EFF6FF;" onclick="closeUploadModal(); openRefTemplateModal();">
+          <span>📑 打开 54 套官方模板库 (选择标准母本原稿测试)</span>
+          <span style="font-size:10.5px; font-weight:700; background:#DBEAFE; color:#1E40AF; padding:1px 6px; border-radius:3px;">母本原稿</span>
+        </button>
         <button class="preset-btn" onclick="loadSample('prescreen_tampered'); closeUploadModal();">
           <span>🚨 快速预审 (违约金日息从 3‰ 偷降到 1‰)</span>
           <span style="font-size:10.5px; font-weight:700; background:#FEE2E2; color:#991B1B; padding:1px 6px; border-radius:3px;">高危篡改</span>
@@ -1535,6 +1813,110 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<!-- ==================== 模态弹窗：历史素材库 (contract_merged) ==================== -->
+<div class="modal-overlay" id="materialModal" onclick="closeMaterialModalOnBackdrop(event)">
+  <div class="mat-modal-card">
+    <div class="mat-modal-header">
+      <div class="mat-header-left">
+        <span class="modal-title">📚 历史合同素材库 (contract_merged)</span>
+        <span class="mat-stats-pill" id="matStatsPill">共 21,623 案卷 · 4,586 实单 Word 原件</span>
+      </div>
+      <button class="modal-close-btn" onclick="closeMaterialModal()">✕</button>
+    </div>
+
+    <!-- 顶部检索与筛选工具条 -->
+    <div class="mat-modal-toolbar">
+      <div class="mat-search-wrap">
+        <input type="text" class="mat-search-input" id="matSearchInput" placeholder="🔍 搜索合同编号(如 CIP/GW/HCI...)、合同名称、对方主体(客户名)、申请人..." onkeyup="onMaterialSearchKey(event)">
+        <button class="btn btn-emerald" onclick="triggerMaterialSearch()">搜索</button>
+        <button class="btn" onclick="resetMaterialSearch()">重置</button>
+      </div>
+
+      <div class="mat-toggle-wrap">
+        <label class="mat-toggle-label">
+          <input type="checkbox" id="matHasWordOnly" checked onchange="triggerMaterialSearch()">
+          <span>仅看含 Word 原件 (4,586份可直接比对)</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- 分类标签页 -->
+    <div class="mat-category-tabs" id="matCategoryTabs">
+      <button class="mat-tab-btn active" id="matTab-ALL" onclick="setMaterialCategory('ALL')">全部 (2.1万)</button>
+      <button class="mat-tab-btn" id="matTab-CIP" onclick="setMaterialCategory('CIP')">专利核心 (CIP/CIPCX)</button>
+      <button class="mat-tab-btn" id="matTab-TRADEMARK" onclick="setMaterialCategory('TRADEMARK')">商标代理 (GW/MG/TZ)</button>
+      <button class="mat-tab-btn" id="matTab-LITIGATION" onclick="setMaterialCategory('LITIGATION')">诉讼维权 (HCI/HCZ)</button>
+      <button class="mat-tab-btn" id="matTab-FRAMEWORK" onclick="setMaterialCategory('FRAMEWORK')">合作框架 (HCCX/HKP)</button>
+      <button class="mat-tab-btn" id="matTab-OTHER" onclick="setMaterialCategory('OTHER')">分部与其他</button>
+    </div>
+
+    <!-- 案卷卡片列表容器 -->
+    <div class="mat-list-container" id="matListContainer">
+      <div class="mat-loading-hint" style="grid-column: 1/-1; padding: 40px; text-align: center; color: #64748B;">正在加载素材库案卷...</div>
+    </div>
+
+    <!-- 分页与底部状态栏 -->
+    <div class="mat-modal-footer">
+      <div class="mat-page-info" id="matPageInfo">显示第 1-20 条 / 共 0 条</div>
+      <div class="mat-pagination-btns">
+        <button class="btn btn-sm" id="matBtnPrev" onclick="changeMaterialPage(-1)">◀ 上一页</button>
+        <span class="mat-cur-page" id="matCurPageIndicator">1 / 1</span>
+        <button class="btn btn-sm" id="matBtnNext" onclick="changeMaterialPage(1)">下一页 ▶</button>
+      </div>
+      <button class="btn" onclick="closeMaterialModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 模态弹窗：模板库全景 (参考/) ==================== -->
+<div class="modal-overlay" id="refTemplateModal" onclick="closeRefTemplateModalOnBackdrop(event)">
+  <div class="ref-modal-card">
+    <div class="ref-modal-header">
+      <div class="ref-header-left">
+        <span class="modal-title">📑 官方标准模板库全景 (参考/)</span>
+        <span class="ref-stats-pill">共 54 套受控母本 · 10 大业务板块全量覆盖</span>
+      </div>
+      <button class="modal-close-btn" onclick="closeRefTemplateModal()">✕</button>
+    </div>
+
+    <div class="ref-modal-toolbar">
+      <input type="text" class="ref-search-input" id="refSearchInput" placeholder="🔍 快速搜索模板名称、业务板块或编号..." oninput="onRefSearchInput(event)">
+      <div class="ref-hint-text">💡 点击【载入待审】可测试真实原稿渲染；点击【设为母本】更换基准；点击【一键自测】验证 100% 匹配。</div>
+    </div>
+
+    <!-- 板块分类标签 -->
+    <div class="ref-category-tabs" id="refCategoryTabs"></div>
+
+    <!-- 模板卡片列表 -->
+    <div class="ref-list-container" id="refListContainer"></div>
+
+    <div class="ref-modal-footer">
+      <div style="font-size:12px; color:#64748B;">全量模板均通过 OOXML 严格结构解析与段落 AST 校验。</div>
+      <button class="btn" onclick="closeRefTemplateModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 模态弹窗：案卷审批与履约详情 ==================== -->
+<div class="modal-overlay" id="caseDetailModal" onclick="closeCaseDetailModalOnBackdrop(event)">
+  <div class="detail-modal-card">
+    <div class="detail-modal-header">
+      <div>
+        <span class="modal-title" id="detailModalTitle">案卷履约与审批详情</span>
+        <span class="detail-no-pill" id="detailModalNo">CIP20202024-BM</span>
+      </div>
+      <button class="modal-close-btn" onclick="closeCaseDetailModal()">✕</button>
+    </div>
+    <div class="detail-modal-body" id="detailModalBody">
+      <div style="padding:20px; text-align:center; color:#64748B;">加载中...</div>
+    </div>
+    <div class="detail-modal-footer">
+      <button class="btn btn-emerald" id="detailBtnLoadDiff" onclick="loadCurrentDetailContract()">⚡ 载入此案卷合同并比对</button>
+      <button class="btn" onclick="closeCaseDetailModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
 <!-- 全局轻量 Toast 消息容器 -->
 <div id="toastContainer"></div>
 
@@ -1555,6 +1937,19 @@ let activeAnnotationIndex = -1;
 let allTemplates = __ALL_TEMPLATES_PLACEHOLDER__ || [];
 let activeTemplateCategory = 'ALL';
 let templateSearchKeyword = '';
+
+// 素材库 (contract_merged) 状态
+window.MATERIAL_DATA = __MATERIAL_DATA_PLACEHOLDER__ || {};
+let currentMaterialCategory = 'ALL';
+let currentMaterialSearch = '';
+let currentMaterialPage = 1;
+let currentMaterialHasWordOnly = true;
+let currentDetailContractNo = null;
+
+// 模板全景 (参考/) 状态
+let refTemplatesCache = __REF_TEMPLATES_PLACEHOLDER__ || [];
+let activeRefCategory = 'ALL';
+let refSearchKeyword = '';
 
 // 预置默认数据占位符
 window.INITIAL_DATA = __INITIAL_DATA_PLACEHOLDER__;
@@ -1607,6 +2002,43 @@ function closeTemplateModal() {
 }
 function closeTemplateModalOnBackdrop(e) {
   if (e.target.id === 'templateModal') closeTemplateModal();
+}
+
+function openMaterialModal() {
+  document.getElementById('materialModal').classList.add('open');
+  initMaterialModal();
+}
+function closeMaterialModal() {
+  document.getElementById('materialModal').classList.remove('open');
+}
+function closeMaterialModalOnBackdrop(e) {
+  if (e.target.id === 'materialModal') closeMaterialModal();
+}
+
+function openRefTemplateModal() {
+  document.getElementById('refTemplateModal').classList.add('open');
+  initRefTemplateModal();
+}
+function closeRefTemplateModal() {
+  document.getElementById('refTemplateModal').classList.remove('open');
+}
+function closeRefTemplateModalOnBackdrop(e) {
+  if (e.target.id === 'refTemplateModal') closeRefTemplateModal();
+}
+
+function openCaseDetailModal(contractNo) {
+  currentDetailContractNo = contractNo;
+  document.getElementById('detailModalNo').innerText = contractNo;
+  document.getElementById('detailModalTitle').innerText = '案卷详情: ' + contractNo;
+  document.getElementById('detailModalBody').innerHTML = '<div style="padding:40px; text-align:center; color:#64748B;">正在调取案卷全宗履约与审批档案...</div>';
+  document.getElementById('caseDetailModal').classList.add('open');
+  fetchCaseDetail(contractNo);
+}
+function closeCaseDetailModal() {
+  document.getElementById('caseDetailModal').classList.remove('open');
+}
+function closeCaseDetailModalOnBackdrop(e) {
+  if (e.target.id === 'caseDetailModal') closeCaseDetailModal();
 }
 
 // 拖拽上传支持 (DOCX / DOC / PDF)
@@ -1987,6 +2419,7 @@ function escapeHtml(text) {
 
 // 渲染整版原格式比对与批注
 function renderFullDiff(data) {
+  resetThreeWaySyncScroll();
   currentData = data;
   activeAnnotationIndex = -1;
 
@@ -2176,121 +2609,203 @@ window.addEventListener('resize', () => {
 
 // ==================== 三栏双向协同联动滚动 ====================
 let activeDriver = null;
-let driverReleaseTimer = null;
 let syncListenerAttached = false;
+let syncFrame = 0;
+let scrollGeometry = null;
+let scrollPanes = null;
+const followerPositions = new WeakMap();
+
+// Coordinates are relative to each scrollport, never to an offsetParent.
+function contentTop(element, pane) {
+  return element.getBoundingClientRect().top - pane.getBoundingClientRect().top
+    - pane.clientTop + pane.scrollTop;
+}
+function scrollLimit(pane) { return Math.max(0, pane.scrollHeight - pane.clientHeight); }
+function invalidateScrollGeometry() { scrollGeometry = null; }
+function resetThreeWaySyncScroll() {
+  cancelAnimationFrame(syncFrame);
+  syncFrame = 0;
+  activeDriver = null;
+  invalidateScrollGeometry();
+  if (scrollPanes) Object.values(scrollPanes).forEach(pane => {
+    pane.scrollTo({top: pane.scrollTop, behavior: 'instant'});
+    followerPositions.delete(pane);
+  });
+}
+
+function highlightAnnotation(annId) {
+  const card = document.getElementById(`card-${annId}`);
+  if (currentData?.annotations?.[activeAnnotationIndex]?.id === annId && card?.classList.contains('active')) return;
+  const index = (currentData?.annotations || []).findIndex(a => a.id === annId);
+  if (index < 0) return;
+  const ann = currentData.annotations[index];
+  activeAnnotationIndex = index;
+  document.querySelectorAll('.annotation-card.active').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.clause-block.active-clause').forEach(el => el.classList.remove('active-clause'));
+  card?.classList.add('active');
+  document.getElementById(`std-${ann.block_id}`)?.classList.add('active-clause');
+  document.getElementById(`rev-${ann.block_id}`)?.classList.add('active-clause');
+  const indicator = document.getElementById('navIndicator');
+  if (indicator) indicator.innerText = `批注 ${ann.index || index + 1} / ${currentData.annotations.length}`;
+}
+
+function highlightScrollPosition(source, position) {
+  const stops = scrollGeometry.annotationStops[source];
+  if (!stops.length) return;
+  let low = 0, high = stops.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (stops[mid].position <= position) low = mid + 1; else high = mid;
+  }
+  // Use the clause at the reading line, or the closest card to the sidebar center.
+  let index = Math.max(0, low - 1);
+  if (source === 'detail' && low < stops.length
+      && Math.abs(stops[low].position - position) < Math.abs(stops[index].position - position)) index = low;
+  highlightAnnotation(stops[index].id);
+}
+
+function mapScrollPosition(position, anchors) {
+  if (position <= anchors[0][0]) return anchors[0][1];
+  const last = anchors[anchors.length - 1];
+  if (position >= last[0]) return last[1];
+  let low = 0, high = anchors.length - 1;
+  while (high - low > 1) {
+    const mid = (low + high) >> 1;
+    if (anchors[mid][0] <= position) low = mid; else high = mid;
+  }
+  const a = anchors[low], b = anchors[high];
+  return a[1] + (b[1] - a[1]) * (position - a[0]) / (b[0] - a[0]);
+}
+
+function buildScrollGeometry() {
+  const result = {annotationStops: {std: [], rev: [], detail: []}};
+  const blocks = currentData?.aligned_blocks || [];
+  const annotations = new Map((currentData?.annotations || []).map(a => [a.id, a]));
+  for (const card of scrollPanes.detail.querySelectorAll('.annotation-card')) {
+    const ann = annotations.get(card.id.replace('card-', ''));
+    if (!ann) continue;
+    result.annotationStops.detail.push({id: ann.id, position: contentTop(card, scrollPanes.detail)
+      + card.getBoundingClientRect().height / 2 - scrollPanes.detail.clientHeight / 2});
+    for (const key of ['std', 'rev']) {
+      const block = document.getElementById(`${key}-${ann.block_id}`);
+      if (block) result.annotationStops[key].push({id: ann.id, position: contentTop(block, scrollPanes[key]) - 30});
+    }
+  }
+  Object.values(result.annotationStops).forEach(stops => stops.sort((a, b) => a.position - b.position));
+  for (const source of Object.keys(scrollPanes)) {
+    result[source] = {};
+    for (const target of Object.keys(scrollPanes)) {
+      if (target === source) continue;
+      const from = scrollPanes[source], to = scrollPanes[target];
+      const maxFrom = scrollLimit(from), maxTo = scrollLimit(to);
+      const candidates = [];
+      if (source !== 'detail' && target !== 'detail') {
+        for (const block of blocks) {
+          const a = document.getElementById(`${source}-${block.block_id}`);
+          const b = document.getElementById(`${target}-${block.block_id}`);
+          if (a && b) candidates.push([contentTop(a, from) - 30, contentTop(b, to) - 30]);
+        }
+      } else {
+        // Only rendered cards participate: filters and missing annotations are safe.
+        for (const card of scrollPanes.detail.querySelectorAll('.annotation-card')) {
+          const ann = annotations.get(card.id.replace('card-', ''));
+          if (!ann) continue;
+          const docKey = source === 'detail' ? target : source;
+          const block = document.getElementById(`${docKey}-${ann.block_id}`);
+          if (!block) continue;
+          const docPosition = contentTop(block, scrollPanes[docKey]) - 30;
+          const cardPosition = contentTop(card, scrollPanes.detail)
+            + card.getBoundingClientRect().height / 2 - scrollPanes.detail.clientHeight / 2;
+          candidates.push(source === 'detail' ? [cardPosition, docPosition] : [docPosition, cardPosition]);
+        }
+      }
+      candidates.sort((a, b) => a[0] - b[0]);
+      const anchors = [[0, 0]];
+      for (const point of candidates) {
+        const previous = anchors[anchors.length - 1];
+        // Duplicate clauses, reordered cards and clipped endpoints cannot reverse scrolling.
+        if (point[0] > previous[0] && point[1] > previous[1]
+            && point[0] < maxFrom && point[1] < maxTo) anchors.push(point);
+      }
+      anchors.push([maxFrom, maxTo]);
+      result[source][target] = anchors;
+    }
+  }
+  return result;
+}
 
 function claimDriver(source) {
-  if (!activeDriver) {
-    activeDriver = source;
+  if (activeDriver !== source) {
+    cancelAnimationFrame(syncFrame);
+    syncFrame = 0;
+    // Stop a previous click-navigation animation before accepting native input.
+    if (activeDriver === 'navigation') {
+      Object.values(scrollPanes).forEach(p => p.scrollTo({top: p.scrollTop, behavior: 'instant'}));
+    }
   }
-  clearTimeout(driverReleaseTimer);
-  driverReleaseTimer = setTimeout(() => {
-    activeDriver = null;
-  }, 140);
+  activeDriver = source;
+  followerPositions.delete(scrollPanes[source]);
 }
 
 function setupThreeWaySyncScroll() {
+  resetThreeWaySyncScroll();
   if (syncListenerAttached) return;
   syncListenerAttached = true;
-
-  const colStd = document.getElementById('colStandardContainer');
-  const colRev = document.getElementById('colReviewedContainer');
-  const colDetail = document.getElementById('annotationsList');
-
-  colStd.addEventListener('wheel', () => claimDriver('std'), { passive: true });
-  colStd.addEventListener('touchstart', () => claimDriver('std'), { passive: true });
-  colRev.addEventListener('wheel', () => claimDriver('rev'), { passive: true });
-  colRev.addEventListener('touchstart', () => claimDriver('rev'), { passive: true });
-  colDetail.addEventListener('wheel', () => claimDriver('detail'), { passive: true });
-  colDetail.addEventListener('touchstart', () => claimDriver('detail'), { passive: true });
-
-  colStd.addEventListener('scroll', () => {
-    if (activeDriver && activeDriver !== 'std') return;
-    claimDriver('std');
-    colRev.scrollTop = colStd.scrollTop;
-    syncRightDetailFromDoc(colStd.scrollTop);
-  }, { passive: true });
-
-  colRev.addEventListener('scroll', () => {
-    if (activeDriver && activeDriver !== 'rev') return;
-    claimDriver('rev');
-    colStd.scrollTop = colRev.scrollTop;
-    syncRightDetailFromDoc(colRev.scrollTop);
-  }, { passive: true });
-
-  colDetail.addEventListener('scroll', () => {
-    if (activeDriver && activeDriver !== 'detail') return;
-    claimDriver('detail');
-    syncDocFromRightDetail();
-  }, { passive: true });
-}
-
-function syncRightDetailFromDoc(scrollTop) {
-  if (!currentData || !currentData.aligned_blocks) return;
-  const blocks = currentData.aligned_blocks;
-  const colDetail = document.getElementById('annotationsList');
-
-  let visibleBlock = null;
-  for (let i = 0; i < blocks.length; i++) {
-    const el = document.getElementById(`std-${blocks[i].block_id}`) || document.getElementById(`rev-${blocks[i].block_id}`);
-    if (el) {
-      if (el.offsetTop >= scrollTop - 20) {
-        visibleBlock = blocks[i];
-        break;
-      }
-    }
-  }
-  if (!visibleBlock && blocks.length > 0) {
-    visibleBlock = blocks[blocks.length - 1];
-  }
-
-  if (visibleBlock && visibleBlock.annotation_ids && visibleBlock.annotation_ids.length > 0) {
-    const annId = visibleBlock.annotation_ids[0];
-    const card = document.getElementById(`card-${annId}`);
-    if (card) {
-      document.querySelectorAll('.annotation-card').forEach(c => c.classList.remove('active'));
-      card.classList.add('active');
-
-      const containerRect = colDetail.getBoundingClientRect();
-      const cardRect = card.getBoundingClientRect();
-      if (cardRect.top < containerRect.top || cardRect.bottom > containerRect.bottom) {
-        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }
-    }
-  }
-}
-
-function syncDocFromRightDetail() {
-  const colDetail = document.getElementById('annotationsList');
-  const cards = colDetail.querySelectorAll('.annotation-card');
-  if (cards.length === 0) return;
-
-  const detailCenter = colDetail.scrollTop + (colDetail.clientHeight / 2);
-  let closestCard = null;
-  let minDiff = 999999;
-
-  cards.forEach(card => {
-    const cardCenter = card.offsetTop + (card.offsetHeight / 2);
-    const diff = Math.abs(cardCenter - detailCenter);
-    if (diff < minDiff) {
-      minDiff = diff;
-      closestCard = card;
-    }
+  scrollPanes = {
+    std: document.getElementById('colStandardContainer'),
+    rev: document.getElementById('colReviewedContainer'),
+    detail: document.getElementById('annotationsList')
+  };
+  const resizeObserver = new ResizeObserver(invalidateScrollGeometry);
+  const mutationObserver = new MutationObserver(() => {
+    invalidateScrollGeometry();
+    // Release removed cards before observing the current render.
+    resizeObserver.disconnect();
+    // Observe new cards as well as existing cards whose content expands asynchronously.
+    Object.values(scrollPanes).forEach(p => {
+      resizeObserver.observe(p);
+      p.querySelectorAll('.annotation-card, .contract-paper-canvas').forEach(el => resizeObserver.observe(el));
+    });
   });
-
-  if (closestCard) {
-    const annId = closestCard.id.replace('card-', '');
-    const ann = (currentData.annotations || []).find(a => a.id === annId);
-    if (ann && ann.block_id) {
-      const targetEl = document.getElementById(`rev-${ann.block_id}`) || document.getElementById(`std-${ann.block_id}`);
-      if (targetEl) {
-        const targetTop = Math.max(0, targetEl.offsetTop - 30);
-        document.getElementById('colStandardContainer').scrollTop = targetTop;
-        document.getElementById('colReviewedContainer').scrollTop = targetTop;
-      }
-    }
+  for (const [key, pane] of Object.entries(scrollPanes)) {
+    pane.tabIndex = 0;
+    pane.addEventListener('wheel', event => { if (!event.ctrlKey) claimDriver(key); }, {passive: true});
+    pane.addEventListener('touchstart', () => claimDriver(key), {passive: true});
+    pane.addEventListener('pointerdown', () => claimDriver(key), {passive: true});
+    pane.addEventListener('keydown', event => {
+      if (/^(ArrowUp|ArrowDown|PageUp|PageDown|Home|End| )$/.test(event.key)
+          && !event.target.closest?.('input, textarea, select, [contenteditable="true"]')) claimDriver(key);
+    });
+    pane.addEventListener('scroll', () => {
+      if (activeDriver === 'navigation') return;
+      const expected = followerPositions.get(pane);
+      if (expected !== undefined && Math.abs(pane.scrollTop - expected) < 1) return;
+      if (activeDriver && activeDriver !== key) return;
+      activeDriver = key;
+      if (syncFrame) return;
+      // Coalesce writes into a single paint; cached geometry avoids per-frame layout scans.
+      syncFrame = requestAnimationFrame(() => {
+        syncFrame = 0;
+        if (activeDriver !== key) return;
+        if (!scrollGeometry) scrollGeometry = buildScrollGeometry();
+        const position = Math.max(0, Math.min(scrollLimit(pane), pane.scrollTop));
+        highlightScrollPosition(key, position);
+        for (const [target, other] of Object.entries(scrollPanes)) {
+          if (target === key) continue;
+          const top = mapScrollPosition(position, scrollGeometry[key][target]);
+          if (Math.abs(other.scrollTop - top) > 0.5) other.scrollTop = top;
+          followerPositions.set(other, other.scrollTop);
+        }
+      });
+    }, {passive: true});
+    resizeObserver.observe(pane);
+    mutationObserver.observe(pane, {childList: true, subtree: true, characterData: true});
+    pane.querySelectorAll('.annotation-card, .contract-paper-canvas').forEach(el => resizeObserver.observe(el));
   }
+  window.addEventListener('resize', invalidateScrollGeometry);
+  document.fonts?.ready.then(invalidateScrollGeometry);
 }
+
 
 function renderAnnotationsSidebar() {
   const container = document.getElementById('annotationsList');
@@ -2410,6 +2925,10 @@ function selectAnnotation(annId) {
 
   const annIdx = currentData.annotations.findIndex(a => a.id === annId);
   if (annIdx === -1) return;
+  cancelAnimationFrame(syncFrame);
+  syncFrame = 0;
+  activeDriver = 'navigation';
+  const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth';
   activeAnnotationIndex = annIdx;
   const ann = currentData.annotations[annIdx];
 
@@ -2417,7 +2936,12 @@ function selectAnnotation(annId) {
   const card = document.getElementById(`card-${annId}`);
   if (card) {
     card.classList.add('active');
-    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    const pane = document.getElementById('annotationsList');
+    const top = contentTop(card, pane);
+    const bottom = top + card.getBoundingClientRect().height;
+    if (top < pane.scrollTop || bottom > pane.scrollTop + pane.clientHeight) {
+      pane.scrollTo({top: Math.max(0, Math.min(top, bottom - pane.clientHeight)), behavior});
+    }
   }
 
   document.querySelectorAll('.clause-block').forEach(el => el.classList.remove('active-clause'));
@@ -2427,11 +2951,10 @@ function selectAnnotation(annId) {
   if (revBlock) revBlock.classList.add('active-clause');
   if (stdBlock) stdBlock.classList.add('active-clause');
 
-  const targetEl = revBlock || stdBlock;
-  if (targetEl) {
-    const targetTop = Math.max(0, targetEl.offsetTop - 30);
-    document.getElementById('colStandardContainer').scrollTo({ top: targetTop, behavior: 'smooth' });
-    document.getElementById('colReviewedContainer').scrollTo({ top: targetTop, behavior: 'smooth' });
+  for (const [element, id] of [[stdBlock, 'colStandardContainer'], [revBlock, 'colReviewedContainer']]) {
+    if (!element) continue;
+    const pane = document.getElementById(id);
+    pane.scrollTo({top: Math.max(0, contentTop(element, pane) - 30), behavior});
   }
 
   const total = currentData.annotations.length;
@@ -2922,6 +3445,374 @@ function toggleReasoning(annId) {
   }
 }
 
+// ==================== 素材库 (contract_merged) 业务交互 ====================
+function initMaterialModal() {
+  fetchMaterialStats();
+  fetchMaterialCases();
+}
+
+function fetchMaterialStats() {
+  fetch('/api/materials/stats')
+    .then(r => r.json())
+    .then(stats => {
+      if (stats && stats.total_cases) {
+        const pill = document.getElementById('matStatsPill');
+        if (pill) {
+          pill.innerText = `共 ${stats.total_cases.toLocaleString()} 案卷 · ${stats.total_word_contracts.toLocaleString()} 实单 Word 原件`;
+        }
+      }
+    })
+    .catch(() => {});
+}
+
+function setMaterialCategory(cat) {
+  currentMaterialCategory = cat;
+  currentMaterialPage = 1;
+  document.querySelectorAll('.mat-tab-btn').forEach(btn => btn.classList.remove('active'));
+  const activeBtn = document.getElementById(`matTab-${cat}`);
+  if (activeBtn) activeBtn.classList.add('active');
+  fetchMaterialCases();
+}
+
+function onMaterialSearchKey(e) {
+  if (e.key === 'Enter') {
+    triggerMaterialSearch();
+  }
+}
+
+function triggerMaterialSearch() {
+  currentMaterialSearch = (document.getElementById('matSearchInput').value || '').trim();
+  currentMaterialHasWordOnly = document.getElementById('matHasWordOnly').checked;
+  currentMaterialPage = 1;
+  fetchMaterialCases();
+}
+
+function resetMaterialSearch() {
+  document.getElementById('matSearchInput').value = '';
+  document.getElementById('matHasWordOnly').checked = true;
+  currentMaterialSearch = '';
+  currentMaterialHasWordOnly = true;
+  currentMaterialPage = 1;
+  currentMaterialCategory = 'ALL';
+  document.querySelectorAll('.mat-tab-btn').forEach(btn => btn.classList.remove('active'));
+  const allBtn = document.getElementById('matTab-ALL');
+  if (allBtn) allBtn.classList.add('active');
+  fetchMaterialCases();
+}
+
+function changeMaterialPage(delta) {
+  currentMaterialPage += delta;
+  if (currentMaterialPage < 1) currentMaterialPage = 1;
+  fetchMaterialCases();
+}
+
+function fetchMaterialCases() {
+  const container = document.getElementById('matListContainer');
+  container.innerHTML = '<div style="grid-column: 1/-1; padding: 40px; text-align: center; color: #64748B;">⚡ 正在秒级调取素材库案例...</div>';
+
+  const params = new URLSearchParams({
+    category: currentMaterialCategory,
+    search: currentMaterialSearch,
+    has_word: currentMaterialHasWordOnly ? '1' : '0',
+    page: String(currentMaterialPage),
+    page_size: '20'
+  });
+
+  fetch(`/api/materials/cases?${params.toString()}`)
+    .then(r => r.json())
+    .then(data => {
+      renderMaterialCases(data);
+    })
+    .catch(err => {
+      if (window.MATERIAL_DATA && window.MATERIAL_DATA.initial_cases) {
+        renderMaterialCases(window.MATERIAL_DATA.initial_cases);
+      } else {
+        container.innerHTML = `<div style="grid-column: 1/-1; padding: 30px; text-align: center; color: #DC2626;">调取素材库失败: ${escapeHtml(err.message || String(err))}</div>`;
+      }
+    });
+}
+
+function renderMaterialCases(data) {
+  const container = document.getElementById('matListContainer');
+  container.innerHTML = '';
+
+  const cases = data.cases || [];
+  const total = data.total || 0;
+  const page = data.page || 1;
+  const totalPages = data.total_pages || 1;
+
+  document.getElementById('matPageInfo').innerText = `显示第 ${(page - 1) * 20 + 1}-${Math.min(page * 20, total)} 条 / 共 ${total.toLocaleString()} 案卷`;
+  document.getElementById('matCurPageIndicator').innerText = `${page} / ${totalPages}`;
+  document.getElementById('matBtnPrev').disabled = (page <= 1);
+  document.getElementById('matBtnNext').disabled = (page >= totalPages);
+
+  if (cases.length === 0) {
+    container.innerHTML = '<div style="grid-column: 1/-1; padding: 50px; text-align: center; color: #64748B;">🔍 未检索到匹配的案卷，请尝试更换关键词或勾选“非 Word 原件”。</div>';
+    return;
+  }
+
+  cases.forEach(c => {
+    const card = document.createElement('div');
+    card.className = 'mat-case-card';
+
+    let chipHtml = '';
+    const atts = c.attachments || [];
+    const hasDocx = atts.some(a => a.ext === '.docx');
+    const hasDoc = atts.some(a => a.ext === '.doc');
+    const hasPdf = atts.some(a => a.ext === '.pdf');
+    if (hasDocx) chipHtml += '<span class="mat-chip docx">DOCX原件</span>';
+    if (hasDoc) chipHtml += '<span class="mat-chip doc">DOC原件</span>';
+    if (hasPdf) chipHtml += '<span class="mat-chip pdf">PDF扫描</span>';
+    if (c.md_file) chipHtml += '<span class="mat-chip md">案卷履约MD</span>';
+
+    const hasParseableAttachment = hasDocx || hasDoc || hasPdf;
+
+    card.innerHTML = `
+      <div class="mat-card-header">
+        <span class="mat-no-tag">${escapeHtml(c.no)}</span>
+        <span class="mat-cat-tag">${escapeHtml(c.category_name || c.folder || '合同案卷')}</span>
+      </div>
+      <div class="mat-card-title" title="${escapeHtml(c.name || c.no)}">${escapeHtml(c.name || c.no)}</div>
+      <div class="mat-card-parties">
+        <div class="mat-party-row" title="对方主体: ${escapeHtml(c.party_b || '未载明')}">👥 <b>客户:</b> ${escapeHtml(c.party_b || '未载明')}</div>
+        <div class="mat-party-row" title="我方签约: ${escapeHtml(c.party_a || '标准代理公司')}">🏛️ <b>我方:</b> ${escapeHtml(c.party_a || '标准代理公司')}</div>
+      </div>
+      <div class="mat-card-meta">
+        <span>👤 经办: ${escapeHtml(c.applicant || '经办人')}</span>
+        <span>📅 ${escapeHtml(c.year || '2026')}年 · 状态: ${escapeHtml(c.status || '已归档')}</span>
+      </div>
+      <div class="mat-card-chips">${chipHtml || '<span style="font-size:10px; color:#94A3B8;">暂无附件</span>'}</div>
+      <div class="mat-card-actions">
+        <button class="mat-btn-action mat-btn-diff" onclick="loadMaterialContract('${c.no}')" ${!hasParseableAttachment ? 'disabled title="暂无可解析合同实体"' : ''}>⚡ 载入原格式比对</button>
+        <button class="mat-btn-action mat-btn-detail" onclick="openCaseDetailModal('${c.no}')">📋 案卷审批详情</button>
+      </div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+function loadMaterialContract(contractNo, attPath) {
+  showLoading(`正在调取素材库案卷 [${contractNo}] 合同原件并执行条款级微观比对...`);
+  closeMaterialModal();
+  closeCaseDetailModal();
+
+  fetch('/api/materials/load_contract', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contract_no: contractNo, attachment_path: attPath })
+  })
+    .then(r => {
+      if (!r.ok) return r.json().then(j => { throw new Error(j.error || '调取失败'); });
+      return r.json();
+    })
+    .then(data => {
+      hideLoading();
+      renderFullDiff(data);
+      showToast(`成功调取素材库案卷合同 [${contractNo}]，已自动完成高保真原格式对照！`, 'success');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    })
+    .catch(err => {
+      hideLoading();
+      showToast(`调取合同失败: ${err.message}`, 'error');
+    });
+}
+
+function fetchCaseDetail(contractNo) {
+  fetch(`/api/materials/case_detail?contract_no=${encodeURIComponent(contractNo)}`)
+    .then(r => r.json())
+    .then(data => {
+      const body = document.getElementById('detailModalBody');
+      const c = data.case || {};
+      const md = data.md_content || '';
+      const atts = data.attachments || [];
+
+      let attRows = atts.map((a, idx) => `
+        <tr>
+          <td>${idx + 1}</td>
+          <td><b>${escapeHtml(a.original || a.local)}</b></td>
+          <td><span class="mat-chip ${a.ext.replace('.', '')}">${a.ext.toUpperCase()}</span></td>
+          <td>${(a.size / 1024).toFixed(1)} KB</td>
+          <td>${a.local.endsWith('.docx') || a.local.endsWith('.doc') ? '<button class="btn btn-sm btn-emerald" onclick="loadMaterialContract(\'' + c.no + '\', \'' + a.local + '\')">比对本原件</button>' : '-'}</td>
+        </tr>
+      `).join('');
+
+      let html = `
+        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:14px; margin-bottom:16px;">
+          <h3 style="margin-top:0;">📋 案卷基础信息台账</h3>
+          <table style="margin-top:8px;">
+            <tr><th style="width:120px;">合同编号</th><td><b>${escapeHtml(c.no)}</b></td><th style="width:120px;">合同名称</th><td>${escapeHtml(c.name || '-')}</td></tr>
+            <tr><th>客户主体(对方)</th><td>${escapeHtml(c.party_b || '-')}</td><th>我方签约主体</th><td>${escapeHtml(c.party_a || '标准代理主体')}</td></tr>
+            <tr><th>业务大类</th><td>${escapeHtml(c.category_name || c.folder || '-')}</td><th>归档状态</th><td>${escapeHtml(c.status || '-')}</td></tr>
+            <tr><th>经办申办人</th><td>${escapeHtml(c.applicant || '-')}</td><th>签署立卷年份</th><td>${escapeHtml(c.year || '-')}</td></tr>
+          </table>
+        </div>
+
+        <div style="margin-bottom:16px;">
+          <h3>📎 案卷关联附件与证据实体 (${atts.length} 项)</h3>
+          <table>
+            <thead>
+              <tr><th>#</th><th>文件全称 / 来源</th><th>格式</th><th>体积</th><th>快捷操作</th></tr>
+            </thead>
+            <tbody>
+              ${attRows || '<tr><td colspan="5" style="text-align:center; color:#94A3B8;">暂无附件实体记录</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+
+        ${md ? `
+        <div>
+          <h3>📜 原始案卷 MD 归档全文</h3>
+          <div style="background:#F1F5F9; border-radius:6px; padding:12px; font-family:Consolas, monospace; font-size:12px; max-height:300px; overflow-y:auto; white-space:pre-wrap;">${escapeHtml(md)}</div>
+        </div>
+        ` : ''}
+      `;
+      body.innerHTML = html;
+    })
+    .catch(err => {
+      document.getElementById('detailModalBody').innerHTML = `<div style="padding:30px; text-align:center; color:#DC2626;">加载案卷详情失败: ${escapeHtml(err.message || String(err))}</div>`;
+    });
+}
+
+function loadCurrentDetailContract() {
+  if (currentDetailContractNo) {
+    loadMaterialContract(currentDetailContractNo, null);
+  }
+}
+
+// ==================== 模板库全景 (参考/) 业务交互 ====================
+function initRefTemplateModal() {
+  if (refTemplatesCache && refTemplatesCache.length > 0) {
+    renderRefCategoryTabs();
+    renderRefTemplates();
+  }
+  fetch('/api/ref_templates/catalog')
+    .then(r => r.json())
+    .then(data => {
+      if (data && data.templates) {
+        refTemplatesCache = data.templates;
+        renderRefCategoryTabs();
+        renderRefTemplates();
+      }
+    })
+    .catch(() => {});
+}
+
+function renderRefCategoryTabs() {
+  const container = document.getElementById('refCategoryTabs');
+  container.innerHTML = '';
+
+  const catCounts = {};
+  refTemplatesCache.forEach(t => {
+    const f = t.folder || '其他';
+    catCounts[f] = (catCounts[f] || 0) + 1;
+  });
+
+  const allBtn = document.createElement('button');
+  allBtn.className = `ref-cat-btn ${activeRefCategory === 'ALL' ? 'active' : ''}`;
+  allBtn.innerText = `全部 (${refTemplatesCache.length})`;
+  allBtn.onclick = () => {
+    activeRefCategory = 'ALL';
+    renderRefCategoryTabs();
+    renderRefTemplates();
+  };
+  container.appendChild(allBtn);
+
+  const folders = ['专利', '商标', '国际专利', '诉讼', '国际商标', '双软', '综合业务', '保密协议', '著作权', '集成电路布图设计登记'];
+  folders.forEach(f => {
+    const count = catCounts[f] || 0;
+    if (count === 0) return;
+    const btn = document.createElement('button');
+    btn.className = `ref-cat-btn ${activeRefCategory === f ? 'active' : ''}`;
+    btn.innerText = `${f} (${count})`;
+    btn.onclick = () => {
+      activeRefCategory = f;
+      renderRefCategoryTabs();
+      renderRefTemplates();
+    };
+    container.appendChild(btn);
+  });
+}
+
+function onRefSearchInput(e) {
+  refSearchKeyword = (e.target.value || '').trim().toLowerCase();
+  renderRefTemplates();
+}
+
+function renderRefTemplates() {
+  const container = document.getElementById('refListContainer');
+  container.innerHTML = '';
+
+  const filtered = refTemplatesCache.filter(t => {
+    if (activeRefCategory !== 'ALL' && t.folder !== activeRefCategory) return false;
+    if (refSearchKeyword) {
+      const matchName = (t.name || '').toLowerCase().includes(refSearchKeyword);
+      const matchFolder = (t.folder || '').toLowerCase().includes(refSearchKeyword);
+      const matchMb = (t.mb_code || '').toLowerCase().includes(refSearchKeyword);
+      if (!matchName && !matchFolder && !matchMb) return false;
+    }
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    container.innerHTML = '<div style="grid-column: 1/-1; padding: 40px; text-align: center; color: #64748B;">🔍 未检索到匹配的标准模板。</div>';
+    return;
+  }
+
+  filtered.forEach(t => {
+    const card = document.createElement('div');
+    card.className = 'ref-card';
+    card.innerHTML = `
+      <div class="ref-card-header">
+        <span class="ref-folder-tag">${escapeHtml(t.folder)}</span>
+        ${t.mb_code ? `<span class="ref-mb-tag">[${escapeHtml(t.mb_code)}]</span>` : ''}
+      </div>
+      <div class="ref-card-title" title="${escapeHtml(t.name)}">${escapeHtml(t.name)}</div>
+      <div class="ref-card-meta">
+        <span>📄 文件: ${escapeHtml(t.file_name)}</span> · <span>${(t.size / 1024).toFixed(1)} KB</span>
+      </div>
+      <div class="ref-card-actions">
+        <button class="ref-btn-action ref-btn-primary" onclick="loadRefTemplate('${t.rel_path}', 'reviewed')">📄 载入待审</button>
+        <button class="ref-btn-action ref-btn-std" onclick="loadRefTemplate('${t.rel_path}', 'standard')">🎯 设为母本</button>
+        <button class="ref-btn-action ref-btn-self" onclick="loadRefTemplate('${t.rel_path}', 'self_diff')" title="模板对比自身，验证100%全格式无差异基线">🧪 一键自测</button>
+      </div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+function loadRefTemplate(relPath, mode) {
+  let modeDesc = '作为待审文档';
+  if (mode === 'standard') modeDesc = '作为基准母本';
+  if (mode === 'self_diff') modeDesc = '执行 100% 格式自测核验';
+
+  showLoading(`正在将【参考/】模板 [${relPath}] ${modeDesc}...`);
+  closeRefTemplateModal();
+
+  fetch('/api/ref_templates/load', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rel_path: relPath, mode: mode })
+  })
+    .then(r => {
+      if (!r.ok) return r.json().then(j => { throw new Error(j.error || '载入失败'); });
+      return r.json();
+    })
+    .then(data => {
+      hideLoading();
+      renderFullDiff(data);
+      if (mode === 'self_diff') {
+        showToast(`标准模板 [${relPath}] 自测对比完成：100% 格式精准对齐，零虚假差异！`, 'success');
+      } else {
+        showToast(`成功将模板 [${relPath}] ${modeDesc}！`, 'success');
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    })
+    .catch(err => {
+      hideLoading();
+      showToast(`载入模板失败: ${err.message}`, 'error');
+    });
+}
+
 window.addEventListener('keydown', (e) => {
   if (e.key === '[' || (e.altKey && e.key === 'ArrowUp')) {
     prevAnnotation();
@@ -2930,6 +3821,9 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key === 'Escape') {
     closeUploadModal();
     closeTemplateModal();
+    closeMaterialModal();
+    closeRefTemplateModal();
+    closeCaseDetailModal();
   }
 });
 
@@ -2937,6 +3831,13 @@ window.addEventListener('DOMContentLoaded', () => {
   if (window.INITIAL_DATA) {
     renderFullDiff(window.INITIAL_DATA);
     initAgentSSE();
+  }
+  if (window.MATERIAL_DATA && window.MATERIAL_DATA.stats) {
+    const stats = window.MATERIAL_DATA.stats;
+    const pill = document.getElementById('matStatsPill');
+    if (pill) {
+      pill.innerText = `共 ${(stats.total_cases || 21623).toLocaleString()} 案卷 · ${(stats.total_word_contracts || 4586).toLocaleString()} 实单 Word 原件`;
+    }
   }
 });
 </script>
@@ -3107,6 +4008,63 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                 self._send_json(200, snap)
             except PermissionError as e:
                 self._send_json(403, {"error": str(e)})
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/ref_templates/catalog":
+            try:
+                catalog = get_ref_templates_catalog()
+                self._send_json(200, {"success": True, "templates": catalog})
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/materials/stats":
+            try:
+                mgr = get_material_manager()
+                stats = mgr.get_stats()
+                self._send_json(200, stats)
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/materials/cases":
+            qs = urllib.parse.parse_qs(parsed.query)
+            category = qs.get("category", ["ALL"])[0]
+            search = qs.get("search", [""])[0]
+            has_word = qs.get("has_word", ["1"])[0] in ("1", "true", "True")
+            try:
+                page = max(1, int(qs.get("page", ["1"])[0]))
+            except ValueError:
+                page = 1
+            try:
+                page_size = min(100, max(1, int(qs.get("page_size", ["20"])[0])))
+            except ValueError:
+                page_size = 20
+            try:
+                mgr = get_material_manager()
+                res = mgr.search_cases(
+                    category=category,
+                    search=search,
+                    has_word_only=has_word,
+                    page=page,
+                    page_size=page_size,
+                )
+                self._send_json(200, res)
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/materials/case_detail":
+            qs = urllib.parse.parse_qs(parsed.query)
+            contract_no = qs.get("contract_no", [""])[0].strip()
+            if not contract_no:
+                self._send_json(400, {"error": "缺少 contract_no 参数"})
+                return
+            try:
+                mgr = get_material_manager()
+                detail = mgr.get_case_detail(contract_no)
+                if not detail:
+                    self._send_json(404, {"error": f"未找到案卷 [{contract_no}]"})
+                else:
+                    self._send_json(200, detail)
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
 
@@ -3349,7 +4307,8 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                         if not stem_clean.startswith("《")
                         else stem_clean
                     )
-                    s_file = get_session_file(session_id)
+                    ext = Path(file_name).suffix.lower() or ".docx"
+                    s_file = prepare_session_file(session_id, ext=ext)
                     s_file.write_bytes(file_bytes)
                     save_session_meta(
                         session_id, {"doc_name": doc_name, "forced_template_id": None}
@@ -3374,6 +4333,137 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
 
             self._send_json(400, {"error": "invalid_upload"})
 
+        elif parsed.path == "/api/materials/load_contract":
+            session_id, tenant_id, user_id = self._get_request_identity()
+            length = int(self.headers.get("content-length", 0))
+            raw_body = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+                c_no = (data.get("contract_no") or "").strip()
+                att_path = (data.get("attachment_path") or "").strip() or None
+                if not c_no:
+                    self._send_json(400, {"error": "缺少 contract_no 参数"})
+                    return
+                mgr = get_material_manager()
+                file_path, att_meta = mgr.get_contract_attachment_file(c_no, att_path)
+                if not file_path or not file_path.exists():
+                    self._send_json(404, {"error": f"未找到案卷 [{c_no}] 的合同附件物理文件"})
+                    return
+
+                s_file = prepare_session_file(session_id, ext=file_path.suffix)
+                shutil.copyfile(file_path, s_file)
+
+                c_info = mgr.cases_by_no.get(c_no, {})
+                c_name = c_info.get("name") or c_no
+                doc_name = f"《{c_name}》履约合同原件" if not c_name.startswith("《") else c_name
+                save_session_meta(session_id, {"doc_name": doc_name, "forced_template_id": None})
+
+                res = execute_current_diff(s_file, forced_template_id=None, doc_name=doc_name)
+                res["session_id"] = session_id
+                res["contract_no"] = c_no
+                get_agent_manager().start_document_review(
+                    res,
+                    force_restart=True,
+                    session_id=session_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                )
+                self._send_json(200, res)
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
+        elif parsed.path == "/api/ref_templates/load":
+            session_id, tenant_id, user_id = self._get_request_identity()
+            length = int(self.headers.get("content-length", 0))
+            raw_body = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+                rel_path = (data.get("rel_path") or "").strip()
+                mode = (data.get("mode") or "reviewed").strip()
+
+                if not rel_path:
+                    self._send_json(400, {"error": "缺少 rel_path 参数"})
+                    return
+
+                target_file = (DEFAULT_REF_DIR / rel_path).resolve()
+                if not target_file.is_relative_to(DEFAULT_REF_DIR.resolve()) or not target_file.exists():
+                    self._send_json(404, {"error": f"模板文件不存在: {rel_path}"})
+                    return
+
+                if target_file.suffix.lower() == ".doc":
+                    docx_alt = target_file.with_suffix(".docx")
+                    if docx_alt.exists():
+                        target_file = docx_alt
+
+                clean_name = catalog_clean_title(target_file.stem)
+
+                st = create_storage()
+                tpl_id = None
+                try:
+                    target_sha = hashlib.sha256(target_file.read_bytes()).hexdigest()
+                    doc_rec = st.find_document_by_hash(target_sha)
+                    if not doc_rec:
+                        for d in st.list_documents():
+                            if d.get("source_file") == target_file.name or d.get("file_name") == target_file.name:
+                                doc_rec = d
+                                break
+                    if doc_rec:
+                        tpl_id = doc_rec.get("document_id")
+                finally:
+                    st.close()
+
+                if mode == "standard":
+                    if not tpl_id:
+                        self._send_json(400, {"error": f"模板 [{target_file.name}] 未在知识库中注册有效 ID"})
+                        return
+                    s_file = get_session_file(session_id)
+                    if not s_file.exists():
+                        default_sample = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
+                        shutil.copyfile(default_sample, s_file)
+                    meta = get_session_meta(session_id)
+                    meta["forced_template_id"] = tpl_id
+                    save_session_meta(session_id, meta)
+
+                    res = execute_current_diff(
+                        s_file,
+                        forced_template_id=tpl_id,
+                        doc_name=meta.get("doc_name"),
+                    )
+                elif mode == "self_diff":
+                    s_file = prepare_session_file(session_id, ext=target_file.suffix)
+                    shutil.copyfile(target_file, s_file)
+                    doc_name = f"《{clean_name}》标准模板自测核验"
+                    save_session_meta(session_id, {"doc_name": doc_name, "forced_template_id": tpl_id})
+
+                    res = execute_current_diff(
+                        s_file,
+                        forced_template_id=tpl_id,
+                        doc_name=doc_name,
+                    )
+                else:
+                    s_file = prepare_session_file(session_id, ext=target_file.suffix)
+                    shutil.copyfile(target_file, s_file)
+                    doc_name = f"《{clean_name}》送审原稿"
+                    save_session_meta(session_id, {"doc_name": doc_name, "forced_template_id": None})
+
+                    res = execute_current_diff(
+                        s_file,
+                        forced_template_id=None,
+                        doc_name=doc_name,
+                    )
+
+                res["session_id"] = session_id
+                get_agent_manager().start_document_review(
+                    res,
+                    force_restart=True,
+                    session_id=session_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                )
+                self._send_json(200, res)
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+
         else:
             self.send_response(404)
             self.end_headers()
@@ -3396,20 +4486,52 @@ def generate_rendered_html() -> str:
     except Exception:
         catalog_json = "[]"
 
+    try:
+        ref_catalog = get_ref_templates_catalog()
+        ref_json = json.dumps(ref_catalog, ensure_ascii=False)
+    except Exception:
+        ref_json = "[]"
+
+    try:
+        mgr = get_material_manager()
+        stats = mgr.get_stats()
+        initial_cases = mgr.search_cases(
+            category="ALL", has_word_only=True, page=1, page_size=20
+        )
+        material_data = {
+            "stats": stats,
+            "initial_cases": initial_cases,
+        }
+        material_json = json.dumps(material_data, ensure_ascii=False)
+    except Exception:
+        material_json = "{}"
+
     html = HTML_TEMPLATE.replace("__INITIAL_DATA_PLACEHOLDER__", data_json)
     html = html.replace("__ALL_TEMPLATES_PLACEHOLDER__", catalog_json)
+    html = html.replace("__REF_TEMPLATES_PLACEHOLDER__", ref_json)
+    html = html.replace("__MATERIAL_DATA_PLACEHOLDER__", material_json)
     return html
 
 
 def export_standalone_html():
-    """将整版对比与批注工作台导出为独立 HTML 页面存放在 data/contract_merged 供直接双击使用。"""
+    """将整版对比与批注工作台导出为独立 HTML 页面存放在 data/contract_merged 与 参考/ 供直接双击使用。"""
+    html_content = generate_rendered_html()
+
     out_path = (
         config.DATA_DIR.parent / "contract_merged" / "合同模板条款比对与Diff可视化.html"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    html_content = generate_rendered_html()
     out_path.write_text(html_content, encoding="utf-8")
-    print(f"[已生成独立整版原格式对照与右侧批注网页] {out_path}")
+    print(f"[已生成素材库独立整版原格式对照与右侧批注网页] {out_path}")
+
+    # 同时在【参考/】模板库生成独立工作台镜像副本
+    ref_out = DEFAULT_REF_DIR / "合同模板条款比对与Diff可视化.html"
+    if DEFAULT_REF_DIR.exists():
+        try:
+            ref_out.write_text(html_content, encoding="utf-8")
+            print(f"[已同步生成模板库独立对比网页] {ref_out}")
+        except Exception:
+            pass
 
 
 def main():
