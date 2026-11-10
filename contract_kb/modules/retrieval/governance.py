@@ -124,6 +124,7 @@ class KnowledgeGovernancePolicy:
             "HISTORY": KnowledgeSourceType.HISTORICAL_CASE,
             "LEGAL": KnowledgeSourceType.LEGAL_REFERENCE,
             "LEGAL_REFERENCE": KnowledgeSourceType.LEGAL_REFERENCE,
+            "LAYER_A_RAW_CLAUSE": KnowledgeSourceType.TEMPLATE,  # 向后兼容存量 PostgreSQL 原始模板条款映射
         }
         return alias_map.get(up)
 

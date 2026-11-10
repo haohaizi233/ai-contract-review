@@ -124,10 +124,16 @@ class AgentReviewSession:
             raw_anns = diff_data.get("annotations") or []
 
             file_hash = str(
-                diff_data.get("sha256")
-                or diff_data.get("file_sha256")
-                or hashlib.sha256(doc_name.encode()).hexdigest()
-            )
+                diff_data.get("sha256") or diff_data.get("file_sha256") or ""
+            ).strip()
+            if not file_hash or len(file_hash) != 64:
+                # 严禁使用 doc_name 哈希冒充物理内容哈希，若缺失则尝试物理校验
+                clean_path = diff_data.get("file_path") or diff_data.get("source_path")
+                if clean_path and Path(clean_path).exists():
+                    file_hash = hashlib.sha256(
+                        Path(clean_path).read_bytes()
+                    ).hexdigest()
+
             ann_fp = compute_annotations_fingerprint(raw_anns)
 
             fp = ReviewExecutionFingerprint(
@@ -135,15 +141,13 @@ class AgentReviewSession:
                 user_id=self.user_id,
                 file_sha256=file_hash,
                 template_id=str(diff_data.get("matched_template_id") or matched_tpl),
-                template_content_hash=str(
-                    diff_data.get("template_content_hash") or "tpl_hash"
-                ),
+                template_content_hash=str(diff_data.get("template_content_hash") or ""),
                 template_version=str(diff_data.get("template_version") or "v1"),
-                rule_set_version="13R",
-                kb_snapshot_version="13R",
-                agent_prompt_version="13R",
+                rule_set_version=str(diff_data.get("rule_set_version") or "v1"),
+                kb_snapshot_version=str(diff_data.get("kb_snapshot_version") or "v1"),
+                agent_prompt_version=str(diff_data.get("agent_prompt_version") or "v1"),
                 model_config_version=getattr(config, "LLM_MODEL", "qwen"),
-                diff_engine_version="13R1",
+                diff_engine_version="14R",
                 annotations_fingerprint=ann_fp,
             )
             self._fingerprint = fp
@@ -160,7 +164,7 @@ class AgentReviewSession:
                 "matched_template_name": matched_tpl,
             }
 
-            if force_restart:
+            if force_restart or not file_hash:
                 self._checkpoint_storage.clear_checkpoint(fp)
 
             self.annotations = [dict(a) for a in raw_anns]
@@ -169,21 +173,14 @@ class AgentReviewSession:
             self.current_ann_id = None
 
             restored_count = 0
-            if not force_restart:
+            if not force_restart and file_hash:
                 verify_res = self._checkpoint_storage.verify_and_restore(fp)
                 cards_to_restore = []
                 if verify_res.is_valid:
                     cards_to_restore = verify_res.restored_cards
                 else:
-                    # 传统 doc_id 容错恢复（兼容旧版测试）
-                    legacy_doc_id = f"{doc_name}:{matched_tpl}:{len(raw_anns)}"
-                    legacy_file = self._get_checkpoint_file(legacy_doc_id)
-                    if legacy_file.exists():
-                        try:
-                            l_data = json.loads(legacy_file.read_text(encoding="utf-8"))
-                            cards_to_restore = l_data.get("completed_cards", [])
-                        except Exception:
-                            pass
+                    # 强校验失败坚决拒绝恢复，杜绝历史 legacy_doc_id 绕过强校验后门
+                    cards_to_restore = []
 
                 for card in cards_to_restore:
                     cid = card.get("id")

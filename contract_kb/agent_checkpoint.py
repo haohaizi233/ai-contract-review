@@ -16,7 +16,9 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -26,25 +28,37 @@ from contract_kb.domain.models.review_identity import ReviewExecutionFingerprint
 
 CHECKPOINT_DIR = config.DATA_DIR / "agent_checkpoints"
 
+CHECKPOINT_SECRET = os.environ.get(
+    "CONTRACT_KB_CHECKPOINT_KEY", "contract_kb_checkpoint_integrity_secret_key_v14"
+)
+
 
 def _compute_checkpoint_signature(
     fingerprint_hash: str, cards: list[dict[str, Any]]
 ) -> str:
-    """计算检查点防篡改内容指纹签名。"""
+    """计算检查点防篡改内容指纹签名（HMAC-SHA256 强认证完整性保护）。"""
     raw_cards = json.dumps(cards, sort_keys=True, ensure_ascii=False)
     combined = f"{fingerprint_hash}||{raw_cards}"
-    return hashlib.sha256(combined.encode("utf-8")).hexdigest()
+    return hmac.new(
+        CHECKPOINT_SECRET.encode("utf-8"),
+        combined.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def compute_annotations_fingerprint(annotations: list[dict[str, Any]]) -> str:
-    """计算批注列表的内容指纹（保证待审文本修改后旧检查点立即失效）。"""
+    """计算批注列表的内容指纹（全文本规范化哈希，绝不截断前40字符，杜绝内容变更碰撞）。"""
     items = []
     for a in sorted(annotations, key=lambda x: str(x.get("id", ""))):
         aid = str(a.get("id", ""))
-        std = str(a.get("quote_standard") or a.get("standard_span") or "")
-        rev = str(a.get("quote_reviewed") or a.get("reviewed_span") or "")
-        dtype = str(a.get("delta_type") or "")
-        items.append(f"{aid}:{dtype}:{std[:40]}:{rev[:40]}")
+        std = str(a.get("quote_standard") or a.get("standard_span") or "").strip()
+        rev = str(a.get("quote_reviewed") or a.get("reviewed_span") or "").strip()
+        dtype = str(a.get("delta_type") or "").strip()
+        cat = str(a.get("clause_category") or a.get("category") or "").strip()
+        nodes = ",".join(str(n) for n in a.get("source_node_ids") or [])
+        ann_content = f"{aid}|{dtype}|{cat}|{nodes}|{std}|{rev}"
+        ann_hash = hashlib.sha256(ann_content.encode("utf-8")).hexdigest()
+        items.append(f"{aid}:{ann_hash}")
     return hashlib.sha256("|".join(items).encode("utf-8")).hexdigest()
 
 
@@ -158,8 +172,8 @@ class CheckpointStorage:
         expected_sig = _compute_checkpoint_signature(
             current_fingerprint.compute_hash(), completed_cards
         )
-        actual_sig = content.get("signature", "")
-        if actual_sig != expected_sig:
+        actual_sig = str(content.get("signature", "")).strip()
+        if not hmac.compare_digest(actual_sig, expected_sig):
             return CheckpointVerificationResult(
                 False, "TAMPERED_CHECKPOINT_SIGNATURE_MISMATCH"
             )

@@ -164,6 +164,7 @@ def parse_pdf(path: Path | str, document_id: Optional[str] = None) -> ParsedDocu
 
     all_page_texts: list[str] = []
     all_page_tables: list[list] = []
+    page_image_counts: list[int] = []
     total_images = 0
     total_pages = 0
 
@@ -174,9 +175,11 @@ def parse_pdf(path: Path | str, document_id: Optional[str] = None) -> ParsedDocu
                 total_pages = len(pdf.pages)
                 for page_idx, page in enumerate(pdf.pages):
                     try:
-                        total_images += len(page.images)
+                        p_imgs = len(page.images) if hasattr(page, "images") else 0
                     except Exception:
-                        pass
+                        p_imgs = 0
+                    page_image_counts.append(p_imgs)
+                    total_images += p_imgs
 
                     # 提取表格
                     try:
@@ -266,6 +269,19 @@ def parse_pdf(path: Path | str, document_id: Optional[str] = None) -> ParsedDocu
     # 5. 连贯段落重组算法（解决 PDF 换行硬回车碎片化问题）
     paragraphs: list[str] = []
     for p_idx, ptxt in enumerate(all_page_texts):
+        # 逐页检测：若某页提取文字不足 10 字符且含图片，标记为影印扫描页面并生成占位提示
+        p_imgs = page_image_counts[p_idx] if p_idx < len(page_image_counts) else 0
+        if len(ptxt.strip()) < 10 and (p_imgs > 0 or total_images > 0):
+            placeholder_text = (
+                f"【第 {p_idx + 1} 页 · 影印扫描件/图片合同（OCR_REQUIRED）】"
+            )
+            paragraphs.append(placeholder_text)
+            if not any("OCR_REQUIRED" in w for w in parse_warnings):
+                parse_warnings.append(
+                    f"OCR_REQUIRED: 第 {p_idx + 1} 页等页面为影印扫描件或无文字图层，需执行 OCR 识别。"
+                )
+            continue
+
         lines = [ln.strip() for ln in ptxt.split("\n") if ln.strip()]
         cur_p: list[str] = []
         for line in lines:
@@ -308,6 +324,26 @@ def parse_pdf(path: Path | str, document_id: Optional[str] = None) -> ParsedDocu
     for idx, p_text in enumerate(paragraphs):
         p_text = p_text.strip()
         if not p_text:
+            continue
+
+        if "OCR_REQUIRED" in p_text and "影印扫描件" in p_text:
+            nodes.append(
+                ASTNode(
+                    document_id=doc_id,
+                    node_id=f"pdf_page_scan_{order}",
+                    node_type="scanned_placeholder",
+                    order=order,
+                    text=p_text,
+                    style={"role": "scanned_page"},
+                    flags={
+                        "is_scanned": True,
+                        "ocr_required": True,
+                        "extraction_status": "OCR_REQUIRED",
+                    },
+                    extraction_method="pdf_scanned_image",
+                )
+            )
+            order += 1
             continue
 
         # 标题检测

@@ -794,6 +794,14 @@ def build_full_contract_diff(
         "matched_template_raw_id": raw_tpl_id,
         "matched_template_name": clean_tpl_name,
         "matched_template_display": matched_tpl_display,
+        "file_sha256": rev_hash,
+        "sha256": rev_hash,
+        "template_content_hash": (
+            str(matched_tpl.get("source_hash") or "") if matched_tpl else ""
+        ),
+        "template_version": (
+            str(matched_tpl.get("source_version") or "v1") if matched_tpl else "v1"
+        ),
         "standard_clause_count": len(tpl_clauses),
         "uploaded_clause_count": len(rev_clauses),
         "diff_report": legacy_diff_report,

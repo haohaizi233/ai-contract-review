@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import queue
 import re
 import shutil
@@ -59,7 +60,10 @@ try:
 except Exception:
     pass
 
+import hmac  # noqa: E402
 from contract_kb import config  # noqa: E402
+from contract_kb.auth import compute_auth_signature_v2, EMPTY_BODY_SHA256  # noqa: E402
+from contract_kb.domain.models.review_identity import HumanReviewStatus  # noqa: E402
 from contract_kb.full_diff import build_full_contract_diff  # noqa: E402
 from contract_kb.storage import create_storage  # noqa: E402
 from contract_kb.ingest import scan_and_import, import_template_file  # noqa: E402
@@ -97,17 +101,35 @@ CURRENT_DOC_NAME: str = "《国内专利服务合同（年费缴纳）》送审�
 CURRENT_FORCED_TEMPLATE_ID: str | None = None
 
 
-def get_session_dir(session_id: str) -> Path:
-    """获取或创建指定会话的物理存储隔离目录。"""
-    clean_id = re.sub(r"[^a-zA-Z0-9_-]", "_", session_id) or "default_session"
-    s_dir = SESSION_CACHE_DIR / clean_id
+def _safe_slug(s: str, default: str = "default") -> str:
+    """清理标识符并计算哈希尾缀，避免字符折叠碰撞与路径穿越。"""
+    if not s:
+        return default
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]", "_", s).strip("_")
+    if not cleaned:
+        cleaned = default
+    if re.search(r"[^a-zA-Z0-9_-]", s) or cleaned != s:
+        h = hashlib.sha256(s.encode("utf-8")).hexdigest()[:8]
+        return f"{cleaned}_{h}"
+    return cleaned
+
+
+def get_session_dir(session_id: str, tenant_id: str = "default") -> Path:
+    """获取或创建指定租户与会话的物理存储隔离目录，严防路径穿越与碰撞合流。"""
+    clean_tenant = _safe_slug(tenant_id or "default", default="default")
+    clean_id = _safe_slug(session_id or "default_session", default="default_session")
+    s_dir = (SESSION_CACHE_DIR / clean_tenant / clean_id).resolve()
+    if not s_dir.is_relative_to(SESSION_CACHE_DIR.resolve()):
+        s_dir = SESSION_CACHE_DIR / clean_tenant / "fallback_session"
     s_dir.mkdir(parents=True, exist_ok=True)
     return s_dir
 
 
-def get_session_file(session_id: str, ext: str | None = None) -> Path:
-    """获取会话当前的待审文档路径（支持 docx/doc/pdf 多格式）。"""
-    s_dir = get_session_dir(session_id)
+def get_session_file(
+    session_id: str, ext: str | None = None, tenant_id: str = "default"
+) -> Path:
+    """获取指定租户与会话当前的待审文档路径（支持 docx/doc/pdf 多格式）。"""
+    s_dir = get_session_dir(session_id, tenant_id=tenant_id)
     if ext:
         clean_ext = ext if ext.startswith(".") else f".{ext}"
         return s_dir / f"contract{clean_ext}"
@@ -118,9 +140,11 @@ def get_session_file(session_id: str, ext: str | None = None) -> Path:
     return s_dir / "contract.docx"
 
 
-def prepare_session_file(session_id: str, ext: str = ".docx") -> Path:
+def prepare_session_file(
+    session_id: str, ext: str = ".docx", tenant_id: str = "default"
+) -> Path:
     """清理并准备全新待审文档物理文件路径，防止格式扩展名错配。"""
-    s_dir = get_session_dir(session_id)
+    s_dir = get_session_dir(session_id, tenant_id=tenant_id)
     for old in s_dir.glob("contract.*"):
         try:
             old.unlink(missing_ok=True)
@@ -130,23 +154,32 @@ def prepare_session_file(session_id: str, ext: str = ".docx") -> Path:
     return s_dir / f"contract{clean_ext}"
 
 
-def get_session_meta(session_id: str) -> dict[str, Any]:
-    meta_file = get_session_dir(session_id) / "meta.json"
+def get_session_meta(session_id: str, tenant_id: str = "default") -> dict[str, Any]:
+    meta_file = get_session_dir(session_id, tenant_id=tenant_id) / "meta.json"
     if meta_file.exists():
         try:
-            return json.loads(meta_file.read_text(encoding="utf-8"))
+            data = json.loads(meta_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
         except Exception:
             pass
     return {
+        "session_id": session_id,
+        "tenant_id": tenant_id,
         "doc_name": CURRENT_DOC_NAME,
         "forced_template_id": None,
     }
 
 
-def save_session_meta(session_id: str, meta: dict[str, Any]) -> None:
-    meta_file = get_session_dir(session_id) / "meta.json"
+def save_session_meta(
+    session_id: str, meta: dict[str, Any], tenant_id: str = "default"
+) -> None:
+    meta_file = get_session_dir(session_id, tenant_id=tenant_id) / "meta.json"
+    meta_dict = dict(meta)
+    meta_dict.setdefault("session_id", session_id)
+    meta_dict.setdefault("tenant_id", tenant_id)
     meta_file.write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(meta_dict, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
 
@@ -1954,6 +1987,54 @@ let refSearchKeyword = '';
 // 预置默认数据占位符
 window.INITIAL_DATA = __INITIAL_DATA_PLACEHOLDER__;
 
+// 统一审查会话与鉴权客户端 (ReviewApiClient)
+const ReviewApiClient = {
+  sessionId: (window.INITIAL_DATA && window.INITIAL_DATA.session_id) || 'default_session',
+  tenantId: (window.INITIAL_DATA && window.INITIAL_DATA.tenant_id) || 'default',
+  userId: (window.INITIAL_DATA && window.INITIAL_DATA.user_id) || 'local_dev_user',
+
+  setSession(sId, tId, uId) {
+    if (sId) this.sessionId = sId;
+    if (tId) this.tenantId = tId;
+    if (uId) this.userId = uId;
+  },
+
+  async request(url, options = {}) {
+    const opts = Object.assign({}, options);
+    opts.headers = Object.assign({}, opts.headers || {});
+    opts.headers['X-Session-ID'] = this.sessionId;
+    opts.headers['X-Tenant-ID'] = this.tenantId;
+    opts.headers['X-User-ID'] = this.userId;
+
+    const separator = url.includes('?') ? '&' : '?';
+    const finalUrl = url.includes('session_id=') ? url : `${url}${separator}session_id=${encodeURIComponent(this.sessionId)}`;
+    return fetch(finalUrl, opts);
+  }
+};
+window.ReviewApiClient = ReviewApiClient;
+
+// 自动拦截与透明注入 X-Session-ID / X-Tenant-ID
+const _origFetch = window.fetch;
+window.fetch = function(input, init) {
+  let url = (typeof input === 'string') ? input : (input && input.url ? input.url : '');
+  if (typeof url === 'string' && url.startsWith('/api/')) {
+    init = init || {};
+    init.headers = Object.assign({}, init.headers || {});
+    if (typeof init.headers.append !== 'function') {
+      if (!init.headers['X-Session-ID'] && ReviewApiClient.sessionId) {
+        init.headers['X-Session-ID'] = ReviewApiClient.sessionId;
+      }
+      if (!init.headers['X-Tenant-ID'] && ReviewApiClient.tenantId) {
+        init.headers['X-Tenant-ID'] = ReviewApiClient.tenantId;
+      }
+      if (!init.headers['X-User-ID'] && ReviewApiClient.userId) {
+        init.headers['X-User-ID'] = ReviewApiClient.userId;
+      }
+    }
+  }
+  return _origFetch.call(this, input, init);
+};
+
 // Toast 提示工具
 function showToast(message, type = 'success') {
   const container = document.getElementById('toastContainer');
@@ -2075,7 +2156,7 @@ async function uploadContractFile(file) {
       return;
     }
     renderFullDiff(res);
-    initAgentSSE(false);
+    initAgentSSE(true);
     // 同步刷新模板置信度与排序
     fetchTemplateListQuietly();
     showToast(`合同《${file.name.replace(/\.[^/.]+$/, '')}》解析完成，已对齐基准母本！`, 'success');
@@ -2092,7 +2173,7 @@ async function loadSample(sampleKey) {
     const res = await resp.json();
     hideLoading();
     renderFullDiff(res);
-    initAgentSSE(false);
+    initAgentSSE(true);
     fetchTemplateListQuietly();
     showToast('实测用例加载成功！', 'success');
   } catch (err) {
@@ -2421,6 +2502,9 @@ function escapeHtml(text) {
 function renderFullDiff(data) {
   resetThreeWaySyncScroll();
   currentData = data;
+  if (data && data.session_id) {
+    ReviewApiClient.setSession(data.session_id, data.tenant_id, data.user_id);
+  }
   activeAnnotationIndex = -1;
 
   // 1. 规范化送审合同名称展示（彻底杜绝技术内部文件名暴露）
@@ -3036,8 +3120,12 @@ let agentState = {
 };
 
 function initAgentSSE(force = false) {
-  // 若当前已有活跃健康的长连接且非强制重建，无需强行关闭重建（杜绝切换模板时的连接重置报错）
-  if (!force && agentEventSource && (agentEventSource.readyState === EventSource.OPEN || agentEventSource.readyState === EventSource.CONNECTING)) {
+  const currentSessId = (typeof ReviewApiClient !== 'undefined' && ReviewApiClient.sessionId) ? ReviewApiClient.sessionId : 'default_session';
+  const currentTenant = (typeof ReviewApiClient !== 'undefined' && ReviewApiClient.tenantId) ? ReviewApiClient.tenantId : 'default';
+
+  // 若当前已有活跃健康的长连接且非强制重建，无需强行关闭重建
+  if (!force && agentEventSource && agentEventSource._forSessionId === currentSessId &&
+      (agentEventSource.readyState === EventSource.OPEN || agentEventSource.readyState === EventSource.CONNECTING)) {
     updateHeartbeatTag(true);
     return;
   }
@@ -3060,7 +3148,9 @@ function initAgentSSE(force = false) {
   };
 
   try {
-    agentEventSource = new EventSource('/api/diff/agent_stream');
+    const streamUrl = `/api/diff/agent_stream?session_id=${encodeURIComponent(currentSessId)}&tenant_id=${encodeURIComponent(currentTenant)}`;
+    agentEventSource = new EventSource(streamUrl);
+    agentEventSource._forSessionId = currentSessId;
 
     agentEventSource.onopen = () => {
       console.log('[SSE] 已接入法务 Agent 实时研判流');
@@ -3862,17 +3952,54 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             return
         super().log_message(format, *args)
 
+    def _send_cors_headers(self):
+        origin = self.headers.get("Origin", "")
+        if origin:
+            parsed = urllib.parse.urlparse(origin)
+            h = (parsed.hostname or "").lower()
+            if h in ("127.0.0.1", "localhost", "::1", "testserver"):
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Access-Control-Allow-Credentials", "true")
+                self.send_header("Vary", "Origin")
+                return
+
     def _send_json(self, status_code: int, data: Any):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_cors_headers()
         self.end_headers()
         self.wfile.write(body)
 
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._send_cors_headers()
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, X-Session-ID, X-Tenant-ID, X-User-ID, X-User, X-Roles, X-Tenant, X-Auth-Signature, X-Auth-Timestamp, X-Auth-Nonce, X-Content-SHA256",
+        )
+        self.end_headers()
+
     def _get_request_identity(self) -> tuple[str, str, str]:
-        """从 Query 参数或 Header 安全提取会话标识、租户标识与用户标识。"""
+        """从 Query 参数或 Header 安全提取并校验会话标识、租户标识与用户标识。"""
+        # 1. 跨站写保护（CSRF / Origin 防护）
+        if self.command in ("POST", "PUT", "DELETE", "PATCH"):
+            origin = self.headers.get("Origin", "")
+            if origin:
+                parsed_orig = urllib.parse.urlparse(origin)
+                h = (parsed_orig.hostname or "").lower()
+                allowed_hosts = {"127.0.0.1", "localhost", "::1", "testserver"}
+                custom_allowed = os.environ.get("CONTRACT_WEB_ALLOWED_HOSTS", "").split(
+                    ","
+                )
+                for ca in custom_allowed:
+                    if ca.strip():
+                        allowed_hosts.add(ca.strip().lower())
+                if h not in allowed_hosts:
+                    raise PermissionError(f"跨站请求伪造被拦截: 非受信 Origin {origin}")
+
         parsed = urllib.parse.urlparse(self.path)
         qs = urllib.parse.parse_qs(parsed.query)
 
@@ -3881,15 +4008,66 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             or self.headers.get("X-Session-ID")
             or "default_session"
         )
-        tenant_id = (
-            qs.get("tenant_id", [""])[0] or self.headers.get("X-Tenant-ID") or "default"
+
+        is_enterprise = os.environ.get(
+            "DIFF_WEB_MODE", ""
+        ).upper() == "ENTERPRISE" or bool(os.environ.get("CONTRACT_KB_AUTH_SHARED_KEY"))
+
+        if is_enterprise:
+            user = self.headers.get("X-User", "").strip()
+            roles_raw = self.headers.get("X-Roles", "").strip()
+            tenant = self.headers.get("X-Tenant", "").strip() or "default"
+            sig = self.headers.get("X-Auth-Signature", "").strip()
+            ts = self.headers.get("X-Auth-Timestamp", "").strip()
+            nonce = self.headers.get("X-Auth-Nonce", "").strip()
+            body_sha = (
+                self.headers.get("X-Content-SHA256", "").strip() or EMPTY_BODY_SHA256
+            )
+
+            if not user or not roles_raw or not sig or not ts or not nonce:
+                raise PermissionError(
+                    "企业模式下缺少受信任认证签名 Header (X-User, X-Roles, X-Auth-Signature, X-Auth-Timestamp, X-Auth-Nonce)"
+                )
+
+            key = os.environ.get("CONTRACT_KB_AUTH_SHARED_KEY", "")
+            if key:
+                expected_sig = compute_auth_signature_v2(
+                    key=key,
+                    method=self.command,
+                    path=parsed.path,
+                    query=parsed.query,
+                    user=user,
+                    roles=roles_raw,
+                    tenant=tenant,
+                    timestamp=ts,
+                    nonce=nonce,
+                    body_sha256=body_sha,
+                )
+                if not hmac.compare_digest(sig, expected_sig):
+                    raise PermissionError("认证签名校验失败")
+
+            return session_id, tenant, user
+
+        # 单机本地开发模式 (LOCAL_DEV)
+        # 禁止客户端自报未经签名的非 default 外部租户
+        declared_tenant = (
+            qs.get("tenant_id", [""])[0] or self.headers.get("X-Tenant-ID", "").strip()
         )
-        user_id = (
-            qs.get("user_id", [""])[0] or self.headers.get("X-User-ID") or "anonymous"
-        )
-        return session_id, tenant_id, user_id
+        if declared_tenant and declared_tenant != "default":
+            raise PermissionError(
+                f"单机本地模式禁止未经认证访问或伪造非 default 租户身份: {declared_tenant}"
+            )
+
+        user_id = self.headers.get("X-User-ID", "").strip() or "local_dev_user"
+        return session_id, "default", user_id
 
     def do_GET(self):
+        try:
+            self._do_GET()
+        except PermissionError as e:
+            self._send_json(403, {"error": str(e)})
+
+    def _do_GET(self):
         global CURRENT_DOC_NAME, CURRENT_FORCED_TEMPLATE_ID
         parsed = urllib.parse.urlparse(self.path)
 
@@ -3899,6 +4077,7 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self._send_cors_headers()
             self.end_headers()
             self.wfile.write(body)
 
@@ -3918,7 +4097,7 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache, no-transform")
             self.send_header("Connection", "keep-alive")
             self.send_header("X-Accel-Buffering", "no")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._send_cors_headers()
             self.end_headers()
 
             try:
@@ -4073,6 +4252,12 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
+        try:
+            self._do_POST()
+        except PermissionError as e:
+            self._send_json(403, {"error": str(e)})
+
+    def _do_POST(self):
         global CURRENT_DOC_NAME, CURRENT_FORCED_TEMPLATE_ID
         parsed = urllib.parse.urlparse(self.path)
 
@@ -4204,10 +4389,14 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": str(e)})
 
         elif parsed.path == "/api/diff/feedback":
+            session_id, tenant_id, user_id = self._get_request_identity()
             length = int(self.headers.get("content-length", 0))
             raw_body = self.rfile.read(length) if length > 0 else b"{}"
             try:
                 data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+                data.setdefault("session_id", session_id)
+                data.setdefault("tenant_id", tenant_id)
+                data.setdefault("reviewer_id", user_id)
                 saved_path = record_user_feedback(data)
                 self._send_json(200, {"success": True, "saved_to": str(saved_path)})
             except Exception as e:
@@ -4248,15 +4437,59 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
 
                 with sess._lock:
                     card = sess.annotations_map.get(ann_id)
-                    if card:
-                        if decision == "ACCEPTED":
-                            card["human_review_status"] = "HUMAN_ACCEPTED"
-                        elif decision == "REJECTED":
-                            card["human_review_status"] = "HUMAN_REJECTED"
-                        elif decision == "MODIFIED":
-                            card["human_review_status"] = "HUMAN_MODIFIED"
-                            card["human_modified_advice"] = modified_advice
-                        sess._save_checkpoint()
+                    if not card:
+                        self._send_json(404, {"error": f"未找到对应批注卡片: {ann_id}"})
+                        return
+
+                    curr_status_str = card.get("human_review_status") or "PENDING"
+                    try:
+                        curr_status = HumanReviewStatus(curr_status_str)
+                    except ValueError:
+                        curr_status = HumanReviewStatus.PENDING
+
+                    target_status_map = {
+                        "ACCEPTED": HumanReviewStatus.HUMAN_ACCEPTED,
+                        "REJECTED": HumanReviewStatus.HUMAN_REJECTED,
+                        "MODIFIED": HumanReviewStatus.HUMAN_MODIFIED,
+                    }
+                    target_status = target_status_map.get(decision)
+                    if not target_status:
+                        self._send_json(
+                            400, {"error": f"非法的人工研判结论: {decision}"}
+                        )
+                        return
+
+                    if not curr_status.can_transition_to(target_status):
+                        self._send_json(
+                            400,
+                            {
+                                "error": f"非法状态流转: 不能从 {curr_status.value} 直接跳变至 {target_status.value}"
+                            },
+                        )
+                        return
+
+                    card["human_review_status"] = target_status.value
+                    card["reviewed_by"] = user_id
+                    card["reviewed_at"] = time.time()
+                    if target_status == HumanReviewStatus.HUMAN_MODIFIED:
+                        card["human_modified_advice"] = modified_advice
+
+                    # 审计留痕
+                    if "human_audit_trail" not in card:
+                        card["human_audit_trail"] = []
+                    card["human_audit_trail"].append(
+                        {
+                            "from_status": curr_status.value,
+                            "to_status": target_status.value,
+                            "user_id": user_id,
+                            "tenant_id": tenant_id,
+                            "timestamp": time.time(),
+                            "modified_advice": modified_advice
+                            if target_status == HumanReviewStatus.HUMAN_MODIFIED
+                            else None,
+                        }
+                    )
+                    sess._save_checkpoint()
                 self._send_json(200, {"success": True, "card": card})
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
@@ -4308,10 +4541,14 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                         else stem_clean
                     )
                     ext = Path(file_name).suffix.lower() or ".docx"
-                    s_file = prepare_session_file(session_id, ext=ext)
+                    s_file = prepare_session_file(
+                        session_id, ext=ext, tenant_id=tenant_id
+                    )
                     s_file.write_bytes(file_bytes)
                     save_session_meta(
-                        session_id, {"doc_name": doc_name, "forced_template_id": None}
+                        session_id,
+                        {"doc_name": doc_name, "forced_template_id": None},
+                        tenant_id=tenant_id,
                     )
 
                     try:
@@ -4319,6 +4556,8 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                             s_file, forced_template_id=None, doc_name=doc_name
                         )
                         res["session_id"] = session_id
+                        res["tenant_id"] = tenant_id
+                        res["user_id"] = user_id
                         get_agent_manager().start_document_review(
                             res,
                             session_id=session_id,
@@ -4348,11 +4587,14 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                 file_path, att_meta = mgr.get_contract_attachment_file(c_no, att_path)
                 if not file_path or not file_path.exists():
                     self._send_json(
-                        404, {"error": f"未找到案卷 [{c_no}] 的合同附件物理文件"}
+                        404,
+                        {"error": f"未找到案卷 [{c_no}] 的合同附件物理文件"},
                     )
                     return
 
-                s_file = prepare_session_file(session_id, ext=file_path.suffix)
+                s_file = prepare_session_file(
+                    session_id, ext=file_path.suffix, tenant_id=tenant_id
+                )
                 shutil.copyfile(file_path, s_file)
 
                 c_info = mgr.cases_by_no.get(c_no, {})
@@ -4363,13 +4605,17 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                     else c_name
                 )
                 save_session_meta(
-                    session_id, {"doc_name": doc_name, "forced_template_id": None}
+                    session_id,
+                    {"doc_name": doc_name, "forced_template_id": None},
+                    tenant_id=tenant_id,
                 )
 
                 res = execute_current_diff(
                     s_file, forced_template_id=None, doc_name=doc_name
                 )
                 res["session_id"] = session_id
+                res["tenant_id"] = tenant_id
+                res["user_id"] = user_id
                 res["contract_no"] = c_no
                 get_agent_manager().start_document_review(
                     res,
@@ -4437,15 +4683,15 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                             },
                         )
                         return
-                    s_file = get_session_file(session_id)
+                    s_file = get_session_file(session_id, tenant_id=tenant_id)
                     if not s_file.exists():
                         default_sample = (
                             config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
                         )
                         shutil.copyfile(default_sample, s_file)
-                    meta = get_session_meta(session_id)
+                    meta = get_session_meta(session_id, tenant_id=tenant_id)
                     meta["forced_template_id"] = tpl_id
-                    save_session_meta(session_id, meta)
+                    save_session_meta(session_id, meta, tenant_id=tenant_id)
 
                     res = execute_current_diff(
                         s_file,
@@ -4453,11 +4699,17 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                         doc_name=meta.get("doc_name"),
                     )
                 elif mode == "self_diff":
-                    s_file = prepare_session_file(session_id, ext=target_file.suffix)
+                    s_file = prepare_session_file(
+                        session_id,
+                        ext=target_file.suffix,
+                        tenant_id=tenant_id,
+                    )
                     shutil.copyfile(target_file, s_file)
                     doc_name = f"《{clean_name}》标准模板自测核验"
                     save_session_meta(
-                        session_id, {"doc_name": doc_name, "forced_template_id": tpl_id}
+                        session_id,
+                        {"doc_name": doc_name, "forced_template_id": tpl_id},
+                        tenant_id=tenant_id,
                     )
 
                     res = execute_current_diff(
@@ -4466,11 +4718,17 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                         doc_name=doc_name,
                     )
                 else:
-                    s_file = prepare_session_file(session_id, ext=target_file.suffix)
+                    s_file = prepare_session_file(
+                        session_id,
+                        ext=target_file.suffix,
+                        tenant_id=tenant_id,
+                    )
                     shutil.copyfile(target_file, s_file)
                     doc_name = f"《{clean_name}》送审原稿"
                     save_session_meta(
-                        session_id, {"doc_name": doc_name, "forced_template_id": None}
+                        session_id,
+                        {"doc_name": doc_name, "forced_template_id": None},
+                        tenant_id=tenant_id,
                     )
 
                     res = execute_current_diff(
@@ -4480,6 +4738,8 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                     )
 
                 res["session_id"] = session_id
+                res["tenant_id"] = tenant_id
+                res["user_id"] = user_id
                 get_agent_manager().start_document_review(
                     res,
                     force_restart=True,
@@ -4496,26 +4756,43 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
 
-def generate_rendered_html() -> str:
+def _safe_json_embed(obj: Any) -> str:
+    """安全将 Python 对象序列化为可安全内嵌在 <script> 标签中的 JSON，杜绝闭合标签注入 XSS。"""
+    raw = json.dumps(obj, ensure_ascii=False)
+    return (
+        raw.replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+def generate_rendered_html(
+    initial_diff_data: dict[str, Any] | None = None,
+) -> str:
     """生成内嵌初始默认高危用例数据与按置信度排序的母本清单的独立完整 HTML。"""
-    try:
-        sample_file = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
-        if not CURRENT_SESSION_FILE.exists():
-            shutil.copyfile(sample_file, CURRENT_SESSION_FILE)
-        initial_data = execute_current_diff(CURRENT_SESSION_FILE)
-        data_json = json.dumps(initial_data, ensure_ascii=False)
-    except Exception:
-        data_json = "null"
+    if initial_diff_data is not None:
+        data_json = _safe_json_embed(initial_diff_data)
+    else:
+        try:
+            sample_file = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
+            if not CURRENT_SESSION_FILE.exists():
+                shutil.copyfile(sample_file, CURRENT_SESSION_FILE)
+            initial_data = execute_current_diff(CURRENT_SESSION_FILE)
+            data_json = _safe_json_embed(initial_data)
+        except Exception:
+            data_json = "null"
 
     try:
         catalog = get_ranked_templates_catalog(CURRENT_SESSION_FILE)
-        catalog_json = json.dumps(catalog, ensure_ascii=False)
+        catalog_json = _safe_json_embed(catalog)
     except Exception:
         catalog_json = "[]"
 
     try:
         ref_catalog = get_ref_templates_catalog()
-        ref_json = json.dumps(ref_catalog, ensure_ascii=False)
+        ref_json = _safe_json_embed(ref_catalog)
     except Exception:
         ref_json = "[]"
 
@@ -4529,7 +4806,7 @@ def generate_rendered_html() -> str:
             "stats": stats,
             "initial_cases": initial_cases,
         }
-        material_json = json.dumps(material_data, ensure_ascii=False)
+        material_json = _safe_json_embed(material_data)
     except Exception:
         material_json = "{}"
 
