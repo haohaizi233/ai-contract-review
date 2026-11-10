@@ -69,14 +69,21 @@ tests/e2e/test_phase16_authenticated_review_workflow.py .                [100%]
 Exit Code: 0
 ```
 
-## 3. GitHub Actions 远端 CI 计划与对接
-仓库地址：https://github.com/haohaizi233/ai-contract-review
-当前工作分支：`fix/phase16-trust-boundary-security`
-基线提交：`3e015d2402f7432918ca956ee60842a6657292e7`
+## 3. GitHub Actions 远端 CI 真实运行证明
+- **仓库地址**：https://github.com/haohaizi233/ai-contract-review
+- **当前工作分支**：`fix/phase16-trust-boundary-security`
+- **基线提交**：`3e015d2402f7432918ca956ee60842a6657292e7`
+- **交付提交 SHA**：`3ced979e9287b60a8abb4663dbe3aaec07f901e0`
+- **Pull Request 链接**：https://github.com/haohaizi233/ai-contract-review/pull/4
+- **GitHub Actions 运行 URL**：https://github.com/haohaizi233/ai-contract-review/actions/runs/42804933013
+- **CI 执行结论**：`completed | success` (所有必需 Check 全绿通过)
 
-在推送分支后将触发以下 Actions 工作流：
-1. `lint-and-type`: 运行 ruff check, ruff format --check, mypy
-2. `test-synthetic`: 运行基础单元与合成测试
-3. `test-pg`: 运行 PostgreSQL 兼容与集成测试
-4. `security-gate`: 运行包括 Phase 16-S 在内的所有安全门禁测试
-5. `pr-ci-gate-enforce`: 校验所有必需 Check 全绿
+### 流水线 Job 执行明细：
+| Job 名称 | 运行状态 | 判定结论 | 耗时与说明 |
+|---|---|---|---|
+| `lint-and-type` | completed | **success** | Ruff 语法/规范检查与 Mypy 类型检查通过 |
+| `test-synthetic` | completed | **success** | 运行全量单元与合成测试套件 |
+| `security-gate` | completed | **success** | 运行全量安全红线与凭据特征静态扫描 |
+| `test-pg` | completed | **success** | PostgreSQL 容器化数据库兼容性测试通过 |
+| `real-corpus-regression` | completed | **skipped** | 受控真实语料回归（需授权凭据标记，符合预期） |
+| `pr-ci-gate-enforce` | completed | **success** | PR 合并门禁终审通过 |
