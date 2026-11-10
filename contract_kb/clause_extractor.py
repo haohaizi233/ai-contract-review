@@ -229,6 +229,11 @@ def extract_clauses(
         buffer, buffer_nodes, buffer_loc, buffer_num = [], [], {}, None
 
     for node in parsed_doc.nodes:
+        if (
+            getattr(node, "node_type", "") == "scanned_placeholder"
+            or getattr(node, "extraction_status", "") == "OCR_REQUIRED"
+        ):
+            continue
         if node.node_type == "paragraph":
             text = node.text.strip()
             if not text:

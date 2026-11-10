@@ -225,9 +225,9 @@ def parse_pdf(path: Path | str, document_id: Optional[str] = None) -> ParsedDocu
     raw_all = "\n".join(all_page_texts).strip()
 
     # 4. 判断是否为纯影印扫描件/图片型 PDF
-    if (not raw_all or len(raw_all) < 25) and total_images > 0:
+    if (not raw_all or len(raw_all) < 25) and (total_images > 0 or total_pages > 0):
         parse_warnings.append(
-            f"该PDF为影印扫描件或图片格式（共 {total_pages} 页），未包含文字图层。已提取版面结构。"
+            f"OCR_REQUIRED: 该PDF为影印扫描件或无文字图层格式（共 {total_pages} 页），需执行 OCR 识别后方可进入条款审核。"
         )
         title = path.stem
         for i in range(max(1, total_pages)):
@@ -235,11 +235,16 @@ def parse_pdf(path: Path | str, document_id: Optional[str] = None) -> ParsedDocu
                 ASTNode(
                     document_id=doc_id,
                     node_id=f"pdf_page_{i}",
-                    node_type="paragraph",
+                    node_type="scanned_placeholder",
                     order=order,
-                    text=f"【第 {i + 1} 页 · 影印扫描件/图片合同（共 {total_pages} 页，包含印章及签署图层）】",
+                    text=f"【第 {i + 1} 页 · 影印扫描件/图片合同（共 {total_pages} 页，OCR_REQUIRED）】",
                     style={"role": "scanned_page"},
-                    flags={"is_scanned": True, "page": i + 1},
+                    flags={
+                        "is_scanned": True,
+                        "ocr_required": True,
+                        "extraction_status": "OCR_REQUIRED",
+                        "page": i + 1,
+                    },
                     extraction_method="pdf_scanned_image",
                 )
             )
