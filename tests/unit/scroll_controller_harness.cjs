@@ -73,3 +73,25 @@ setupThreeWaySyncScroll();
 const resetBefore = rev.scrollTop;
 std.scrollTop = 900; std.fire('scroll'); flush();
 assert.notEqual(rev.scrollTop, resetBefore, 'new document must clear old navigation ownership');
+
+// Restore detail cards and height for right-pane driver tests.
+detail.children = [elements['card-a1'], elements['card-a2']];
+detail.scrollHeight = 2400;
+rev.scrollHeight = 2400;
+std.scrollHeight = 2400;
+invalidateScrollGeometry();
+
+// Right pane driving left and middle panes monotonically
+detail.fire('wheel');
+detail.scrollTop = 600;
+detail.fire('scroll'); flush();
+const stdAt600 = std.scrollTop;
+const revAt600 = rev.scrollTop;
+assert.ok(stdAt600 > 50 && stdAt600 < 2000, 'right pane must smoothly drive left pane: ' + stdAt600);
+assert.ok(revAt600 > 50 && revAt600 < 2000, 'right pane must smoothly drive middle pane: ' + revAt600);
+
+detail.scrollTop = 1400;
+detail.fire('scroll'); flush();
+assert.ok(std.scrollTop > stdAt600, 'further scrolling right pane must advance left pane monotonically');
+assert.ok(rev.scrollTop > revAt600, 'further scrolling right pane must advance middle pane monotonically');
+console.log('all right-pane-driven tests passed');
