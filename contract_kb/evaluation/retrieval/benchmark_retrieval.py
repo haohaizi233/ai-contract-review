@@ -11,13 +11,16 @@ import time
 
 from contract_kb import config
 from contract_kb.storage import Storage
-from contract_kb.embeddings import LocalHashEmbedding
+from contract_kb.infrastructure.ai.embedding_providers import LocalHashEmbedding
 from contract_kb.evaluation.datasets.retrieval_golden import (
     GOLDEN_QUERIES,
     HARD_NEGATIVES,
     judge_hits,
 )
-from contract_kb.rerankers import LexicalReranker, get_reranker
+from contract_kb.infrastructure.ai.reranker_providers import (
+    LexicalReranker,
+    get_reranker,
+)
 
 
 def build_bench_storage(emb, tmp_db) -> Storage:
@@ -128,7 +131,9 @@ def run():
     st1.close()
     # 2) 真实 Embedding（如可用）
     try:
-        from contract_kb.embeddings_real import SentenceTransformerEmbedding
+        from contract_kb.infrastructure.ai.embedding_providers import (
+            SentenceTransformerEmbedding,
+        )
 
         emb2 = SentenceTransformerEmbedding()
         st2 = build_bench_storage(emb2, f"{tmp}/st.db")

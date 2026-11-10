@@ -45,7 +45,7 @@ from contract_kb.legal_agent_kb import (
     retrieve_governed_rules,
     retrieve_legal_rules,
 )
-from contract_kb.llm_review import (
+from contract_kb.infrastructure.ai.llm_providers import (
     DATA_CLOSE,
     DATA_OPEN,
     OpenAICompatProvider,

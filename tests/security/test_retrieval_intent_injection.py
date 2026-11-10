@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from contract_kb.llm_review import sanitize_untrusted_contract_text
+from contract_kb.infrastructure.ai.llm_providers import sanitize_untrusted_contract_text
 from contract_kb.modules.retrieval.query_planner import ContractAwareQueryPlanner
 
 

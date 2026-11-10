@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from contract_kb.llm_review import (
+from contract_kb.infrastructure.ai.llm_providers import (
     LLMSemanticReviewer,
     OpenAICompatProvider,
     build_prompt,

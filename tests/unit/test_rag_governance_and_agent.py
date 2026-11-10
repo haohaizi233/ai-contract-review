@@ -24,7 +24,7 @@ from contract_kb.evaluation.review.evaluate import (
     eval_rag,
     eval_review,
 )
-from contract_kb.llm_review import MockLLMProvider
+from contract_kb.infrastructure.ai.llm_providers import MockLLMProvider
 from contract_kb.modules.retrieval import (
     CitationVerifier,
     GovernedRetrievalService,

@@ -5,7 +5,11 @@ from __future__ import annotations
 
 import re
 
-from contract_kb.llm_review import DATA_CLOSE, DATA_OPEN, build_prompt
+from contract_kb.infrastructure.ai.llm_providers import (
+    DATA_CLOSE,
+    DATA_OPEN,
+    build_prompt,
+)
 
 
 def test_per_call_cryptographic_nonce_uniqueness_and_escape():

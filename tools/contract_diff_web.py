@@ -62,10 +62,10 @@ except Exception:
 from contract_kb import config  # noqa: E402
 from contract_kb.full_diff import build_full_contract_diff  # noqa: E402
 from contract_kb.storage import create_storage  # noqa: E402
-from contract_kb.modules.document_processing.ingestion import (
+from contract_kb.modules.document_processing.ingestion import (  # noqa: E402
     scan_and_import,
     import_template_file,
-)  # noqa: E402
+)
 from contract_kb.legal_agent_kb import record_user_feedback, export_sft_dataset  # noqa: E402
 from contract_kb.agent_queue_manager import get_agent_manager  # noqa: E402
 from tools.material_catalog import (  # noqa: E402

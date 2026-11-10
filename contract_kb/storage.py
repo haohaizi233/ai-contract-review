@@ -27,7 +27,10 @@ import numpy as np
 from . import config
 from .application.security.idempotency import IdempotencyOutcome, RequestIdentity
 from .domain.models.execution import JobLease, JobOutcome
-from .embeddings import EmbeddingProvider, get_embedding_provider
+from .infrastructure.ai.embedding_providers import (
+    EmbeddingProvider,
+    get_embedding_provider,
+)
 from .infrastructure.observability.redaction import redact_sensitive_text
 from .storage_errors import (
     EmbeddingConfigMismatch,

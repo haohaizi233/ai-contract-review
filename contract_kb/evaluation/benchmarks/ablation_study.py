@@ -24,7 +24,10 @@ import numpy as np
 from pydantic import BaseModel
 
 from contract_kb import config
-from contract_kb.embeddings import EmbeddingProvider, LocalHashEmbedding
+from contract_kb.infrastructure.ai.embedding_providers import (
+    EmbeddingProvider,
+    LocalHashEmbedding,
+)
 from contract_kb.evaluation.datasets.synthetic import generate_corpus
 from contract_kb.modules.document_processing.ingestion import scan_and_import
 from contract_kb.modules.retrieval.citation import CitationVerifier
@@ -252,7 +255,9 @@ def evaluate_configuration(
                 )
             reranker: Any = MockCrossEncoderReranker()
         else:
-            from contract_kb.rerankers import CrossEncoderReranker
+            from contract_kb.infrastructure.ai.reranker_providers import (
+                CrossEncoderReranker,
+            )
 
             reranker = CrossEncoderReranker()
 

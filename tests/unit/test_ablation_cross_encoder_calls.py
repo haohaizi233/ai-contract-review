@@ -14,7 +14,7 @@ from contract_kb.evaluation.benchmarks.ablation_study import (
     evaluate_configuration,
     setup_ablation_storage,
 )
-from contract_kb.embeddings import LocalHashEmbedding
+from contract_kb.infrastructure.ai.embedding_providers import LocalHashEmbedding
 
 
 def test_mock_cross_encoder_constructor_error_is_raised(tmp_path: Path):

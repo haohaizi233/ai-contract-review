@@ -3,7 +3,10 @@
 
 import numpy as np
 
-from contract_kb.embeddings import LocalHashEmbedding, CloudEmbedding
+from contract_kb.infrastructure.ai.embedding_providers import (
+    LocalHashEmbedding,
+    CloudEmbedding,
+)
 
 
 def test_local_embedding_deterministic():

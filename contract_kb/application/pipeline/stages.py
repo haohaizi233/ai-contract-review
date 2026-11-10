@@ -900,7 +900,11 @@ class LLMSemanticReviewStage(ReviewStage):
         self._budget_service = budget_service
 
     def execute(self, ctx: PipelineContext) -> dict[str, Any]:
-        from ...llm_review import LLMFailure, LLMReviewResult, LLMSemanticReviewer
+        from ...infrastructure.ai.llm_providers import (
+            LLMFailure,
+            LLMReviewResult,
+            LLMSemanticReviewer,
+        )
 
         llm = self._llm_reviewer or LLMSemanticReviewer(provider=self._llm_provider)
         contract_text = "\n".join(c.get("original_text", "") for c in ctx.clauses)

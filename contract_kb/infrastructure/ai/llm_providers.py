@@ -1,64 +1,41 @@
 # -*- coding: utf-8 -*-
-"""LLM 合同审核提供方（Phase 3）。
-
-设计约束：
-- LLMProvider 抽象接口：MockLLMProvider（测试）/ OpenAICompatProvider（企业授权本地或云模型）；
-- 未配置授权端点时禁止外发合同内容（调用即抛 LLMNotConfigured）；
-- 用户自定义审核要求**真正交给 LLM 分析**（custom_requirements 进入 prompt），
-  不再只是原样塞进人工复核清单；
-- 防提示词注入：合同正文以「不可信数据」定界包裹，指令与数据分离，输出仅采纳 JSON 结果；
-- 结果经 Pydantic 严格校验；超时/JSON 解析失败/上下文过长/拒答 → 明确失败状态，
-  不伪造结论；不确定 → NEEDS_MANUAL_REVIEW；未执行 → NOT_CHECKED。
-"""
+"""LLM 合同审核提供方实现与工厂（Infrastructure AI Adapter）。"""
 
 from __future__ import annotations
 
 import json
 import re
 import secrets
-from abc import ABC, abstractmethod
-from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import ValidationError
 
+from ...application.ports.llm import (
+    LLMConfigError,
+    LLMFailure,
+    LLMFinding,
+    LLMNotConfigured,
+    LLMProvider,
+    LLMReviewResult,
+)
 
-class LLMFailure(str, Enum):
-    NOT_CONFIGURED = "NOT_CONFIGURED"
-    TIMEOUT = "TIMEOUT"
-    PARSE_ERROR = "PARSE_ERROR"
-    CONTEXT_TOO_LONG = "CONTEXT_TOO_LONG"
-    REFUSED = "REFUSED"
-    REFERENCE_MISMATCH = "REFERENCE_MISMATCH"
-    UNKNOWN = "UNKNOWN"
-
-
-class LLMFinding(BaseModel):
-    """LLM 审核发现（严格 Schema）。"""
-
-    finding_id: str = Field(min_length=1)
-    category: str
-    severity: str = Field(pattern="^(HIGH|MEDIUM|LOW|INFO)$")
-    title: str
-    description: str
-    original_text: str = ""  # 引用的合同原文片段（必须能在文档中找到）
-    suggestion: str = ""
-    confidence: float | None = Field(default=None, ge=0, le=1)
-    requires_human_review: bool = True
-
-
-class LLMReviewResult(BaseModel):
-    status: str = "CHECKED"  # CHECKED | NOT_CHECKED | NEEDS_MANUAL_REVIEW | FAILED
-    failure: str | None = None
-    findings: list[LLMFinding] = Field(default_factory=list)
-    custom_requirement_results: list[dict] = Field(default_factory=list)
-    model: str = ""
-    raw_usage: dict = Field(default_factory=dict)
-
-
-class LLMNotConfigured(RuntimeError):
-    pass
-
+__all__ = [
+    "DATA_CLOSE",
+    "DATA_OPEN",
+    "LLMConfigError",
+    "LLMFailure",
+    "LLMFinding",
+    "LLMNotConfigured",
+    "LLMProvider",
+    "LLMReviewResult",
+    "LLMSemanticReviewer",
+    "MockLLMProvider",
+    "OpenAICompatProvider",
+    "PROMPT_SYSTEM",
+    "build_prompt",
+    "get_llm_provider",
+    "sanitize_untrusted_contract_text",
+]
 
 PROMPT_SYSTEM = (
     "你是企业合同审核助手。你的任务：依据给定的企业标准条款与审核要求，对待审合同条款做差异分析。\n"
@@ -127,20 +104,6 @@ def build_prompt(
         f"请仅针对上述 nonce={call_nonce} 信封内的被动合同文本进行差异审核，并输出 JSON。"
     )
     return body
-
-
-class LLMProvider(ABC):
-    name = "abstract"
-
-    @abstractmethod
-    def complete(
-        self,
-        system: str,
-        user: str,
-        timeout: float = 60.0,
-        max_tokens: int | None = None,
-    ) -> dict:
-        """返回 {"text": str, "model": str, "usage": dict}；失败抛 Timeout/Parse 类异常。"""
 
 
 class MockLLMProvider(LLMProvider):
@@ -271,7 +234,7 @@ class LLMSemanticReviewer:
 
     def _record_metric(self, outcome: str) -> None:
         try:
-            from .infrastructure.observability import GLOBAL_METRICS
+            from ..observability import GLOBAL_METRICS
 
             GLOBAL_METRICS.record_llm_call(outcome=outcome)
         except Exception:
@@ -394,13 +357,6 @@ def _extract_json(text: str) -> str:
     return m.group(0) if m else text
 
 
-# ---------------- Provider 初始化链路（启动时按授权配置注入，不允许静默 None） ----------------
-
-
-class LLMConfigError(LLMNotConfigured):
-    """LLM 授权配置不完整/非法（fail-closed：直接抛错，不降级为 None）。"""
-
-
 def _is_loopback_endpoint(base_url: str) -> bool:
     from urllib.parse import urlparse
 
@@ -412,16 +368,7 @@ def _is_loopback_endpoint(base_url: str) -> bool:
 def get_llm_provider(
     spec: str | None = None, env: dict | None = None
 ) -> LLMProvider | None:
-    """按授权配置初始化 LLM Provider（环境变量读取于调用时，便于测试与热配置）。
-
-    spec（CONTRACT_KB_LLM）：
-    - "none"/空 → 返回 None（调用方如实标 NOT_CHECKED）；
-    - "mock" → MockLLMProvider（仅限测试授权环境）；
-    - "openai_compat" → OpenAICompatProvider（企业授权本地/云端点），
-      需 CONTRACT_KB_LLM_BASE_URL / CONTRACT_KB_LLM_API_KEY / CONTRACT_KB_LLM_MODEL；
-      任一缺失抛 LLMConfigError——已声明授权模型时禁止静默回退为 None（防止
-      "正常配置下默认 None" 导致语义审核被无声跳过）。
-    """
+    """按授权配置初始化 LLM Provider（环境变量读取于调用时，便于测试与热配置）。"""
     import os
 
     e = env if env is not None else os.environ

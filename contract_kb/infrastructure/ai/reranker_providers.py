@@ -1,20 +1,27 @@
 # -*- coding: utf-8 -*-
-"""Reranker 抽象层（Phase 2）：baseline 确定性 reranker + Cross-Encoder 可插拔。"""
+"""Reranker 提供方实现与工厂（Infrastructure AI Adapter）。"""
 
 from __future__ import annotations
 
 import re
-from abc import ABC, abstractmethod
+
+from ...application.ports.reranker import Reranker, RerankerPort
+from ...modules.retrieval.reranker import (
+    HttpCrossEncoderReranker,
+    LexicalCoverageReranker,
+)
+
+__all__ = [
+    "CrossEncoderReranker",
+    "HttpCrossEncoderReranker",
+    "LexicalCoverageReranker",
+    "LexicalReranker",
+    "Reranker",
+    "RerankerPort",
+    "get_reranker",
+]
 
 _CLEAN_RE = re.compile(r"[\s\u3000，。；：、“”‘’（）()《》\-—_/%‰]")
-
-
-class Reranker(ABC):
-    name = "abstract"
-
-    @abstractmethod
-    def rerank(self, query: str, hits: list[dict]) -> list[dict]:
-        """输入命中列表（含 text），返回按相关性降序的新列表（不改原列表顺序以外的字段）。"""
 
 
 class LexicalReranker(Reranker):

@@ -229,7 +229,7 @@ def test_retrieval_benchmark_runs():
         build_bench_storage,
         run_benchmark,
     )
-    from contract_kb.embeddings import LocalHashEmbedding
+    from contract_kb.infrastructure.ai.embedding_providers import LocalHashEmbedding
     import tempfile
 
     tmp = tempfile.mkdtemp()
