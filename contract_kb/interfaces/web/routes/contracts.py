@@ -43,14 +43,18 @@ def handle_get_sample(handler: Any, parsed: urllib.parse.ParseResult) -> None:
             )
             doc_name = "《商标驳回复审代理协议》送审原稿"
 
-        s_file = get_session_file(session_id)
+        s_file = get_session_file(session_id, tenant_id=tenant_id)
         shutil.copyfile(sample_file, s_file)
         save_session_meta(
-            session_id, {"doc_name": doc_name, "forced_template_id": None}
+            session_id,
+            {"doc_name": doc_name, "forced_template_id": None},
+            tenant_id=tenant_id,
         )
 
         res = execute_current_diff(s_file, forced_template_id=None, doc_name=doc_name)
         res["session_id"] = session_id
+        res["tenant_id"] = tenant_id
+        res["user_id"] = user_id
         get_agent_manager().start_document_review(
             res, session_id=session_id, tenant_id=tenant_id, user_id=user_id
         )
@@ -107,10 +111,12 @@ def handle_post_upload(handler: Any) -> None:
                 else stem_clean
             )
             ext = Path(file_name).suffix.lower() or ".docx"
-            s_file = prepare_session_file(session_id, ext=ext)
+            s_file = prepare_session_file(session_id, ext=ext, tenant_id=tenant_id)
             s_file.write_bytes(file_bytes)
             save_session_meta(
-                session_id, {"doc_name": doc_name, "forced_template_id": None}
+                session_id,
+                {"doc_name": doc_name, "forced_template_id": None},
+                tenant_id=tenant_id,
             )
 
             try:
@@ -118,6 +124,8 @@ def handle_post_upload(handler: Any) -> None:
                     s_file, forced_template_id=None, doc_name=doc_name
                 )
                 res["session_id"] = session_id
+                res["tenant_id"] = tenant_id
+                res["user_id"] = user_id
                 get_agent_manager().start_document_review(
                     res,
                     session_id=session_id,

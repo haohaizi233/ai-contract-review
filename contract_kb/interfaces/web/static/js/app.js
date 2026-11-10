@@ -25,6 +25,54 @@ let refSearchKeyword = '';
 // 预置默认数据占位符
 window.INITIAL_DATA = __INITIAL_DATA_PLACEHOLDER__;
 
+// 统一审查会话与鉴权客户端 (ReviewApiClient)
+const ReviewApiClient = {
+  sessionId: (window.INITIAL_DATA && window.INITIAL_DATA.session_id) || 'default_session',
+  tenantId: (window.INITIAL_DATA && window.INITIAL_DATA.tenant_id) || 'default',
+  userId: (window.INITIAL_DATA && window.INITIAL_DATA.user_id) || 'local_dev_user',
+
+  setSession(sId, tId, uId) {
+    if (sId) this.sessionId = sId;
+    if (tId) this.tenantId = tId;
+    if (uId) this.userId = uId;
+  },
+
+  async request(url, options = {}) {
+    const opts = Object.assign({}, options);
+    opts.headers = Object.assign({}, opts.headers || {});
+    opts.headers['X-Session-ID'] = this.sessionId;
+    opts.headers['X-Tenant-ID'] = this.tenantId;
+    opts.headers['X-User-ID'] = this.userId;
+
+    const separator = url.includes('?') ? '&' : '?';
+    const finalUrl = url.includes('session_id=') ? url : `${url}${separator}session_id=${encodeURIComponent(this.sessionId)}`;
+    return fetch(finalUrl, opts);
+  }
+};
+window.ReviewApiClient = ReviewApiClient;
+
+// 自动拦截与透明注入 X-Session-ID / X-Tenant-ID
+const _origFetch = window.fetch;
+window.fetch = function(input, init) {
+  let url = (typeof input === 'string') ? input : (input && input.url ? input.url : '');
+  if (typeof url === 'string' && url.startsWith('/api/')) {
+    init = init || {};
+    init.headers = Object.assign({}, init.headers || {});
+    if (typeof init.headers.append !== 'function') {
+      if (!init.headers['X-Session-ID'] && ReviewApiClient.sessionId) {
+        init.headers['X-Session-ID'] = ReviewApiClient.sessionId;
+      }
+      if (!init.headers['X-Tenant-ID'] && ReviewApiClient.tenantId) {
+        init.headers['X-Tenant-ID'] = ReviewApiClient.tenantId;
+      }
+      if (!init.headers['X-User-ID'] && ReviewApiClient.userId) {
+        init.headers['X-User-ID'] = ReviewApiClient.userId;
+      }
+    }
+  }
+  return _origFetch.call(this, input, init);
+};
+
 // Toast 提示工具
 function showToast(message, type = 'success') {
   const container = document.getElementById('toastContainer');

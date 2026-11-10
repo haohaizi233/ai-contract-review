@@ -11,8 +11,12 @@ let agentState = {
 };
 
 function initAgentSSE(force = false) {
-  // 若当前已有活跃健康的长连接且非强制重建，无需强行关闭重建（杜绝切换模板时的连接重置报错）
-  if (!force && agentEventSource && (agentEventSource.readyState === EventSource.OPEN || agentEventSource.readyState === EventSource.CONNECTING)) {
+  const currentSessId = (typeof ReviewApiClient !== 'undefined' && ReviewApiClient.sessionId) ? ReviewApiClient.sessionId : 'default_session';
+  const currentTenant = (typeof ReviewApiClient !== 'undefined' && ReviewApiClient.tenantId) ? ReviewApiClient.tenantId : 'default';
+
+  // 若当前已有活跃健康的长连接且非强制重建，无需强行关闭重建
+  if (!force && agentEventSource && agentEventSource._forSessionId === currentSessId &&
+      (agentEventSource.readyState === EventSource.OPEN || agentEventSource.readyState === EventSource.CONNECTING)) {
     updateHeartbeatTag(true);
     return;
   }
@@ -35,7 +39,9 @@ function initAgentSSE(force = false) {
   };
 
   try {
-    agentEventSource = new EventSource('/api/diff/agent_stream');
+    const streamUrl = `/api/diff/agent_stream?session_id=${encodeURIComponent(currentSessId)}&tenant_id=${encodeURIComponent(currentTenant)}`;
+    agentEventSource = new EventSource(streamUrl);
+    agentEventSource._forSessionId = currentSessId;
 
     agentEventSource.onopen = () => {
       console.log('[SSE] 已接入法务 Agent 实时研判流');

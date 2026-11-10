@@ -89,7 +89,9 @@ def handle_post_materials_load_contract(handler: Any) -> None:
             )
             return
 
-        s_file = prepare_session_file(session_id, ext=file_path.suffix)
+        s_file = prepare_session_file(
+            session_id, ext=file_path.suffix, tenant_id=tenant_id
+        )
         shutil.copyfile(file_path, s_file)
 
         c_info = mgr.cases_by_no.get(c_no, {})
@@ -98,11 +100,15 @@ def handle_post_materials_load_contract(handler: Any) -> None:
             f"《{c_name}》履约合同原件" if not c_name.startswith("《") else c_name
         )
         save_session_meta(
-            session_id, {"doc_name": doc_name, "forced_template_id": None}
+            session_id,
+            {"doc_name": doc_name, "forced_template_id": None},
+            tenant_id=tenant_id,
         )
 
         res = execute_current_diff(s_file, forced_template_id=None, doc_name=doc_name)
         res["session_id"] = session_id
+        res["tenant_id"] = tenant_id
+        res["user_id"] = user_id
         res["contract_no"] = c_no
         get_agent_manager().start_document_review(
             res,

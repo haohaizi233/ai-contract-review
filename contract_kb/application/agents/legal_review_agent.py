@@ -56,15 +56,54 @@ CACHE_FILE = config.DATA_DIR / "ai_agent_cache.json"
 
 
 def _is_safe_endpoint_url(url: str) -> tuple[bool, str]:
-    """SSRF 防护：核验端点 URL 协议合法性并拦截云元数据内部地址。"""
+    """SSRF 防护：核验端点 URL 协议合法性并拦截私网、回环、链路本地与云元数据地址。"""
     if not url:
         return False, "端点 URL 为空"
-    parsed = urllib.parse.urlparse(url)
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception as e:
+        return False, f"URL 解析失败: {e}"
+
     if parsed.scheme not in ("http", "https"):
         return False, f"不支持的协议类型: {parsed.scheme}"
-    hostname = (parsed.hostname or "").lower()
+
+    hostname = (parsed.hostname or "").lower().strip()
+    if not hostname:
+        return False, "URL 缺少主机名"
+
+    # 检查云元数据特殊地址与主机名
     if hostname in ("169.254.169.254", "metadata.google.internal", "instance-data"):
         return False, f"禁止访问云服务内部元数据地址: {hostname}"
+
+    # 检查内部授权白名单网关（允许企业配置受控内网模型网关）
+    allowed_internal = [
+        h.strip().lower()
+        for h in os.environ.get("CONTRACT_KB_ALLOWED_INTERNAL_HOSTS", "").split(",")
+        if h.strip()
+    ]
+    if hostname in allowed_internal:
+        return True, "OK"
+
+    # 检查常见本地回环别名
+    if hostname in ("localhost", "ip6-localhost", "ip6-loopback"):
+        return False, f"禁止访问本地回环主机: {hostname}"
+
+    # IP 字面量网络段严格校验
+    import ipaddress
+
+    try:
+        ip_obj = ipaddress.ip_address(hostname)
+        if ip_obj.is_loopback:
+            return False, f"禁止访问回环地址: {hostname}"
+        if ip_obj.is_private:
+            return False, f"禁止访问 RFC1918 私网地址: {hostname}"
+        if ip_obj.is_link_local:
+            return False, f"禁止访问链路本地地址: {hostname}"
+        if ip_obj.is_unspecified:
+            return False, f"禁止访问未指定地址 (0.0.0.0): {hostname}"
+    except ValueError:
+        pass
+
     return True, "OK"
 
 
@@ -205,8 +244,13 @@ class LegalReviewAgent:
         std_span: str,
         rev_span: str,
         clause_title: str,
+        tenant_id: str = "default",
+        template_id: str = "",
+        template_version: str = "v1",
+        rule_version: str = "v1",
     ) -> str:
         raw = (
+            f"{tenant_id}|{template_id}|{template_version}|{rule_version}|"
             f"{category}|{delta_type}|{clause_title}|{std_span}|{rev_span}|{self.model}"
         )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -315,8 +359,28 @@ class LegalReviewAgent:
         )
         base_desc = annotation.get("ai_analysis", "")
 
+        ctx = doc_context or {}
+        tenant_id = str(
+            ctx.get("tenant_id") or annotation.get("tenant_id") or "default"
+        )
+        template_id = str(ctx.get("template_id") or annotation.get("template_id") or "")
+        template_version = str(
+            ctx.get("template_version") or annotation.get("template_version") or "v1"
+        )
+        rule_version = str(
+            ctx.get("rule_set_version") or annotation.get("rule_set_version") or "v1"
+        )
+
         cache_key = self._cache_key(
-            category, delta_type, std_span, rev_span, clause_title
+            category=category,
+            delta_type=delta_type,
+            std_span=std_span,
+            rev_span=rev_span,
+            clause_title=clause_title,
+            tenant_id=tenant_id,
+            template_id=template_id,
+            template_version=template_version,
+            rule_version=rule_version,
         )
 
         if not force_refresh:

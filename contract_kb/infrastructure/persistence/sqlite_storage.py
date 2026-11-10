@@ -1031,9 +1031,9 @@ class Storage:
             if target_doc["status"] not in ("SUPERSEDED", "ACTIVE"):
                 return False
 
-            # 检查条款审批状态：目标版本存在未通过审批（REJECTED）或被撤销（REVOKED）条款时拒绝回滚
+            # 检查条款审批状态：目标版本的所有条款必须全部已审批（APPROVED），存在任何未审批（PENDING_REVIEW）、撤销（REVOKED）或拒绝（REJECTED）条款时坚决拒绝回滚
             unapproved = self.conn.execute(
-                "SELECT 1 FROM clauses WHERE document_id=? AND approval_status IN ('REVOKED', 'REJECTED')",
+                "SELECT 1 FROM clauses WHERE document_id=? AND (approval_status != 'APPROVED' OR approval_status IS NULL)",
                 (target_did,),
             ).fetchone()
             if unapproved:

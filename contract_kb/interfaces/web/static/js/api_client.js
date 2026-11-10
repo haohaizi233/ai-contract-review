@@ -19,7 +19,7 @@ async function uploadContractFile(file) {
       return;
     }
     renderFullDiff(res);
-    initAgentSSE(false);
+    initAgentSSE(true);
     // 同步刷新模板置信度与排序
     fetchTemplateListQuietly();
     showToast(`合同《${file.name.replace(/\.[^/.]+$/, '')}》解析完成，已对齐基准母本！`, 'success');
@@ -36,7 +36,7 @@ async function loadSample(sampleKey) {
     const res = await resp.json();
     hideLoading();
     renderFullDiff(res);
-    initAgentSSE(false);
+    initAgentSSE(true);
     fetchTemplateListQuietly();
     showToast('实测用例加载成功！', 'success');
   } catch (err) {

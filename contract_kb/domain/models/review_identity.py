@@ -96,6 +96,43 @@ class ReviewSessionIdentity:
         }
 
 
+@dataclass
+class ReviewSessionContext:
+    """审查会话统一上下文（绑定租户、用户、文档哈希与母本版本，保证生命周期一致性）。"""
+
+    session_id: str
+    tenant_id: str
+    user_id: str
+    doc_name: str
+    file_sha256: str = ""
+    template_id: str = ""
+    template_version: str = "v1"
+    created_at: float = 0.0
+    updated_at: float = 0.0
+    expires_at: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ReviewSessionContext:
+        import time
+
+        now = time.time()
+        return cls(
+            session_id=str(data.get("session_id") or "default_session"),
+            tenant_id=str(data.get("tenant_id") or "default"),
+            user_id=str(data.get("user_id") or "anonymous"),
+            doc_name=str(data.get("doc_name") or ""),
+            file_sha256=str(data.get("file_sha256") or ""),
+            template_id=str(data.get("template_id") or ""),
+            template_version=str(data.get("template_version") or "v1"),
+            created_at=float(data.get("created_at") or now),
+            updated_at=float(data.get("updated_at") or now),
+            expires_at=float(data.get("expires_at") or (now + 86400 * 7)),
+        )
+
+
 @dataclass(frozen=True)
 class ReviewExecutionFingerprint:
     """12 维原子执行指纹（确保文件名相同但内容变化、规则/模型变更时不误复用检查点）。"""

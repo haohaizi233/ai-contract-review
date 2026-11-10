@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hmac
+import os
 import json
 from pathlib import Path
 import shutil
@@ -13,6 +15,10 @@ import time
 from typing import Any
 import urllib.parse
 
+from contract_kb.interfaces.http.auth import (
+    compute_auth_signature_v2,
+    EMPTY_BODY_SHA256,
+)
 from contract_kb import config
 from contract_kb.application.agents.review_sessions import get_agent_manager
 from contract_kb.modules.templates.material_catalog import (
@@ -76,26 +82,43 @@ def load_html_template() -> str:
 HTML_TEMPLATE: str = load_html_template()
 
 
-def generate_rendered_html() -> str:
+def _safe_json_embed(obj: Any) -> str:
+    """安全将 Python 对象序列化为可安全内嵌在 <script> 标签中的 JSON，杜绝闭合标签注入 XSS。"""
+    raw = json.dumps(obj, ensure_ascii=False)
+    return (
+        raw.replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+def generate_rendered_html(
+    initial_diff_data: dict[str, Any] | None = None,
+) -> str:
     """生成内嵌初始默认高危用例数据与按置信度排序的母本清单的独立完整 HTML。"""
-    try:
-        sample_file = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
-        if not CURRENT_SESSION_FILE.exists():
-            shutil.copyfile(sample_file, CURRENT_SESSION_FILE)
-        initial_data = execute_current_diff(CURRENT_SESSION_FILE)
-        data_json = json.dumps(initial_data, ensure_ascii=False)
-    except Exception:
-        data_json = "null"
+    if initial_diff_data is not None:
+        data_json = _safe_json_embed(initial_diff_data)
+    else:
+        try:
+            sample_file = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
+            if not CURRENT_SESSION_FILE.exists():
+                shutil.copyfile(sample_file, CURRENT_SESSION_FILE)
+            initial_data = execute_current_diff(CURRENT_SESSION_FILE)
+            data_json = _safe_json_embed(initial_data)
+        except Exception:
+            data_json = "null"
 
     try:
         catalog = get_ranked_templates_catalog(CURRENT_SESSION_FILE)
-        catalog_json = json.dumps(catalog, ensure_ascii=False)
+        catalog_json = _safe_json_embed(catalog)
     except Exception:
         catalog_json = "[]"
 
     try:
         ref_catalog = get_ref_templates_catalog()
-        ref_json = json.dumps(ref_catalog, ensure_ascii=False)
+        ref_json = _safe_json_embed(ref_catalog)
     except Exception:
         ref_json = "[]"
 
@@ -109,12 +132,11 @@ def generate_rendered_html() -> str:
             "stats": stats,
             "initial_cases": initial_cases,
         }
-        material_json = json.dumps(material_data, ensure_ascii=False)
+        material_json = _safe_json_embed(material_data)
     except Exception:
         material_json = "{}"
 
-    html = load_html_template()
-    html = html.replace("__INITIAL_DATA_PLACEHOLDER__", data_json)
+    html = HTML_TEMPLATE.replace("__INITIAL_DATA_PLACEHOLDER__", data_json)
     html = html.replace("__ALL_TEMPLATES_PLACEHOLDER__", catalog_json)
     html = html.replace("__REF_TEMPLATES_PLACEHOLDER__", ref_json)
     html = html.replace("__MATERIAL_DATA_PLACEHOLDER__", material_json)
@@ -157,17 +179,54 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             return
         super().log_message(format, *args)
 
-    def _send_json(self, status_code: int, data: Any) -> None:
+    def _send_cors_headers(self):
+        origin = self.headers.get("Origin", "")
+        if origin:
+            parsed = urllib.parse.urlparse(origin)
+            h = (parsed.hostname or "").lower()
+            if h in ("127.0.0.1", "localhost", "::1", "testserver"):
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Access-Control-Allow-Credentials", "true")
+                self.send_header("Vary", "Origin")
+                return
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._send_cors_headers()
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, X-Session-ID, X-Tenant-ID, X-User-ID, X-User, X-Roles, X-Tenant, X-Auth-Signature, X-Auth-Timestamp, X-Auth-Nonce, X-Content-SHA256",
+        )
+        self.end_headers()
+
+    def _send_json(self, status_code: int, data: Any):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_cors_headers()
         self.end_headers()
         self.wfile.write(body)
 
     def _get_request_identity(self) -> tuple[str, str, str]:
-        """从 Query 参数或 Header 安全提取会话标识、租户标识与用户标识。"""
+        """从 Query 参数或 Header 安全提取并校验会话标识、租户标识与用户标识。"""
+        # 1. 跨站写保护（CSRF / Origin 防护）
+        if self.command in ("POST", "PUT", "DELETE", "PATCH"):
+            origin = self.headers.get("Origin", "")
+            if origin:
+                parsed_orig = urllib.parse.urlparse(origin)
+                h = (parsed_orig.hostname or "").lower()
+                allowed_hosts = {"127.0.0.1", "localhost", "::1", "testserver"}
+                custom_allowed = os.environ.get("CONTRACT_WEB_ALLOWED_HOSTS", "").split(
+                    ","
+                )
+                for ca in custom_allowed:
+                    if ca.strip():
+                        allowed_hosts.add(ca.strip().lower())
+                if h not in allowed_hosts:
+                    raise PermissionError(f"跨站请求伪造被拦截: 非受信 Origin {origin}")
+
         parsed = urllib.parse.urlparse(self.path)
         qs = urllib.parse.parse_qs(parsed.query)
 
@@ -176,15 +235,66 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             or self.headers.get("X-Session-ID")
             or "default_session"
         )
-        tenant_id = (
-            qs.get("tenant_id", [""])[0] or self.headers.get("X-Tenant-ID") or "default"
+
+        is_enterprise = os.environ.get(
+            "DIFF_WEB_MODE", ""
+        ).upper() == "ENTERPRISE" or bool(os.environ.get("CONTRACT_KB_AUTH_SHARED_KEY"))
+
+        if is_enterprise:
+            user = self.headers.get("X-User", "").strip()
+            roles_raw = self.headers.get("X-Roles", "").strip()
+            tenant = self.headers.get("X-Tenant", "").strip() or "default"
+            sig = self.headers.get("X-Auth-Signature", "").strip()
+            ts = self.headers.get("X-Auth-Timestamp", "").strip()
+            nonce = self.headers.get("X-Auth-Nonce", "").strip()
+            body_sha = (
+                self.headers.get("X-Content-SHA256", "").strip() or EMPTY_BODY_SHA256
+            )
+
+            if not user or not roles_raw or not sig or not ts or not nonce:
+                raise PermissionError(
+                    "企业模式下缺少受信任认证签名 Header (X-User, X-Roles, X-Auth-Signature, X-Auth-Timestamp, X-Auth-Nonce)"
+                )
+
+            key = os.environ.get("CONTRACT_KB_AUTH_SHARED_KEY", "")
+            if key:
+                expected_sig = compute_auth_signature_v2(
+                    key=key,
+                    method=self.command,
+                    path=parsed.path,
+                    query=parsed.query,
+                    user=user,
+                    roles=roles_raw,
+                    tenant=tenant,
+                    timestamp=ts,
+                    nonce=nonce,
+                    body_sha256=body_sha,
+                )
+                if not hmac.compare_digest(sig, expected_sig):
+                    raise PermissionError("认证签名校验失败")
+
+            return session_id, tenant, user
+
+        # 单机本地开发模式 (LOCAL_DEV)
+        # 禁止客户端自报未经签名的非 default 外部租户
+        declared_tenant = (
+            qs.get("tenant_id", [""])[0] or self.headers.get("X-Tenant-ID", "").strip()
         )
-        user_id = (
-            qs.get("user_id", [""])[0] or self.headers.get("X-User-ID") or "anonymous"
-        )
-        return session_id, tenant_id, user_id
+        if declared_tenant and declared_tenant != "default":
+            raise PermissionError(
+                f"单机本地模式禁止未经认证访问或伪造非 default 租户身份: {declared_tenant}"
+            )
+
+        user_id = self.headers.get("X-User-ID", "").strip() or "local_dev_user"
+        return session_id, "default", user_id
 
     def do_GET(self) -> None:
+        try:
+            self._do_GET()
+        except PermissionError as e:
+            self._send_json(403, {"error": str(e)})
+
+    def _do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
 
         if parsed.path in ("/", "/index.html"):
@@ -193,6 +303,7 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self._send_cors_headers()
             self.end_headers()
             self.wfile.write(body)
         elif parsed.path.startswith("/static/"):
@@ -234,6 +345,12 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self) -> None:
+        try:
+            self._do_POST()
+        except PermissionError as e:
+            self._send_json(403, {"error": str(e)})
+
+    def _do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
 
         if parsed.path == "/api/templates/reload":

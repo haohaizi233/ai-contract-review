@@ -139,16 +139,20 @@ def test_pg_migrate_idempotent(pg_storage):
 
 @pytestmark_pg
 def test_pg_upsert_and_idempotent(pg_storage, sample_doc):
-    _, new1 = pg_storage.upsert_document(sample_doc)
+    did, new1 = pg_storage.upsert_document(sample_doc)
     _, new2 = pg_storage.upsert_document(sample_doc)
     assert new1 is True and new2 is False
+    tenant = pg_storage.get_document(did)["tenant_id"]
+    pg_storage.approve_knowledge_version(tenant, did, "legal_admin")
 
 
 @pytestmark_pg
 def test_pg_incremental_update(pg_storage, sample_doc):
     updated = dict(sample_doc, sha256="b" * 64, template_id="pg_test_doc_2")
-    _, new = pg_storage.upsert_document(updated)
+    did, new = pg_storage.upsert_document(updated)
     assert new is True
+    tenant = pg_storage.get_document(did)["tenant_id"]
+    pg_storage.approve_knowledge_version(tenant, did, "legal_admin")
 
 
 @pytestmark_pg

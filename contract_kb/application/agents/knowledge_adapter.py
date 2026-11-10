@@ -174,16 +174,60 @@ def retrieve_governed_rules(
     standard_span: str = "",
     reviewed_span: str = "",
     allow_unapproved: bool = False,
+    tenant_id: str = "default",
+    storage: Any = None,
 ) -> list[GovernedLegalRule]:
-    """严格检索经过审批生效的企业法务规则（Fail-Closed：过滤未审批与已撤销规则）。"""
+    """严格检索经过审批生效的企业法务规则（Fail-Closed：过滤未审批与已撤销规则，支持数据库权威回查）。"""
     cat_key = (category or "OTHER").upper()
     matching_rules: list[GovernedLegalRule] = []
 
-    for rule in GOVERNED_RULES_STORE.values():
-        if not allow_unapproved and rule.approval_status != "APPROVED":
-            continue
-        if rule.clause_category == cat_key or rule.clause_category == "ALL":
-            matching_rules.append(rule)
+    # 1. 优先从数据库中按租户权威回查 APPROVED 生效规则
+    if storage is not None and hasattr(storage, "get_rules"):
+        try:
+            db_rules = storage.get_rules(
+                tenant_id=tenant_id,
+                status="APPROVED" if not allow_unapproved else None,
+            )
+            for r in db_rules:
+                r_cat = str(
+                    r.get("clause_category") or r.get("rule_type") or "ALL"
+                ).upper()
+                if r_cat == cat_key or r_cat == "ALL":
+                    params = r.get("parameters") or {}
+                    matching_rules.append(
+                        GovernedLegalRule(
+                            rule_id=str(r["rule_id"]),
+                            name=str(r.get("name") or r["rule_id"]),
+                            business_scope="ALL",
+                            contract_subtype="ALL",
+                            clause_category=r_cat,
+                            effective_date=str(r.get("effective_at") or "2026-01-01"),
+                            approval_status=str(r.get("status") or "APPROVED"),
+                            source_document=str(
+                                r.get("source_clauses") or "企业法务合规标准库"
+                            ),
+                            revision=int(r.get("version") or 1),
+                            is_statutory_mandate=bool(r.get("is_statutory", False)),
+                            rule_description=str(
+                                r.get("description") or params.get("description") or ""
+                            ),
+                            advice_template=str(
+                                r.get("advice_template")
+                                or params.get("advice_template")
+                                or ""
+                            ),
+                        )
+                    )
+        except Exception:
+            pass
+
+    # 2. 备选结构化基准规则（在数据库无特定规则时生效，严格过滤非 APPROVED 状态）
+    if not matching_rules:
+        for rule in GOVERNED_RULES_STORE.values():
+            if not allow_unapproved and rule.approval_status != "APPROVED":
+                continue
+            if rule.clause_category == cat_key or rule.clause_category == "ALL":
+                matching_rules.append(rule)
 
     return matching_rules
 
@@ -193,10 +237,17 @@ def retrieve_legal_rules(
     delta_type: str | None,
     standard_span: str = "",
     reviewed_span: str = "",
+    tenant_id: str = "default",
+    storage: Any = None,
 ) -> str:
     """组装针对条款变动的受控法务提示词依据。"""
     cat_key = (category or "OTHER").upper()
-    rules = retrieve_governed_rules(category, delta_type)
+    rules = retrieve_governed_rules(
+        category,
+        delta_type,
+        tenant_id=tenant_id,
+        storage=storage,
+    )
 
     rules_parts: list[str] = []
     if rules:
@@ -293,14 +344,43 @@ class FeedbackSampleRecord:
 
 
 def record_user_feedback(
-    task_id: str,
-    file_sha256: str,
-    annotation_id: str,
-    sample_data: dict[str, Any],
+    task_id: str | dict[str, Any],
+    file_sha256: str = "",
+    annotation_id: str = "",
+    sample_data: dict[str, Any] | None = None,
     reviewer_id: str = "legal_admin",
     is_approved: bool = False,
+    tenant_id: str = "default",
 ) -> Path:
-    """记录脱敏后的用户反馈样本，明确数据治理状态。"""
+    """记录脱敏后的用户反馈样本，明确数据治理状态。兼容字典单参数或多参数调用。"""
+    if isinstance(task_id, dict):
+        payload = task_id
+        task_id = str(payload.get("task_id") or "unspecified_task")
+        file_sha256 = str(payload.get("file_sha256") or file_sha256 or "0" * 64)
+        annotation_id = str(
+            payload.get("annotation_id") or annotation_id or "unspecified_ann"
+        )
+        sample_data = payload
+        reviewer_id = str(payload.get("reviewer_id") or reviewer_id or "legal_admin")
+        is_approved = bool(
+            payload.get("is_approved")
+            or payload.get("is_approved_for_training")
+            or is_approved
+        )
+        tenant_id = str(payload.get("tenant_id") or tenant_id or "default")
+    else:
+        sample_data = sample_data or {}
+        tenant_id = str(sample_data.get("tenant_id") or tenant_id or "default")
+        if not file_sha256:
+            file_sha256 = str(sample_data.get("file_sha256") or "0" * 64)
+        if not annotation_id:
+            annotation_id = str(sample_data.get("annotation_id") or "unspecified_ann")
+        if not is_approved:
+            is_approved = bool(
+                sample_data.get("is_approved")
+                or sample_data.get("is_approved_for_training", False)
+            )
+
     raw_dir = FEEDBACK_BASE_DIR / "raw_feedback"
     raw_dir.mkdir(parents=True, exist_ok=True)
 

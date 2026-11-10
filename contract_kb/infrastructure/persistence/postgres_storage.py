@@ -477,7 +477,12 @@ class PgVectorStorage:
                                 json.dumps(
                                     c.get("source_node_ids", []), ensure_ascii=False
                                 ),
-                                c.get("knowledge_type") or "LAYER_A_RAW_CLAUSE",
+                                c.get("knowledge_type")
+                                or (
+                                    "TEMPLATE"
+                                    if doc.get("document_type") == "contract_template"
+                                    else "HISTORICAL_CASE"
+                                ),
                             ),
                         )
                 self._index_clauses(did, commit=False)
@@ -679,9 +684,9 @@ class PgVectorStorage:
                         self._commit()
                         return False
 
-                    # 检查条款审批状态：目标版本存在未通过审批（REJECTED）或被撤销（REVOKED）条款时拒绝回滚
+                    # 检查条款审批状态：目标版本的所有条款必须全部已审批（APPROVED），存在任何未审批、撤销或拒绝条款时坚决拒绝回滚
                     cur.execute(
-                        "SELECT 1 FROM clauses WHERE document_id=%s AND approval_status IN ('REVOKED', 'REJECTED') LIMIT 1",
+                        "SELECT 1 FROM clauses WHERE document_id=%s AND (approval_status != 'APPROVED' OR approval_status IS NULL) LIMIT 1",
                         (target_did,),
                     )
                     if cur.fetchone():

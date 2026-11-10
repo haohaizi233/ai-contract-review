@@ -436,9 +436,10 @@ class WeDriveSyncManager:
                         f"⚡ 检测到文件路径/名称变更，更新映射: {stored_file} -> {rel_path}"
                     )
                     with self.storage._lock:
+                        sync_tenant = getattr(self, "tenant_id", config.TENANT_ID)
                         self.storage.conn.execute(
-                            "UPDATE documents SET source_file=? WHERE source_hash=?",
-                            (rel_path, file_sha256),
+                            "UPDATE documents SET source_file=? WHERE source_hash=? AND tenant_id=?",
+                            (rel_path, file_sha256, sync_tenant),
                         )
                         self.storage._commit()
                     existing_hashes[file_sha256] = rel_path

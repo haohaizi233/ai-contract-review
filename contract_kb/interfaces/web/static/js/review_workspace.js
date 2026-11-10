@@ -88,6 +88,9 @@ function escapeHtml(text) {
 function renderFullDiff(data) {
   resetThreeWaySyncScroll();
   currentData = data;
+  if (data && data.session_id) {
+    ReviewApiClient.setSession(data.session_id, data.tenant_id, data.user_id);
+  }
   activeAnnotationIndex = -1;
 
   // 1. 规范化送审合同名称展示（彻底杜绝技术内部文件名暴露）

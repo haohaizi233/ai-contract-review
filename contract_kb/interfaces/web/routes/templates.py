@@ -32,11 +32,11 @@ from ..services.session_files import (
 
 
 def handle_get_templates_list(handler: Any) -> None:
-    session_id, _, _ = handler._get_request_identity()
-    s_file = get_session_file(session_id)
+    session_id, tenant_id, _ = handler._get_request_identity()
+    s_file = get_session_file(session_id, tenant_id=tenant_id)
     if not s_file.exists():
         s_file = CURRENT_SESSION_FILE
-    meta = get_session_meta(session_id)
+    meta = get_session_meta(session_id, tenant_id=tenant_id)
     try:
         catalog = get_ranked_templates_catalog(s_file, meta.get("forced_template_id"))
         handler._send_json(200, {"success": True, "templates": catalog})
@@ -67,14 +67,14 @@ def handle_post_switch_template(handler: Any) -> None:
     try:
         data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         target_tpl_id = (data.get("template_id") or "").strip()
-        meta = get_session_meta(session_id)
+        meta = get_session_meta(session_id, tenant_id=tenant_id)
         if not target_tpl_id or target_tpl_id == "auto":
             meta["forced_template_id"] = None
         else:
             meta["forced_template_id"] = target_tpl_id
-        save_session_meta(session_id, meta)
+        save_session_meta(session_id, meta, tenant_id=tenant_id)
 
-        s_file = get_session_file(session_id)
+        s_file = get_session_file(session_id, tenant_id=tenant_id)
         if not s_file.exists():
             default_sample = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
             shutil.copyfile(default_sample, s_file)
@@ -85,6 +85,8 @@ def handle_post_switch_template(handler: Any) -> None:
             doc_name=meta.get("doc_name"),
         )
         res["session_id"] = session_id
+        res["tenant_id"] = tenant_id
+        res["user_id"] = user_id
         get_agent_manager().start_document_review(
             res,
             force_restart=True,
@@ -150,13 +152,13 @@ def handle_post_ref_templates_load(handler: Any) -> None:
                     {"error": f"模板 [{target_file.name}] 未在知识库中注册有效 ID"},
                 )
                 return
-            s_file = get_session_file(session_id)
+            s_file = get_session_file(session_id, tenant_id=tenant_id)
             if not s_file.exists():
                 default_sample = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
                 shutil.copyfile(default_sample, s_file)
-            meta = get_session_meta(session_id)
+            meta = get_session_meta(session_id, tenant_id=tenant_id)
             meta["forced_template_id"] = tpl_id
-            save_session_meta(session_id, meta)
+            save_session_meta(session_id, meta, tenant_id=tenant_id)
 
             res = execute_current_diff(
                 s_file,
@@ -164,11 +166,15 @@ def handle_post_ref_templates_load(handler: Any) -> None:
                 doc_name=meta.get("doc_name"),
             )
         elif mode == "self_diff":
-            s_file = prepare_session_file(session_id, ext=target_file.suffix)
+            s_file = prepare_session_file(
+                session_id, ext=target_file.suffix, tenant_id=tenant_id
+            )
             shutil.copyfile(target_file, s_file)
             doc_name = f"《{clean_name}》标准模板自测核验"
             save_session_meta(
-                session_id, {"doc_name": doc_name, "forced_template_id": tpl_id}
+                session_id,
+                {"doc_name": doc_name, "forced_template_id": tpl_id},
+                tenant_id=tenant_id,
             )
 
             res = execute_current_diff(
@@ -177,11 +183,15 @@ def handle_post_ref_templates_load(handler: Any) -> None:
                 doc_name=doc_name,
             )
         else:
-            s_file = prepare_session_file(session_id, ext=target_file.suffix)
+            s_file = prepare_session_file(
+                session_id, ext=target_file.suffix, tenant_id=tenant_id
+            )
             shutil.copyfile(target_file, s_file)
             doc_name = f"《{clean_name}》送审原稿"
             save_session_meta(
-                session_id, {"doc_name": doc_name, "forced_template_id": None}
+                session_id,
+                {"doc_name": doc_name, "forced_template_id": None},
+                tenant_id=tenant_id,
             )
 
             res = execute_current_diff(
@@ -191,6 +201,10 @@ def handle_post_ref_templates_load(handler: Any) -> None:
             )
 
         res["session_id"] = session_id
+
+        res["tenant_id"] = tenant_id
+
+        res["user_id"] = user_id
         get_agent_manager().start_document_review(
             res,
             force_restart=True,

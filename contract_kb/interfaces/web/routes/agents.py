@@ -26,7 +26,7 @@ def handle_get_agent_stream(handler: Any) -> None:
     handler.send_header("Cache-Control", "no-cache, no-transform")
     handler.send_header("Connection", "keep-alive")
     handler.send_header("X-Accel-Buffering", "no")
-    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler._send_cors_headers()
     handler.end_headers()
 
     try:

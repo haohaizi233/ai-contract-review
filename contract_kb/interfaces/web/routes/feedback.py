@@ -13,10 +13,14 @@ from contract_kb.application.agents.knowledge_adapter import (
 
 
 def handle_post_feedback(handler: Any) -> None:
+    session_id, tenant_id, user_id = handler._get_request_identity()
     length = int(handler.headers.get("content-length", 0))
     raw_body = handler.rfile.read(length) if length > 0 else b"{}"
     try:
         data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+        data.setdefault("session_id", session_id)
+        data.setdefault("tenant_id", tenant_id)
+        data.setdefault("reviewer_id", user_id)
         saved_path = record_user_feedback(data)  # type: ignore[call-arg, arg-type]
         handler._send_json(200, {"success": True, "saved_to": str(saved_path)})
     except Exception as e:
