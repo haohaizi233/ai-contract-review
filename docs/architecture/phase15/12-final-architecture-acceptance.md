@@ -34,7 +34,10 @@
 6. **Batch 5 (`4a1e0e7`)**：`refactor(phase15-batch5): migrate SQLite and PostgreSQL persistence to infrastructure/persistence`
 7. **Batch 6 (`bb69a9f`)**：`refactor(phase15-batch6): decompose contract_diff_web into contract_kb/interfaces/web`
 8. **Batch 7 (`dbfb03e`)**：`refactor(phase15-batch7): modularize desktop GUI and reorganize tools subpackages`
-9. **Batch 8（本提交）**：`refactor(phase15-batch8): move http auth and cli, add architecture fitness tests, and finalize phase15 docs`
+9. **Batch 8 (`9920fa6`)**：`refactor(phase15-batch8): move http auth and cli, add architecture fitness tests, and finalize phase15 docs`
+
+- **Pull Request**：https://github.com/haohaizi233/ai-contract-review/pull/2
+- **GitHub Actions CI Run**：https://github.com/haohaizi233/ai-contract-review/actions/runs/42774256000 （`lint-and-type` / `security-gate` / `test-synthetic` / `test-pg` / `pr-ci-gate-enforce` 全部 **SUCCESS**）
 
 ---
 

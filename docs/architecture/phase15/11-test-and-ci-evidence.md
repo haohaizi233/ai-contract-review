@@ -2,6 +2,15 @@
 
 ## 1. 静态检查与类型检查结果
 
+- **GitHub Actions CI Run URL**：https://github.com/haohaizi233/ai-contract-review/actions/runs/42774256000
+- **Pull Request URL**：https://github.com/haohaizi233/ai-contract-review/pull/2
+- **CI 必选门禁 Job 结果**：
+  - `lint-and-type`：**SUCCESS**
+  - `security-gate`：**SUCCESS**
+  - `test-synthetic`：**SUCCESS**
+  - `test-pg`（真实 `pgvector/pgvector:pg16` 容器）：**SUCCESS**
+  - `pr-ci-gate-enforce`：**SUCCESS**
+
 | 检查项 | 执行命令 | 结果 |
 |---|---|---|
 | **Ruff Lint** | `ruff check . --select=E,F,W --ignore=E501` | `All checks passed!`（**0 errors**） |
