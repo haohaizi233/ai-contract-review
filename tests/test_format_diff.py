@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """test_format_auditor / test_clause_diff（Phase 4）。"""
 
-from contract_kb.format_auditor import audit_format
-from contract_kb.clause_diff import diff_clauses, diff_clause_sets
+from contract_kb.modules.contract_comparison.format_auditor import audit_format
+from contract_kb.modules.contract_comparison.clause_diff import (
+    diff_clauses,
+    diff_clause_sets,
+)
 
 
 class _FakeNode:

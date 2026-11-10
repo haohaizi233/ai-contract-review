@@ -19,7 +19,7 @@ import struct
 from pathlib import Path
 from typing import Optional
 
-from contract_kb.docx_parser import (
+from .docx_parser import (
     ASTNode,
     ParsedDocument,
     parse_docx,

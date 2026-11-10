@@ -126,7 +126,7 @@ def test_synthetic_corpus_has_no_real_enterprise_info(parsed_docs):
 
 
 def test_field_schema_extraction(layer_a):
-    from contract_kb.distill import build_field_schema
+    from contract_kb.modules.templates.distill import build_field_schema
 
     fs = build_field_schema(layer_a, {"imported": layer_a["documents"]})
     keys = {f["field_key"] for f in fs["fields"]}
@@ -143,7 +143,7 @@ def test_field_schema_extraction(layer_a):
 
 
 def test_field_schema_required_not_auto_approved(layer_a):
-    from contract_kb.distill import build_field_schema
+    from contract_kb.modules.templates.distill import build_field_schema
 
     fs = build_field_schema(layer_a, {"imported": layer_a["documents"]})
     for f in fs["fields"]:

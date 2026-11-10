@@ -23,7 +23,7 @@ from contract_kb.rerankers import LexicalReranker, get_reranker
 def build_bench_storage(emb, tmp_db) -> Storage:
     """独立基准库：合成语料 + 困难负样本注入。"""
     st = Storage(tmp_db, emb=emb)
-    from contract_kb.ingest import scan_and_import
+    from contract_kb.modules.document_processing.ingestion import scan_and_import
     from contract_kb.evaluation.datasets.synthetic import generate_corpus
     import tempfile
     from pathlib import Path

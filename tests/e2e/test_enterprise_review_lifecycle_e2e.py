@@ -24,7 +24,7 @@ def test_full_enterprise_contract_review_lifecycle_e2e(
 ):
     st = Storage(tmp_path / "e2e_enterprise.sqlite")
     # 为租户 e2e_t1 导入合成模板语料
-    from contract_kb.ingest import import_template_file
+    from contract_kb.modules.document_processing.ingestion import import_template_file
 
     for fpath in sorted(corpus_dir.glob("*.docx")):
         rec, _sec = import_template_file(fpath)

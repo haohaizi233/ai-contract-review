@@ -14,7 +14,10 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from contract_kb import config  # noqa: E402
-from contract_kb.ingest import import_template_file, security_check_file  # noqa: E402
+from contract_kb.modules.document_processing.ingestion import (
+    import_template_file,
+    security_check_file,
+)  # noqa: E402
 from contract_kb.storage import Storage, create_storage  # noqa: E402
 from tools.sync_wecom_wedrive import parse_pdf_document  # noqa: E402
 

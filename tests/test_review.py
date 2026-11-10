@@ -10,7 +10,10 @@ from contract_kb.review_engine import ReviewEngine, _cn_num_to_int, _dec
 
 @pytest.fixture(scope="session")
 def rule_candidates(layer_a):
-    from contract_kb.distill import build_rule_candidates, build_field_schema
+    from contract_kb.modules.templates.distill import (
+        build_rule_candidates,
+        build_field_schema,
+    )
 
     fs = build_field_schema(layer_a, {"imported": layer_a["documents"]})
     return build_rule_candidates(layer_a, {"imported": layer_a["documents"]}, fs)
@@ -18,7 +21,7 @@ def rule_candidates(layer_a):
 
 @pytest.fixture(scope="session")
 def diff_result(layer_a):
-    from contract_kb import distill as D
+    from contract_kb.modules.templates import distill as D
 
     D.imported_index = {d["template_id"]: d for d in layer_a["documents"]}
     return D.build_clause_diff(layer_a)

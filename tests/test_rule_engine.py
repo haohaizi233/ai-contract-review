@@ -3,7 +3,7 @@
 
 import time
 
-from contract_kb.rule_engine import (
+from contract_kb.modules.rules.engine import (
     EXECUTORS,
     RuleEngine,
     RuleSpec,
@@ -90,7 +90,7 @@ def test_no_dynamic_execution_surface():
     """执行器映射不得含 eval/exec/compile 动态执行（re.compile 合法，排除）。"""
     import inspect
     import re as _re
-    from contract_kb import rule_engine as R
+    from contract_kb.modules.rules import engine as R
 
     src = inspect.getsource(R)
     # 先移除合法的 re.compile( 用法

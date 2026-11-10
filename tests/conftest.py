@@ -49,7 +49,7 @@ def corpus_dir(workspace_ready) -> Path:
 @pytest.fixture(scope="session")
 def import_result(workspace_ready, corpus_dir, tmp_path_factory):
     """导入合成语料到独立测试数据库（不触碰 data/ 生产库）。"""
-    from contract_kb.ingest import scan_and_import
+    from contract_kb.modules.document_processing.ingestion import scan_and_import
 
     result = scan_and_import(corpus_dir)
     result.pop("_raw", None)
@@ -59,7 +59,7 @@ def import_result(workspace_ready, corpus_dir, tmp_path_factory):
 @pytest.fixture(scope="session")
 def layer_a(workspace_ready, corpus_dir, import_result):
     """合成语料的条款/Schema 层。"""
-    from contract_kb.ingest import scan_and_import
+    from contract_kb.modules.document_processing.ingestion import scan_and_import
 
     result = scan_and_import(corpus_dir)
     layer = {"clauses": [], "table_schemas": [], "documents": []}
@@ -75,7 +75,7 @@ def layer_a(workspace_ready, corpus_dir, import_result):
 @pytest.fixture(scope="session")
 def parsed_docs(workspace_ready, corpus_dir):
     """AST 文档集合（合成语料）。"""
-    from contract_kb.docx_parser import parse_docx
+    from contract_kb.modules.document_processing.docx_parser import parse_docx
 
     docs = {}
     for f in sorted(corpus_dir.glob("*.docx")):
@@ -88,7 +88,7 @@ def parsed_docs(workspace_ready, corpus_dir):
 def storage(workspace_ready, corpus_dir, tmp_path_factory):
     """独立测试存储（临时 SQLite，session 级）。"""
     from contract_kb.storage import Storage
-    from contract_kb.ingest import scan_and_import
+    from contract_kb.modules.document_processing.ingestion import scan_and_import
 
     db = tmp_path_factory.mktemp("db") / "test_contract_kb.db"
     st = Storage(db)

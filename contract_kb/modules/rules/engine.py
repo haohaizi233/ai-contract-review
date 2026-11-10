@@ -215,7 +215,7 @@ def _exec_field_format(spec: RuleSpec, ctx: ReviewContext) -> RuleExecution:
 
 def _exec_financial(spec: RuleSpec, ctx: ReviewContext) -> RuleExecution:
     """FINANCIAL_CALCULATION：参数 {check: amount_case_consistency | fee_table_total}（Decimal）。"""
-    from .domain.value_objects.amounts import (
+    from ...domain.value_objects.amounts import (
         chinese_num_to_int as _cn_num_to_int,
         parse_decimal as dec,
     )

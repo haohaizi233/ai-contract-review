@@ -11,7 +11,7 @@
 
 import pytest
 
-from contract_kb.format_auditor import audit_format
+from contract_kb.modules.contract_comparison.format_auditor import audit_format
 from contract_kb.review_engine import ReviewEngine
 from contract_kb.storage import Storage
 

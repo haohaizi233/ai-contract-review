@@ -285,7 +285,7 @@ def get_metrics(request: Request, fmt: str = Query(default="json", alias="format
 def import_templates(request: Request, refresh: bool = Query(default=False)):
     p = _principal(request)
     st = get_storage()
-    from .ingest import scan_and_import
+    from .modules.document_processing.ingestion import scan_and_import
 
     result = scan_and_import(config.TEMPLATE_DIR)
     raw = result.pop("_raw")
@@ -315,7 +315,7 @@ def refresh_classifications(request: Request):
     """刷新存量模板分类元数据与检索索引（不覆盖正文与已有审批状态）。"""
     p = _principal(request)
     st = get_storage()
-    from .ingest import scan_and_import
+    from .modules.document_processing.ingestion import scan_and_import
 
     result = scan_and_import(config.TEMPLATE_DIR)
     raw = result.pop("_raw")
@@ -501,7 +501,7 @@ def compare(req: CompareReq, request: Request):
     enforce_input_limits(compare_texts=req.clause_texts)
     import difflib
 
-    from .clause_diff import diff_clauses
+    from .modules.contract_comparison.clause_diff import diff_clauses
 
     a, b = req.clause_texts
     identical = a.strip() == b.strip()

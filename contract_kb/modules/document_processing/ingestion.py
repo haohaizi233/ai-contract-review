@@ -266,7 +266,7 @@ def import_template_file(path: Path) -> tuple[ImportedDoc | None, str | None]:
 
 def scan_and_import(template_dir: Path) -> dict:
     """递归扫描目录（支持子分类目录或直接目录），返回导入结果包。"""
-    from . import config as _cfg
+    from contract_kb import config as _cfg
 
     # 递归扫描所有 .docx 文件，忽略以 ~ 开头的 Word 临时锁文件
     all_files = sorted(

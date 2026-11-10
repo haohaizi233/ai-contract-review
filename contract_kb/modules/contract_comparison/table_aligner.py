@@ -19,7 +19,7 @@ import difflib
 import html
 from typing import Any
 
-from .domain.models.source_node import ContractSourceNode
+from ...domain.models.source_node import ContractSourceNode
 
 
 def escape_html(text: str) -> str:

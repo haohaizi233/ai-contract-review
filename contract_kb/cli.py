@@ -10,7 +10,7 @@ import json
 import sys
 
 from . import config
-from .ingest import scan_and_import
+from .modules.document_processing.ingestion import scan_and_import
 
 
 def _load_or_import() -> dict:

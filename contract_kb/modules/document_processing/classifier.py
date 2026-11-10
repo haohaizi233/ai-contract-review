@@ -16,7 +16,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from .modules.templates.catalog_data import (
+from ..templates.catalog_data import (
     TEMPLATE_5TH_LAYER_RULES,
     get_template_leaf_map,
 )

@@ -23,9 +23,9 @@ import re
 from collections import defaultdict
 from typing import Any
 
-from . import config
-from .clause_diff import diff_clauses
-from .modules.templates.catalog_data import (
+from contract_kb import config
+from ..contract_comparison.clause_diff import diff_clauses
+from .catalog_data import (
     DISAMBIGUATION_GROUPS,
     TEMPLATE_5TH_LAYER_RULES,
     get_template_leaf_map,

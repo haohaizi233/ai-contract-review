@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from contract_kb import full_diff
+from contract_kb.modules.contract_comparison import full_diff
 from contract_kb.domain.models.source_node import ContractSourceNode
 
 

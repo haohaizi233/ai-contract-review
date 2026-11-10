@@ -6,7 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 import docx
 
-from contract_kb.ingest import import_template_file
+from contract_kb.modules.document_processing.ingestion import import_template_file
 from contract_kb.storage import Storage
 
 

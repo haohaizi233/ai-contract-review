@@ -12,7 +12,7 @@ from docx import Document
 
 from contract_kb.storage import Storage
 from contract_kb.evaluation.datasets.synthetic import generate_corpus
-from contract_kb.ingest import scan_and_import
+from contract_kb.modules.document_processing.ingestion import scan_and_import
 from contract_kb.full_diff import build_full_contract_diff
 from contract_kb.domain.models.source_node import ContractSourceNode
 

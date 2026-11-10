@@ -35,7 +35,11 @@ if str(ROOT_DIR) not in sys.path:
 
 from contract_kb import config  # noqa: E402
 from contract_kb.storage import Storage, create_storage  # noqa: E402
-from contract_kb.ingest import import_template_file, security_check_file, ImportedDoc  # noqa: E402
+from contract_kb.modules.document_processing.ingestion import (
+    import_template_file,
+    security_check_file,
+    ImportedDoc,
+)  # noqa: E402
 
 try:
     import pypdf

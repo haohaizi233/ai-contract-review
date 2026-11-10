@@ -34,14 +34,17 @@ from ...domain.models.review import (
     FindingSource,
     PipelineContext,
 )
-from ...ingest import import_template_file, security_check_file
+from ...modules.document_processing.ingestion import (
+    import_template_file,
+    security_check_file,
+)
 from ...modules.rules import (
     ConflictResolver,
     PolicyEvaluator,
     RuleRegistry,
 )
-from ...rule_engine import ReviewContext as DbRuleContext
-from ...rule_engine import RuleEngine, RuleSpec
+from ...modules.rules.engine import ReviewContext as DbRuleContext
+from ...modules.rules.engine import RuleEngine, RuleSpec
 from .checkpoints import CheckpointCorruptedError
 from .format_adapter import audit_format_from_record
 

@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 
 from contract_kb import config
-from contract_kb.ingest import import_template_file
+from contract_kb.modules.document_processing.ingestion import import_template_file
 from contract_kb.modules.retrieval import CitationVerifier
 from contract_kb.domain.models.evaluation import hit_at_k, recall_at_k, mrr, ndcg_at_k
 from contract_kb.review_engine import ReviewEngine

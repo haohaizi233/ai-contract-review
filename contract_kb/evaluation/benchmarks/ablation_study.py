@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from contract_kb import config
 from contract_kb.embeddings import EmbeddingProvider, LocalHashEmbedding
 from contract_kb.evaluation.datasets.synthetic import generate_corpus
-from contract_kb.ingest import scan_and_import
+from contract_kb.modules.document_processing.ingestion import scan_and_import
 from contract_kb.modules.retrieval.citation import CitationVerifier
 from contract_kb.modules.retrieval.comparison import ClauseComparisonEngine
 from contract_kb.modules.retrieval.hierarchy import HierarchicalKnowledgeTree
