@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Phase 13R2 (6.4 & 6.5): Agent 线程超时、Zombie Worker 防串扰、异常恢复与重试测试集。"""
 
+import threading
 import time
 from unittest.mock import patch
 
@@ -29,9 +30,12 @@ def test_late_worker_result_discarded_on_generation_change() -> None:
         ],
     }
 
-    # 模拟慢速 Agent 调用，在执行期间触发 cancel
+    entered_review = threading.Event()
+    allow_return = threading.Event()
+
     def slow_review(annotation, doc_context=None):
-        time.sleep(0.25)
+        entered_review.set()
+        allow_return.wait(timeout=3.0)
         return {
             "id": annotation.get("id"),
             "risk_level": "LOW",
@@ -47,9 +51,13 @@ def test_late_worker_result_discarded_on_generation_change() -> None:
         side_effect=slow_review,
     ):
         sess.start_review(diff_data_1, force_restart=True)
-        time.sleep(0.05)  # 让 Worker 进入 slow_review
+        assert entered_review.wait(timeout=3.0), (
+            "Worker 未在预期时间内进入 review_clause"
+        )
         sess.cancel()  # 递增 _worker_generation 并置为 CANCELLED
-        time.sleep(0.3)  # 等待慢线程返回
+        allow_return.set()
+        if sess._worker_thread:
+            sess._worker_thread.join(timeout=3.0)
 
         snap = sess.get_snapshot()
         assert snap["status"] == "CANCELLED"
@@ -79,8 +87,12 @@ def test_watchdog_or_skip_prevents_duplicate_worker_submission() -> None:
         ],
     }
 
+    entered_review = threading.Event()
+    allow_return = threading.Event()
+
     def slow_review(annotation, doc_context=None):
-        time.sleep(0.25)
+        entered_review.set()
+        allow_return.wait(timeout=3.0)
         return {
             "id": annotation.get("id"),
             "risk_level": "LOW",
@@ -96,10 +108,14 @@ def test_watchdog_or_skip_prevents_duplicate_worker_submission() -> None:
         side_effect=slow_review,
     ):
         sess.start_review(diff_data, force_restart=True)
-        time.sleep(0.05)
+        assert entered_review.wait(timeout=3.0), (
+            "Worker 未在预期时间内进入 review_clause"
+        )
         # 在慢线程尚未返回时，模拟人工跳过/看门狗提前完成该卡片
         sess.skip_card("ann-dup-1")
-        time.sleep(0.3)
+        allow_return.set()
+        if sess._worker_thread:
+            sess._worker_thread.join(timeout=3.0)
 
         snap = sess.get_snapshot()
         ann = snap["annotations"][0]
@@ -159,11 +175,12 @@ def test_worker_exception_graceful_fallback_and_single_card_retry() -> None:
         side_effect=flaky_review,
     ):
         sess.start_review(diff_data, force_restart=True)
-        # 等待第一轮执行完成
-        for _ in range(30):
+        if sess._worker_thread:
+            sess._worker_thread.join(timeout=5.0)
+        for _ in range(50):
             if sess.status == "COMPLETED":
                 break
-            time.sleep(0.05)
+            time.sleep(0.02)
 
         assert sess.status == "COMPLETED"
         snap1 = sess.get_snapshot()
@@ -179,11 +196,14 @@ def test_worker_exception_graceful_fallback_and_single_card_retry() -> None:
         ok = sess.retry_card("ann-rec-1")
         assert ok is True
 
-        for _ in range(30):
+        if sess._worker_thread:
+            sess._worker_thread.join(timeout=5.0)
+        for _ in range(50):
             if sess.status == "COMPLETED":
                 break
-            time.sleep(0.05)
+            time.sleep(0.02)
 
+        assert sess.status == "COMPLETED"
         snap2 = sess.get_snapshot()
         ann2 = snap2["annotations"][0]
         assert ann2["ai_analysis"] == "重试后成功分析"

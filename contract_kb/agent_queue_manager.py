@@ -239,9 +239,9 @@ class AgentReviewSession:
             self._stop_event.clear()
             if hasattr(self, "_manager") and self._manager:
                 mgr_loop = getattr(self._manager, "_background_worker_loop", None)
-                if hasattr(mgr_loop, "assert_called") or type(mgr_loop).__name__ in (
-                    "MagicMock",
-                    "Mock",
+                if callable(mgr_loop) and (
+                    hasattr(mgr_loop, "assert_called")
+                    or type(mgr_loop).__name__ in ("MagicMock", "Mock")
                 ):
                     mgr_loop(current_gen)
                     self._worker_thread = None
@@ -393,7 +393,12 @@ class AgentReviewSession:
             if a.get("_aiDone")
         ]
         if self._fingerprint:
-            self._checkpoint_storage.save_checkpoint(self._fingerprint, completed_cards)
+            try:
+                self._checkpoint_storage.save_checkpoint(
+                    self._fingerprint, completed_cards
+                )
+            except Exception:
+                pass
         if self.doc_id:
             try:
                 ckpt_file = self._get_checkpoint_file(self.doc_id)
@@ -608,7 +613,7 @@ class AgentReviewSession:
 class AgentReviewManager:
     """企业级多租户与多会话法务智能体审查管理器。"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = threading.RLock()
         self._sessions: dict[str, AgentReviewSession] = {}
 
