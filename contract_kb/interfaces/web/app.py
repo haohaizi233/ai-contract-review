@@ -575,8 +575,16 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     default_sample = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
-    if default_sample.exists() and not CURRENT_SESSION_FILE.exists():
-        shutil.copyfile(default_sample, CURRENT_SESSION_FILE)
+    if default_sample.exists():
+        need_reset = not CURRENT_SESSION_FILE.exists()
+        if not need_reset:
+            try:
+                if CURRENT_SESSION_FILE.stat().st_size < 100 or CURRENT_SESSION_FILE.read_bytes()[:4] != b"PK\x03\x04":
+                    need_reset = True
+            except Exception:
+                need_reset = True
+        if need_reset:
+            shutil.copyfile(default_sample, CURRENT_SESSION_FILE)
 
     if CURRENT_SESSION_FILE.exists():
         start_local_default_review()
