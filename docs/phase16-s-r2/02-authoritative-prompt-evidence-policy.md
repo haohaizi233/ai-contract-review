@@ -38,11 +38,14 @@ class VerifiedLegalEvidence:
     verification_result: EvidenceVerificationResult
     is_authoritative: bool = False
 
+
 @dataclass
 class LegalEvidenceBundle:
     authoritative_rules: list[VerifiedLegalEvidence] = field(default_factory=list)
     unverified_references: list[GovernedLegalRule] = field(default_factory=list)
-    verification_map: dict[str, EvidenceVerificationResult] = field(default_factory=dict)
+    verification_map: dict[str, EvidenceVerificationResult] = field(
+        default_factory=dict
+    )
 ```
 
 ---

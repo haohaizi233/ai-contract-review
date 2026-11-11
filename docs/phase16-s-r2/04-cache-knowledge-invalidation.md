@@ -44,7 +44,12 @@
 ```python
 # 缺陷 7 修复：空证据缓存重新验证逻辑
 # 当缓存记录的 evidence_references 为空，但知识库中后来新增了已审批生效的规则时，必须强制失效
-if cached_res and not cached_evidence and storage is not None and hasattr(storage, "get_rules"):
+if (
+    cached_res
+    and not cached_evidence
+    and storage is not None
+    and hasattr(storage, "get_rules")
+):
     try:
         current_active_rules = storage.get_rules(
             tenant_id=eff_tenant, status="APPROVED"
@@ -52,8 +57,10 @@ if cached_res and not cached_evidence and storage is not None and hasattr(storag
         if isinstance(current_active_rules, list):
             # 检查是否有与当前差异点类别匹配的生效规则
             matching_new_rules = [
-                r for r in current_active_rules
-                if str(r.get("clause_category") or r.get("category") or "").upper() == str(cat).upper()
+                r
+                for r in current_active_rules
+                if str(r.get("clause_category") or r.get("category") or "").upper()
+                == str(cat).upper()
                 or str(r.get("delta_type") or "").upper() == str(dt).upper()
             ]
             if matching_new_rules:

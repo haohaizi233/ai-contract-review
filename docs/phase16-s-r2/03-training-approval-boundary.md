@@ -60,14 +60,20 @@ def approve_feedback_for_training(
 ) -> dict[str, Any]:
     # 1. 权限角色核验
     roles = getattr(approver_principal, "roles", []) or []
-    if not any(r in ("legal_admin", "compliance_admin", "admin", "system_admin") for r in roles):
-        raise PermissionError("当前操作者不具备法务训练集审批权限 (需要 legal_admin 角色)")
+    if not any(
+        r in ("legal_admin", "compliance_admin", "admin", "system_admin") for r in roles
+    ):
+        raise PermissionError(
+            "当前操作者不具备法务训练集审批权限 (需要 legal_admin 角色)"
+        )
 
     # 2. 租户强核验
     eff_tenant = tenant_id or getattr(approver_principal, "tenant_id", "default")
     record_tenant = str(rec.get("tenant_id") or "default")
     if record_tenant != eff_tenant:
-        raise PermissionError(f"跨租户审批非法：记录租户={record_tenant} vs 审批者租户={eff_tenant}")
+        raise PermissionError(
+            f"跨租户审批非法：记录租户={record_tenant} vs 审批者租户={eff_tenant}"
+        )
 
     # 3. 严格防自审校验 (Anti-Self-Approval)
     submitter_id = str(rec.get("submitter_id") or rec.get("reviewer_id") or "")
