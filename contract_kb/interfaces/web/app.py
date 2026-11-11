@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import hmac
 import os
 import json
 from pathlib import Path
@@ -16,8 +15,11 @@ from typing import Any
 import urllib.parse
 
 from contract_kb.interfaces.http.auth import (
-    compute_auth_signature_v2,
-    EMPTY_BODY_SHA256,
+    ROLE_ADMIN,
+    ROLE_REVIEWER,
+    ROLE_VIEWER,
+    authenticate_web_request,
+    Principal,
 )
 from contract_kb import config
 from contract_kb.application.agents.review_sessions import get_agent_manager
@@ -36,6 +38,7 @@ from .routes import (
     handle_get_ref_templates_catalog,
     handle_get_sample,
     handle_get_templates_list,
+    handle_post_approve_feedback,
     handle_post_cancel,
     handle_post_export_training_data,
     handle_post_feedback,
@@ -96,10 +99,14 @@ def _safe_json_embed(obj: Any) -> str:
 
 def generate_rendered_html(
     initial_diff_data: dict[str, Any] | None = None,
+    is_enterprise: bool = False,
 ) -> str:
     """生成内嵌初始默认高危用例数据与按置信度排序的母本清单的独立完整 HTML。"""
     if initial_diff_data is not None:
         data_json = _safe_json_embed(initial_diff_data)
+    elif is_enterprise:
+        # 企业模式下严禁未认证直接泄露活动合同 Diff
+        data_json = "null"
     else:
         try:
             sample_file = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
@@ -110,31 +117,37 @@ def generate_rendered_html(
         except Exception:
             data_json = "null"
 
-    try:
-        catalog = get_ranked_templates_catalog(CURRENT_SESSION_FILE)
-        catalog_json = _safe_json_embed(catalog)
-    except Exception:
+    if is_enterprise:
+        # 企业模式下严禁向未认证用户泄露母本清单、参考母本库以及敏感真实案例元数据
         catalog_json = "[]"
-
-    try:
-        ref_catalog = get_ref_templates_catalog()
-        ref_json = _safe_json_embed(ref_catalog)
-    except Exception:
         ref_json = "[]"
-
-    try:
-        mgr = get_material_manager()
-        stats = mgr.get_stats()
-        initial_cases = mgr.search_cases(
-            category="ALL", has_word_only=True, page=1, page_size=20
-        )
-        material_data = {
-            "stats": stats,
-            "initial_cases": initial_cases,
-        }
-        material_json = _safe_json_embed(material_data)
-    except Exception:
         material_json = "{}"
+    else:
+        try:
+            catalog = get_ranked_templates_catalog(CURRENT_SESSION_FILE)
+            catalog_json = _safe_json_embed(catalog)
+        except Exception:
+            catalog_json = "[]"
+
+        try:
+            ref_catalog = get_ref_templates_catalog()
+            ref_json = _safe_json_embed(ref_catalog)
+        except Exception:
+            ref_json = "[]"
+
+        try:
+            mgr = get_material_manager()
+            stats = mgr.get_stats()
+            initial_cases = mgr.search_cases(
+                category="ALL", has_word_only=True, page=1, page_size=20
+            )
+            material_data = {
+                "stats": stats,
+                "initial_cases": initial_cases,
+            }
+            material_json = _safe_json_embed(material_data)
+        except Exception:
+            material_json = "{}"
 
     html = HTML_TEMPLATE.replace("__INITIAL_DATA_PLACEHOLDER__", data_json)
     html = html.replace("__ALL_TEMPLATES_PLACEHOLDER__", catalog_json)
@@ -163,12 +176,41 @@ def export_standalone_html() -> None:
             pass
 
 
+WEB_ROUTE_ROLES: dict[str, str] = {
+    "GET /api/templates/list": ROLE_VIEWER,
+    "GET /api/diff/agent_stream": ROLE_VIEWER,
+    "GET /api/diff/agent_status": ROLE_VIEWER,
+    "GET /api/ref_templates/catalog": ROLE_VIEWER,
+    "GET /api/materials/stats": ROLE_VIEWER,
+    "GET /api/materials/cases": ROLE_VIEWER,
+    "GET /api/materials/case_detail": ROLE_VIEWER,
+    "GET /api/diff/sample": ROLE_REVIEWER,
+    "POST /api/templates/reload": ROLE_ADMIN,
+    "POST /api/diff/switch-template": ROLE_REVIEWER,
+    "POST /api/diff/prioritize_card": ROLE_REVIEWER,
+    "POST /api/diff/toggle_pause": ROLE_REVIEWER,
+    "POST /api/diff/rerun_review": ROLE_REVIEWER,
+    "POST /api/diff/retry_card": ROLE_REVIEWER,
+    "POST /api/diff/skip_card": ROLE_REVIEWER,
+    "POST /api/diff/reset_circuit": ROLE_ADMIN,
+    "POST /api/diff/feedback": ROLE_REVIEWER,
+    "POST /api/diff/export_training_data": ROLE_ADMIN,
+    "POST /api/diff/cancel": ROLE_REVIEWER,
+    "POST /api/diff/human_decision": ROLE_REVIEWER,
+    "POST /api/diff/upload": ROLE_REVIEWER,
+    "POST /api/materials/load_contract": ROLE_REVIEWER,
+    "POST /api/ref_templates/load": ROLE_REVIEWER,
+}
+
+
 class DiffVisualizerHandler(BaseHTTPRequestHandler):
     """处理前端页面与比对 API 请求（具备多会话/多租户隔离与安全防护）。"""
 
     protocol_version = "HTTP/1.1"
+    _cached_raw_body: bytes | None = None
 
     def handle_one_request(self) -> None:
+        self._cached_raw_body = None
         try:
             super().handle_one_request()
         except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
@@ -209,84 +251,82 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _get_request_identity(self) -> tuple[str, str, str]:
-        """从 Query 参数或 Header 安全提取并校验会话标识、租户标识与用户标识。"""
-        # 1. 跨站写保护（CSRF / Origin 防护）
-        if self.command in ("POST", "PUT", "DELETE", "PATCH"):
-            origin = self.headers.get("Origin", "")
-            if origin:
-                parsed_orig = urllib.parse.urlparse(origin)
-                h = (parsed_orig.hostname or "").lower()
-                allowed_hosts = {"127.0.0.1", "localhost", "::1", "testserver"}
-                custom_allowed = os.environ.get("CONTRACT_WEB_ALLOWED_HOSTS", "").split(
-                    ","
-                )
-                for ca in custom_allowed:
-                    if ca.strip():
-                        allowed_hosts.add(ca.strip().lower())
-                if h not in allowed_hosts:
-                    raise PermissionError(f"跨站请求伪造被拦截: 非受信 Origin {origin}")
+    def get_request_body(self) -> bytes:
+        """安全获取已由认证层单次读取并完成哈希校验的请求正文原始字节。"""
+        if getattr(self, "_cached_raw_body", None) is not None:
+            return self._cached_raw_body or b""
+        cl_str = self.headers.get("content-length", "").strip()
+        if cl_str:
+            try:
+                cl = int(cl_str)
+                if cl < 0 or cl > 50 * 1024 * 1024:
+                    self._cached_raw_body = b""
+                else:
+                    self._cached_raw_body = self.rfile.read(cl)
+            except Exception:
+                self._cached_raw_body = b""
+        else:
+            self._cached_raw_body = b""
+        return self._cached_raw_body
 
+    _storage_provider: Any = None
+
+    @classmethod
+    def set_storage_provider(cls, provider: Any) -> None:
+        """显式注入受信任 Storage 实例或 Storage Provider。"""
+        cls._storage_provider = provider
+
+    @classmethod
+    def get_storage(cls) -> Any:
+        """安全解析并获取当前绑定的受信任 Storage 实例。"""
+        prov = cls._storage_provider
+        if callable(prov):
+            try:
+                return prov()
+            except Exception:
+                return None
+        return prov
+
+    def get_request_principal(self) -> Principal | None:
+        return getattr(self, "_principal", None)
+
+    def _get_request_identity(self) -> tuple[str, str, str]:
+        """从 Query 参数或 Header 安全提取并校验会话标识、租户标识与用户标识（支持企业模式强验签与 RBAC）。"""
         parsed = urllib.parse.urlparse(self.path)
         qs = urllib.parse.parse_qs(parsed.query)
 
         session_id = (
             qs.get("session_id", [""])[0]
-            or self.headers.get("X-Session-ID")
-            or "default_session"
+            or self.headers.get("X-Session-ID", "").strip()
         )
+        if not session_id:
+            session_id = "default_session"
 
-        is_enterprise = os.environ.get(
-            "DIFF_WEB_MODE", ""
-        ).upper() == "ENTERPRISE" or bool(os.environ.get("CONTRACT_KB_AUTH_SHARED_KEY"))
+        raw_body = self.get_request_body()
 
-        if is_enterprise:
-            user = self.headers.get("X-User", "").strip()
-            roles_raw = self.headers.get("X-Roles", "").strip()
-            tenant = self.headers.get("X-Tenant", "").strip() or "default"
-            sig = self.headers.get("X-Auth-Signature", "").strip()
-            ts = self.headers.get("X-Auth-Timestamp", "").strip()
-            nonce = self.headers.get("X-Auth-Nonce", "").strip()
-            body_sha = (
-                self.headers.get("X-Content-SHA256", "").strip() or EMPTY_BODY_SHA256
-            )
-
-            if not user or not roles_raw or not sig or not ts or not nonce:
-                raise PermissionError(
-                    "企业模式下缺少受信任认证签名 Header (X-User, X-Roles, X-Auth-Signature, X-Auth-Timestamp, X-Auth-Nonce)"
-                )
-
-            key = os.environ.get("CONTRACT_KB_AUTH_SHARED_KEY", "")
-            if key:
-                expected_sig = compute_auth_signature_v2(
-                    key=key,
-                    method=self.command,
-                    path=parsed.path,
-                    query=parsed.query,
-                    user=user,
-                    roles=roles_raw,
-                    tenant=tenant,
-                    timestamp=ts,
-                    nonce=nonce,
-                    body_sha256=body_sha,
-                )
-                if not hmac.compare_digest(sig, expected_sig):
-                    raise PermissionError("认证签名校验失败")
-
-            return session_id, tenant, user
-
-        # 单机本地开发模式 (LOCAL_DEV)
-        # 禁止客户端自报未经签名的非 default 外部租户
-        declared_tenant = (
-            qs.get("tenant_id", [""])[0] or self.headers.get("X-Tenant-ID", "").strip()
+        st = self.get_storage()
+        principal = authenticate_web_request(
+            method=self.command,
+            path=parsed.path,
+            query=parsed.query,
+            headers=dict(self.headers),
+            raw_body=raw_body,
+            storage=st,
         )
-        if declared_tenant and declared_tenant != "default":
+        self._principal = principal
+
+        # 集中式 RBAC 路由权限核验
+        route_key = f"{self.command.upper()} {parsed.path}"
+        req_role = WEB_ROUTE_ROLES.get(
+            route_key,
+            ROLE_ADMIN if parsed.path.startswith("/api/") else ROLE_VIEWER,
+        )
+        if not principal.has_role(req_role):
             raise PermissionError(
-                f"单机本地模式禁止未经认证访问或伪造非 default 租户身份: {declared_tenant}"
+                f"权限不足: 路由 {route_key} 需要 {req_role} 角色，当前用户角色为 {principal.roles}"
             )
 
-        user_id = self.headers.get("X-User-ID", "").strip() or "local_dev_user"
-        return session_id, "default", user_id
+        return session_id, principal.tenant_id, principal.user_id
 
     def do_GET(self) -> None:
         try:
@@ -298,7 +338,12 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
 
         if parsed.path in ("/", "/index.html"):
-            html = generate_rendered_html()
+            is_ent = os.environ.get(
+                "DIFF_WEB_MODE", ""
+            ).upper() == "ENTERPRISE" or bool(
+                os.environ.get("CONTRACT_KB_AUTH_SHARED_KEY")
+            )
+            html = generate_rendered_html(is_enterprise=is_ent)
             body = html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -371,6 +416,8 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             handle_post_reset_circuit(self)
         elif parsed.path == "/api/diff/feedback":
             handle_post_feedback(self)
+        elif parsed.path == "/api/diff/feedback/approve":
+            handle_post_approve_feedback(self)
         elif parsed.path == "/api/diff/export_training_data":
             handle_post_export_training_data(self)
         elif parsed.path == "/api/diff/cancel":
@@ -388,8 +435,28 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
 
-def create_web_server(host: str = "127.0.0.1", port: int = 8089) -> ThreadingHTTPServer:
-    """创建多线程合同对比可视化 Web 服务实例。"""
+def create_web_server(
+    host: str = "127.0.0.1",
+    port: int = 8089,
+    storage: Any = None,
+) -> ThreadingHTTPServer:
+    """创建多线程合同对比可视化 Web 服务实例（非本机回环必须启用企业认证模式并配置共享密钥）。"""
+    is_loopback = host in ("127.0.0.1", "localhost", "::1")
+    if not is_loopback:
+        is_enterprise = os.environ.get(
+            "DIFF_WEB_MODE", ""
+        ).upper() == "ENTERPRISE" or bool(os.environ.get("CONTRACT_KB_AUTH_SHARED_KEY"))
+        shared_key = os.environ.get("CONTRACT_KB_AUTH_SHARED_KEY", "").strip()
+        if not is_enterprise or not shared_key:
+            raise ValueError(
+                f"安全阻断: 尝试在无认证/未配置共享密钥的单机模式下监听非本机地址 {host}。"
+                "严禁将未受认证保护的服务暴露给局域网或公网，请启用 DIFF_WEB_MODE=ENTERPRISE 并配置 CONTRACT_KB_AUTH_SHARED_KEY。"
+            )
+
+    if storage is not None:
+        DiffVisualizerHandler.set_storage_provider(storage)
+        get_agent_manager().set_storage_provider(storage)
+
     return ThreadingHTTPServer((host, port), DiffVisualizerHandler)
 
 
@@ -397,6 +464,16 @@ def main(argv: list[str] | None = None) -> None:
     try:
         sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
         sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+    except Exception:
+        pass
+
+    # 引导期显式初始化受信任持久化存储
+    try:
+        from contract_kb.storage import create_storage
+
+        st = create_storage()
+        DiffVisualizerHandler.set_storage_provider(st)
+        get_agent_manager().set_storage_provider(st)
     except Exception:
         pass
 

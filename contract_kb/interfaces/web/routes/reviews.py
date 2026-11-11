@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 import json
 from contract_kb.domain.models.review_identity import HumanReviewStatus
@@ -20,9 +21,28 @@ from ..services.session_files import (
 
 def handle_post_rerun_review(handler: Any) -> None:
     session_id, tenant_id, user_id = handler._get_request_identity()
+    principal = getattr(handler, "get_request_principal", lambda: None)()
+    is_admin = principal.has_role("admin") if principal else False
+    storage = getattr(handler, "storage", None) or getattr(
+        getattr(handler, "server", None), "storage", None
+    )
     try:
         s_file = get_session_file(session_id, tenant_id=tenant_id)
         if not s_file.exists():
+            is_enterprise = os.environ.get(
+                "DIFF_WEB_MODE", ""
+            ).upper() == "ENTERPRISE" or bool(
+                os.environ.get("CONTRACT_KB_AUTH_SHARED_KEY")
+            )
+            if is_enterprise:
+                handler._send_json(
+                    404,
+                    {
+                        "error": "session_file_not_found",
+                        "message": "当前会话无待审合同文件，严禁回退他租户文档",
+                    },
+                )
+                return
             s_file = CURRENT_SESSION_FILE
         if s_file.exists():
             meta = get_session_meta(session_id, tenant_id=tenant_id)
@@ -40,16 +60,21 @@ def handle_post_rerun_review(handler: Any) -> None:
                 session_id=session_id,
                 tenant_id=tenant_id,
                 user_id=user_id,
+                storage=storage,
+                is_admin=is_admin,
             )
         handler._send_json(200, {"success": True})
+    except PermissionError as e:
+        handler._send_json(403, {"error": str(e)})
     except Exception as e:
         handler._send_json(500, {"error": str(e)})
 
 
 def handle_post_human_decision(handler: Any) -> None:
     session_id, tenant_id, user_id = handler._get_request_identity()
-    length = int(handler.headers.get("content-length", 0))
-    raw_body = handler.rfile.read(length) if length > 0 else b"{}"
+    principal = getattr(handler, "get_request_principal", lambda: None)()
+    is_admin = principal.has_role("admin") if principal else False
+    raw_body = handler.get_request_body()
     try:
         data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         ann_id = str(data.get("id") or data.get("annotation_id") or "")
@@ -57,7 +82,7 @@ def handle_post_human_decision(handler: Any) -> None:
         modified_advice = str(data.get("modified_advice") or "")
 
         sess = get_agent_manager().get_session(
-            session_id, tenant_id=tenant_id, user_id=user_id
+            session_id, tenant_id=tenant_id, user_id=user_id, is_admin=is_admin
         )
         if not sess:
             handler._send_json(404, {"error": "session_not_found"})

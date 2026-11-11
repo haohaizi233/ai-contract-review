@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -104,16 +105,16 @@ def test_enterprise_mode_signature_verification(web_test_server, monkeypatch):
         urllib.request.urlopen(req_no_sig)
     assert exc_info.value.code == 403
 
-    # 2. 携带有效 HMAC 签名的请求成功放行
+    # 2a. 验证过期时间戳被拦截 (Fail-Closed)
     user = "enterprise_user_1"
     roles = "reviewer"
     tenant = "corp_tenant_alpha"
-    nonce = "1234567890abcdef"
-    ts = "1700000000.0"
     path = "/api/diff/agent_status"
     query = "session_id=sess_ent"
+    ts_expired = "1700000000.0"
+    nonce_exp = "1234567890abcdef"
 
-    sig = compute_auth_signature_v2(
+    sig_expired = compute_auth_signature_v2(
         key=shared_key,
         method="GET",
         path=path,
@@ -121,8 +122,38 @@ def test_enterprise_mode_signature_verification(web_test_server, monkeypatch):
         user=user,
         roles=roles,
         tenant=tenant,
-        timestamp=ts,
-        nonce=nonce,
+        timestamp=ts_expired,
+        nonce=nonce_exp,
+        body_sha256="",
+    )
+    req_expired = urllib.request.Request(
+        f"{web_test_server}{path}?{query}",
+        headers={
+            "X-User": user,
+            "X-Roles": roles,
+            "X-Tenant": tenant,
+            "X-Auth-Signature": sig_expired,
+            "X-Auth-Timestamp": ts_expired,
+            "X-Auth-Nonce": nonce_exp,
+        },
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc_exp:
+        urllib.request.urlopen(req_expired)
+    assert exc_exp.value.code == 403
+
+    # 2b. 携带新鲜有效时间戳的有效 HMAC 签名请求成功放行
+    ts_fresh = str(time.time())
+    nonce_fresh = "fresh_nonce_98765"
+    sig_fresh = compute_auth_signature_v2(
+        key=shared_key,
+        method="GET",
+        path=path,
+        query=query,
+        user=user,
+        roles=roles,
+        tenant=tenant,
+        timestamp=ts_fresh,
+        nonce=nonce_fresh,
         body_sha256="",
     )
 
@@ -132,9 +163,9 @@ def test_enterprise_mode_signature_verification(web_test_server, monkeypatch):
             "X-User": user,
             "X-Roles": roles,
             "X-Tenant": tenant,
-            "X-Auth-Signature": sig,
-            "X-Auth-Timestamp": ts,
-            "X-Auth-Nonce": nonce,
+            "X-Auth-Signature": sig_fresh,
+            "X-Auth-Timestamp": ts_fresh,
+            "X-Auth-Nonce": nonce_fresh,
         },
     )
     with urllib.request.urlopen(req_valid) as resp:

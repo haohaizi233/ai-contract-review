@@ -12,10 +12,15 @@ from contract_kb.application.agents.review_sessions import get_agent_manager
 
 def handle_get_agent_stream(handler: Any) -> None:
     session_id, tenant_id, user_id = handler._get_request_identity()
+    principal = getattr(handler, "get_request_principal", lambda: None)()
+    is_admin = principal.has_role("admin") if principal else False
     mgr = get_agent_manager()
     try:
         sub_q = mgr.subscribe_events(
-            session_id=session_id, tenant_id=tenant_id, user_id=user_id
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            is_admin=is_admin,
         )
     except PermissionError as e:
         handler._send_json(403, {"error": str(e)})
@@ -48,14 +53,25 @@ def handle_get_agent_stream(handler: Any) -> None:
         pass
     finally:
         handler.close_connection = True
-        mgr.unsubscribe_events(sub_q, session_id=session_id)
+        mgr.unsubscribe_events(
+            sub_q,
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            is_admin=is_admin,
+        )
 
 
 def handle_get_agent_status(handler: Any) -> None:
     session_id, tenant_id, user_id = handler._get_request_identity()
+    principal = getattr(handler, "get_request_principal", lambda: None)()
+    is_admin = principal.has_role("admin") if principal else False
     try:
         snap = get_agent_manager().get_current_snapshot(
-            session_id=session_id, tenant_id=tenant_id, user_id=user_id
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            is_admin=is_admin,
         )
         handler._send_json(200, snap)
     except PermissionError as e:
@@ -66,74 +82,112 @@ def handle_get_agent_status(handler: Any) -> None:
 
 def handle_post_prioritize_card(handler: Any) -> None:
     session_id, tenant_id, user_id = handler._get_request_identity()
-    length = int(handler.headers.get("content-length", 0))
-    raw_body = handler.rfile.read(length) if length > 0 else b"{}"
+    principal = getattr(handler, "get_request_principal", lambda: None)()
+    is_admin = principal.has_role("admin") if principal else False
+    raw_body = handler.get_request_body()
     try:
         data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         ann_id = data.get("id") or ""
         ok = get_agent_manager().prioritize_card(
-            ann_id, session_id=session_id, tenant_id=tenant_id, user_id=user_id
+            ann_id,
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            is_admin=is_admin,
         )
         handler._send_json(200, {"success": ok})
+    except PermissionError as e:
+        handler._send_json(403, {"error": str(e)})
     except Exception as e:
         handler._send_json(500, {"error": str(e)})
 
 
 def handle_post_toggle_pause(handler: Any) -> None:
     session_id, tenant_id, user_id = handler._get_request_identity()
+    principal = getattr(handler, "get_request_principal", lambda: None)()
+    is_admin = principal.has_role("admin") if principal else False
     try:
         cur_status = get_agent_manager().toggle_pause(
-            session_id=session_id, tenant_id=tenant_id, user_id=user_id
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            is_admin=is_admin,
         )
         handler._send_json(200, {"status": cur_status})
+    except PermissionError as e:
+        handler._send_json(403, {"error": str(e)})
     except Exception as e:
         handler._send_json(500, {"error": str(e)})
 
 
 def handle_post_retry_card(handler: Any) -> None:
     session_id, tenant_id, user_id = handler._get_request_identity()
-    length = int(handler.headers.get("content-length", 0))
-    raw_body = handler.rfile.read(length) if length > 0 else b"{}"
+    principal = getattr(handler, "get_request_principal", lambda: None)()
+    is_admin = principal.has_role("admin") if principal else False
+    raw_body = handler.get_request_body()
     try:
         data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         ann_id = data.get("id") or ""
         ok = get_agent_manager().retry_card(
-            ann_id, session_id=session_id, tenant_id=tenant_id, user_id=user_id
+            ann_id,
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            is_admin=is_admin,
         )
         handler._send_json(200, {"success": ok})
+    except PermissionError as e:
+        handler._send_json(403, {"error": str(e)})
     except Exception as e:
         handler._send_json(500, {"error": str(e)})
 
 
 def handle_post_skip_card(handler: Any) -> None:
     session_id, tenant_id, user_id = handler._get_request_identity()
-    length = int(handler.headers.get("content-length", 0))
-    raw_body = handler.rfile.read(length) if length > 0 else b"{}"
+    principal = getattr(handler, "get_request_principal", lambda: None)()
+    is_admin = principal.has_role("admin") if principal else False
+    raw_body = handler.get_request_body()
     try:
         data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         ann_id = data.get("id") or ""
         ok = get_agent_manager().skip_card(
-            ann_id, session_id=session_id, tenant_id=tenant_id, user_id=user_id
+            ann_id,
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            is_admin=is_admin,
         )
         handler._send_json(200, {"success": ok})
+    except PermissionError as e:
+        handler._send_json(403, {"error": str(e)})
     except Exception as e:
         handler._send_json(500, {"error": str(e)})
 
 
 def handle_post_reset_circuit(handler: Any) -> None:
+    handler._get_request_identity()
     try:
         status = get_agent_manager().reset_circuit_breaker()
         handler._send_json(200, {"success": True, "circuit": status})
+    except PermissionError as e:
+        handler._send_json(403, {"error": str(e)})
     except Exception as e:
         handler._send_json(500, {"error": str(e)})
 
 
 def handle_post_cancel(handler: Any) -> None:
     session_id, tenant_id, user_id = handler._get_request_identity()
+    principal = getattr(handler, "get_request_principal", lambda: None)()
+    is_admin = principal.has_role("admin") if principal else False
     try:
         ok = get_agent_manager().cancel_task(
-            session_id=session_id, tenant_id=tenant_id, user_id=user_id
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            is_admin=is_admin,
         )
         handler._send_json(200, {"success": ok})
+    except PermissionError as e:
+        handler._send_json(403, {"error": str(e)})
     except Exception as e:
         handler._send_json(500, {"error": str(e)})

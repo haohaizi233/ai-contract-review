@@ -28,19 +28,33 @@ from contract_kb.domain.models.review_identity import ReviewExecutionFingerprint
 
 CHECKPOINT_DIR = config.DATA_DIR / "agent_checkpoints"
 
-CHECKPOINT_SECRET = os.environ.get(
-    "CONTRACT_KB_CHECKPOINT_KEY", "contract_kb_checkpoint_integrity_secret_key_v14"
-)
+
+def get_checkpoint_secret() -> str:
+    """获取检查点防篡改 HMAC 密钥（生产环境下缺失必须 Fail-Closed 阻断）。"""
+    key = os.environ.get("CONTRACT_KB_CHECKPOINT_KEY", "").strip()
+    is_prod = os.environ.get("CONTRACT_KB_ENV", "").lower() == "production"
+    if is_prod:
+        if not key:
+            raise RuntimeError(
+                "生产环境未配置 CONTRACT_KB_CHECKPOINT_KEY 密钥，严禁以不安全默认密钥运行"
+            )
+        return key
+    if key:
+        return key
+    return "contract_kb_checkpoint_integrity_secret_key_v14"
 
 
 def _compute_checkpoint_signature(
-    fingerprint_hash: str, cards: list[dict[str, Any]]
+    fingerprint_hash: str,
+    cards: list[dict[str, Any]],
+    secret: str | None = None,
 ) -> str:
     """计算检查点防篡改内容指纹签名（HMAC-SHA256 强认证完整性保护）。"""
+    sec = secret or get_checkpoint_secret()
     raw_cards = json.dumps(cards, sort_keys=True, ensure_ascii=False)
     combined = f"{fingerprint_hash}||{raw_cards}"
     return hmac.new(
-        CHECKPOINT_SECRET.encode("utf-8"),
+        sec.encode("utf-8"),
         combined.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
@@ -94,9 +108,12 @@ class CheckpointStorage:
         completed_cards: list[dict[str, Any]],
     ) -> Path:
         """原子落盘保存审查检查点（.tmp -> replace 原子写入）。"""
+        secret = get_checkpoint_secret()
         target_path = self._get_checkpoint_path(fingerprint)
         f_hash = fingerprint.compute_hash()
-        signature = _compute_checkpoint_signature(f_hash, completed_cards)
+        signature = _compute_checkpoint_signature(
+            f_hash, completed_cards, secret=secret
+        )
 
         payload = {
             "version": "13R2",
@@ -168,9 +185,10 @@ class CheckpointStorage:
             return CheckpointVerificationResult(False, "ANNOTATION_ITEMS_CHANGED")
 
         # 7. 防篡改签名完整性核验
+        secret = get_checkpoint_secret()
         completed_cards = content.get("completed_cards") or []
         expected_sig = _compute_checkpoint_signature(
-            current_fingerprint.compute_hash(), completed_cards
+            current_fingerprint.compute_hash(), completed_cards, secret=secret
         )
         actual_sig = str(content.get("signature", "")).strip()
         if not hmac.compare_digest(actual_sig, expected_sig):

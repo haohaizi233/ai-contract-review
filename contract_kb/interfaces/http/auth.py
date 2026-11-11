@@ -12,13 +12,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import hmac
 import os
 import sys
+import threading
 import time
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 import urllib.parse
 
 from fastapi import HTTPException, Request
@@ -81,11 +82,270 @@ class Principal:
     user_id: str
     roles: list[str]
     tenant_id: str = "default"
+    auth_method: str = "TRUSTED_HEADER"
+    authenticated_at: float = field(default_factory=time.time)
+    request_id: str = ""
 
     def has_role(self, required: str) -> bool:
         return any(
             ROLE_RANK.get(r, 0) >= ROLE_RANK.get(required, 99) for r in self.roles
         )
+
+
+@runtime_checkable
+class NonceStoreProtocol(Protocol):
+    """防重放 Nonce 存储协议接口。"""
+
+    def record_and_check(
+        self,
+        nonce: str,
+        tenant: str,
+        user: str,
+        expires_at: float,
+        storage: Any = None,
+    ) -> bool: ...
+
+
+class InMemoryAndDbNonceStore:
+    """防重放 Nonce 内存与数据库联合存储服务（原子消费、过期清理与 Fail-Closed 降级）。"""
+
+    def __init__(self, storage: Any = None) -> None:
+        self._lock = threading.Lock()
+        self._seen: dict[str, float] = {}
+        self._storage = storage
+
+    def set_storage(self, storage: Any) -> None:
+        """显式注入受信任存储实例或存储工厂。"""
+        self._storage = storage
+
+    def get_storage(self) -> Any:
+        """获取当前配置的存储实例。"""
+        st = self._storage
+        if (
+            st is not None
+            and not hasattr(st, "record_and_check_nonce")
+            and callable(st)
+        ):
+            return st()
+        return st
+
+    def record_and_check(
+        self,
+        nonce: str,
+        tenant: str,
+        user: str,
+        expires_at: float,
+        storage: Any = None,
+    ) -> bool:
+        now = time.time()
+        with self._lock:
+            self._seen = {k: exp for k, exp in self._seen.items() if exp > now}
+            key = f"{tenant}:{user}:{nonce}"
+            if key in self._seen:
+                return False
+            self._seen[key] = expires_at
+
+        # 优先使用显式传入的 storage，其次使用自身持有的 storage
+        st = storage
+        if (
+            st is not None
+            and not hasattr(st, "record_and_check_nonce")
+            and callable(st)
+        ):
+            st = st()
+        if st is None:
+            st = self.get_storage()
+
+        # 若仍为 None 且存在默认存储工厂，尝试显式创建，严禁从 sys.modules 隐式猜测
+        if st is None:
+            try:
+                from contract_kb.storage import create_storage
+
+                st = create_storage()
+                self._storage = st
+            except Exception:
+                st = None
+
+        if st is not None and hasattr(st, "record_and_check_nonce"):
+            try:
+                db_ok = st.record_and_check_nonce(nonce, tenant, user, expires_at)
+                if not db_ok:
+                    return False
+            except Exception as e:
+                # 数据库异常 fail-closed：严禁吞异常放行
+                raise PermissionError(
+                    f"持久化 Nonce 存储校验出现异常，安全降级阻断: {e}"
+                ) from e
+        elif os.environ.get("CONTRACT_KB_ENV") == "production":
+            raise PermissionError("生产环境下持久化 Nonce 存储不可用或未显式初始化")
+
+        return True
+
+
+_GLOBAL_WEB_NONCE_STORE: NonceStoreProtocol = InMemoryAndDbNonceStore()
+
+
+def set_global_web_nonce_store(store: NonceStoreProtocol) -> None:
+    """全局设置或替换 Web 防重放 Nonce 存储服务。"""
+    global _GLOBAL_WEB_NONCE_STORE
+    _GLOBAL_WEB_NONCE_STORE = store
+
+
+def get_global_web_nonce_store() -> NonceStoreProtocol:
+    """获取当前全局 Web 防重放 Nonce 存储服务。"""
+    return _GLOBAL_WEB_NONCE_STORE
+
+
+def _get_hdr(headers: Any, name: str) -> str:
+    """不区分大小写安全提取 HTTP Header。"""
+    if hasattr(headers, "get"):
+        v = headers.get(name)
+        if v is not None:
+            return str(v).strip()
+    name_lower = name.lower()
+    if hasattr(headers, "items"):
+        for k, v in headers.items():
+            if str(k).lower() == name_lower:
+                return str(v).strip()
+    return ""
+
+
+def authenticate_web_request(
+    *,
+    method: str,
+    path: str,
+    query: str,
+    headers: Any,
+    raw_body: bytes,
+    storage: Any = None,
+) -> Principal:
+    """Web 工作台统一入口请求认证、完整性校验与防重放门禁。
+
+    支持：
+    1. Origin / CSRF 防护；
+    2. 企业模式下缺少密钥强制 Fail-Closed 阻断；
+    3. 时间戳过期与未来容差核验；
+    4. Nonce 消费防重放；
+    5. 请求正文 SHA-256 与 Header 一致性强校验；
+    6. 规范化 HMAC-SHA256 签名比对；
+    7. 单机开发模式本地回环约束与非 default 租户防冒领。
+    """
+    # 1. 跨站写保护（CSRF / Origin 防护）
+    if method.upper() in ("POST", "PUT", "DELETE", "PATCH"):
+        origin = _get_hdr(headers, "Origin")
+        if origin:
+            parsed_orig = urllib.parse.urlparse(origin)
+            h = (parsed_orig.hostname or "").lower()
+            allowed_hosts = {"127.0.0.1", "localhost", "::1", "testserver"}
+            custom_allowed = os.environ.get("CONTRACT_WEB_ALLOWED_HOSTS", "").split(",")
+            for ca in custom_allowed:
+                if ca.strip():
+                    allowed_hosts.add(ca.strip().lower())
+            if h not in allowed_hosts:
+                raise PermissionError(f"跨站请求伪造被拦截: 非受信 Origin {origin}")
+
+    is_enterprise = os.environ.get("DIFF_WEB_MODE", "").upper() == "ENTERPRISE" or bool(
+        os.environ.get("CONTRACT_KB_AUTH_SHARED_KEY")
+    )
+
+    if is_enterprise:
+        key = os.environ.get("CONTRACT_KB_AUTH_SHARED_KEY", "").strip()
+        if not key:
+            raise PermissionError(
+                "企业模式未配置受信任共享密钥 (CONTRACT_KB_AUTH_SHARED_KEY)，服务已安全降级阻断"
+            )
+
+        user = _get_hdr(headers, "X-User")
+        roles_raw = _get_hdr(headers, "X-Roles")
+        tenant = _get_hdr(headers, "X-Tenant") or "default"
+        sig = _get_hdr(headers, "X-Auth-Signature")
+        ts_raw = _get_hdr(headers, "X-Auth-Timestamp")
+        nonce = _get_hdr(headers, "X-Auth-Nonce")
+        header_body_sha = _get_hdr(headers, "X-Content-SHA256") or EMPTY_BODY_SHA256
+
+        if not user or not roles_raw or not sig or not ts_raw or not nonce:
+            raise PermissionError(
+                "企业模式下缺少受信任认证签名 Header (X-User, X-Roles, X-Auth-Signature, X-Auth-Timestamp, X-Auth-Nonce)"
+            )
+
+        try:
+            ts_val = float(ts_raw)
+        except (ValueError, TypeError) as exc:
+            raise PermissionError(f"认证时间戳格式非法: {ts_raw}") from exc
+
+        max_skew = int(
+            os.environ.get(
+                "CONTRACT_KB_AUTH_MAX_SKEW_SECONDS",
+                str(config.AUTH_MAX_SKEW_SECONDS),
+            )
+        )
+        if abs(time.time() - ts_val) > max_skew:
+            raise PermissionError("认证时间戳超出防重放窗口")
+
+        if len(nonce) < 8:
+            raise PermissionError("缺少有效防重放 Nonce（需至少 8 字符）")
+
+        # (1) 真实请求正文 SHA-256 完整性核验
+        real_body_sha = hashlib.sha256(raw_body).hexdigest()
+        if header_body_sha.lower() != real_body_sha.lower():
+            raise PermissionError(
+                f"正文摘要校验失败（X-Content-SHA256 与真实请求正文不匹配）：header={header_body_sha}, actual={real_body_sha}"
+            )
+
+        # (2) 规范化 HMAC-SHA256 签名比对
+        expected_sig = compute_auth_signature_v2(
+            key=key,
+            method=method,
+            path=path,
+            query=query,
+            user=user,
+            roles=roles_raw,
+            tenant=tenant,
+            timestamp=ts_raw,
+            nonce=nonce,
+            body_sha256=header_body_sha,
+        )
+        if not hmac.compare_digest(sig, expected_sig):
+            raise PermissionError("认证签名校验失败")
+
+        # (3) Nonce 防重放核验与消费
+        ok = _GLOBAL_WEB_NONCE_STORE.record_and_check(
+            nonce=nonce,
+            tenant=tenant,
+            user=user,
+            expires_at=float(ts_val) + max_skew,
+            storage=storage,
+        )
+        if not ok:
+            raise PermissionError("认证请求重放（Nonce 已被使用）")
+
+        roles = [r.strip() for r in roles_raw.split(",") if r.strip()]
+        return Principal(
+            user_id=user,
+            roles=roles,
+            tenant_id=tenant,
+            auth_method="HMAC_V2",
+            authenticated_at=ts_val,
+        )
+
+    # 单机本地开发模式 (LOCAL_DEV)
+    declared_tenant = _get_hdr(headers, "X-Tenant-ID")
+    if not declared_tenant and query:
+        qs = urllib.parse.parse_qs(query)
+        declared_tenant = qs.get("tenant_id", [""])[0].strip()
+
+    if declared_tenant and declared_tenant != "default":
+        raise PermissionError(
+            f"单机本地模式禁止未经认证访问或伪造非 default 租户身份: {declared_tenant}"
+        )
+
+    user_id = _get_hdr(headers, "X-User-ID") or "local_dev_user"
+    return Principal(
+        user_id=user_id,
+        roles=[ROLE_ADMIN, ROLE_REVIEWER, ROLE_VIEWER],
+        tenant_id="default",
+        auth_method="LOCAL_DEV",
+    )
 
 
 EMPTY_BODY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

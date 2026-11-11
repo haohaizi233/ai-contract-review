@@ -37,13 +37,14 @@ from contract_kb.application.workflow.budget import (
     BudgetLimitExceededError,
     TokenUsage,
 )
+from contract_kb.modules.retrieval.citation import CitationVerifier
 from contract_kb.domain.models.review_identity import (
     LegalAgentReviewResult,
     ReviewStatus,
 )
 from .knowledge_adapter import (
+    build_governed_evidence_bundle,
     retrieve_governed_rules,
-    retrieve_legal_rules,
 )
 from contract_kb.infrastructure.ai.llm_providers import (
     DATA_CLOSE,
@@ -258,10 +259,12 @@ class LegalReviewAgent:
     def build_high_precision_fallback(
         self,
         annotation: dict[str, Any],
-        error_msg: str,
+        error_msg: str = "规则引擎本地确定性研判",
         failure_code: str = "FALLBACK_RULE",
         source: str = "FALLBACK_RULE",
         elapsed_sec: float = 0.0,
+        tenant_id: str | None = "default",
+        storage: Any = None,
     ) -> dict[str, Any]:
         """从企业法务已审批红线知识底座生成确定性规则兜底研判（明确标记 AI 未完成）。"""
         ann_id = annotation.get("id", "ann-0")
@@ -270,8 +273,13 @@ class LegalReviewAgent:
             annotation.get("ai_analysis", "") or "待审合同条款与标准母本存在实质差异。"
         )
 
-        # 匹配已审批规则
-        governed_rules = retrieve_governed_rules(category, annotation.get("delta_type"))
+        # 匹配已审批规则（绑定当前租户与受控存储）
+        governed_rules = retrieve_governed_rules(
+            category,
+            annotation.get("delta_type"),
+            tenant_id=tenant_id or "default",
+            storage=storage,
+        )
         rule = governed_rules[0] if governed_rules else None
 
         if rule:
@@ -296,13 +304,32 @@ class LegalReviewAgent:
                 else "MEDIUM",
             )
             risk_label = annotation.get("risk_label", f"{title}偏离")
+
+            # 严格证据核验 (Citation Verification)
+            verifier = CitationVerifier()
+            ver_res = verifier.verify_rule_evidence(
+                storage=storage,
+                rule_item=rule,
+                expected_tenant_id=tenant_id,
+            )
             evidence_refs = [
                 {
+                    "source_type": (
+                        "APPROVED_RULE"
+                        if rule.approval_status == "APPROVED"
+                        else "STATIC_REFERENCE"
+                    ),
+                    "tenant_id": tenant_id,
                     "rule_id": rule.rule_id,
                     "rule_name": rule.name,
                     "revision": rule.revision,
                     "approval_status": rule.approval_status,
+                    "verification_status": (
+                        "VERIFIED" if ver_res.verified else ver_res.status
+                    ),
+                    "verification_failure_reasons": ver_res.failure_reasons,
                     "is_statutory": rule.is_statutory_mandate,
+                    "rule_description": desc,
                 }
             ]
         else:
@@ -311,12 +338,27 @@ class LegalReviewAgent:
                 "action_advice",
                 "【法务处置建议】请法务人员人工复核此项条款修改并评估商业风险。",
             )
-            risk_level = annotation.get("risk_level", "MEDIUM")
+            risk_level = annotation.get(
+                "risk_level",
+                "HIGH"
+                if category in ("LIABILITY", "DISPUTE_RESOLUTION", "CONFIDENTIALITY")
+                else "MEDIUM",
+            )
             risk_label = annotation.get("risk_label", "需法务人工复核")
             evidence_refs = []
 
         if not action_advice.startswith("【法务处置建议】"):
             action_advice = "【法务处置建议】" + action_advice
+
+        if failure_code == "KNOWLEDGE_UNAVAILABLE":
+            r_status = ReviewStatus.NEEDS_HUMAN_REVIEW.value
+            k_status = "KNOWLEDGE_UNAVAILABLE"
+        elif rule is None:
+            r_status = ReviewStatus.RULE_REVIEW_COMPLETED.value
+            k_status = "NO_MATCHING_RULE"
+        else:
+            r_status = ReviewStatus.RULE_REVIEW_COMPLETED.value
+            k_status = "KNOWLEDGE_AVAILABLE"
 
         result = {
             "id": ann_id,
@@ -325,7 +367,8 @@ class LegalReviewAgent:
             "ai_analysis": ai_analysis,
             "action_advice": action_advice,
             "evidence_references": evidence_refs,
-            "review_status": ReviewStatus.RULE_REVIEW_COMPLETED.value,
+            "review_status": r_status,
+            "knowledge_status": k_status,
             "requires_human_review": True,
             "provider": "RULE_ENGINE_FALLBACK",
             "model": "rule_v13",
@@ -344,6 +387,8 @@ class LegalReviewAgent:
         annotation: dict[str, Any],
         doc_context: dict[str, Any] | None = None,
         force_refresh: bool = False,
+        storage: Any = None,
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
         """对单个合同差异批注进行法务 Agent 深度智能研判（全链路受控与容灾保障）。"""
         ann_id = annotation.get("id", "ann-0")
@@ -360,8 +405,11 @@ class LegalReviewAgent:
         base_desc = annotation.get("ai_analysis", "")
 
         ctx = doc_context or {}
-        tenant_id = str(
-            ctx.get("tenant_id") or annotation.get("tenant_id") or "default"
+        eff_tenant_id = str(
+            tenant_id
+            or ctx.get("tenant_id")
+            or annotation.get("tenant_id")
+            or "default"
         )
         template_id = str(ctx.get("template_id") or annotation.get("template_id") or "")
         template_version = str(
@@ -371,13 +419,45 @@ class LegalReviewAgent:
             ctx.get("rule_set_version") or annotation.get("rule_set_version") or "v1"
         )
 
+        if storage is None and ctx.get("storage"):
+            storage = ctx.get("storage")
+        if storage is None:
+            storage = getattr(self, "storage", None)
+
+        # 0. 生产环境缺失 Storage 门禁检查 (Fail-Closed: 严禁在缺失 Storage 时运行非受控规则)
+        if (
+            os.environ.get("CONTRACT_KB_ENV", "").lower() == "production"
+            and storage is None
+        ):
+            return self.build_high_precision_fallback(
+                annotation=annotation,
+                error_msg="生产环境下未注入受信任知识库存储句柄 (KNOWLEDGE_UNAVAILABLE)，拒绝非权威规则",
+                failure_code="KNOWLEDGE_UNAVAILABLE",
+                source="STORAGE_UNAVAILABLE_GATE",
+                elapsed_sec=0.01,
+                tenant_id=eff_tenant_id,
+                storage=None,
+            )
+
+        # 1. 外部大模型外发授权检查（严格在缓存之前执行，禁止利用缓存绕过外发授权）
+        if not self.is_external_allowed():
+            return self.build_high_precision_fallback(
+                annotation=annotation,
+                error_msg="外部大模型外发调用未授权（需配置 CONTRACT_KB_ALLOW_EXTERNAL_LLM=1）",
+                failure_code="NOT_AUTHORIZED",
+                source="AUTHORIZATION_GATE",
+                elapsed_sec=0.01,
+                tenant_id=eff_tenant_id,
+                storage=storage,
+            )
+
         cache_key = self._cache_key(
             category=category,
             delta_type=delta_type,
             std_span=std_span,
             rev_span=rev_span,
             clause_title=clause_title,
-            tenant_id=tenant_id,
+            tenant_id=eff_tenant_id,
             template_id=template_id,
             template_version=template_version,
             rule_version=rule_version,
@@ -386,20 +466,108 @@ class LegalReviewAgent:
         if not force_refresh:
             with self._cache_lock:
                 if cache_key in self._cache:
-                    res = dict(self._cache[cache_key])
-                    res["id"] = ann_id
-                    res["from_cache"] = True
-                    return res
+                    cached_res = dict(self._cache[cache_key])
+                    # 缓存有效性复核：核验缓存所绑定的证据规则当前是否依然处于 APPROVED 状态且未变更
+                    cached_refs = cached_res.get("evidence_references") or []
+                    cache_valid = True
+                    if cached_refs:
+                        if storage is None or not hasattr(storage, "get_rules"):
+                            cache_valid = False
+                        else:
+                            try:
+                                active_rules = storage.get_rules(
+                                    tenant_id=eff_tenant_id, status="APPROVED"
+                                )
+                                active_map = {
+                                    str(r.get("rule_id")): r for r in active_rules
+                                }
+                                for cr in cached_refs:
+                                    c_rid = str(cr.get("rule_id") or "")
+                                    if cr.get("approval_status") == "APPROVED":
+                                        if c_rid not in active_map:
+                                            cache_valid = False
+                                            break
+                                        db_rule = active_map[c_rid]
+                                        c_ver = int(cr.get("revision") or 1)
+                                        db_ver = int(
+                                            db_rule.get("version")
+                                            or db_rule.get("revision")
+                                            or 1
+                                        )
+                                        if c_ver != db_ver:
+                                            cache_valid = False
+                                            break
+                                        c_desc = str(cr.get("rule_description") or "")
+                                        db_desc = str(
+                                            db_rule.get("description")
+                                            or (db_rule.get("parameters") or {}).get(
+                                                "description"
+                                            )
+                                            or ""
+                                        )
+                                        if c_desc and db_desc and c_desc != db_desc:
+                                            cache_valid = False
+                                            break
+                                        exp_val = db_rule.get("effective_until")
+                                        if exp_val is not None:
+                                            try:
+                                                if float(
+                                                    exp_val
+                                                ) > 0 and time.time() > float(exp_val):
+                                                    cache_valid = False
+                                                    break
+                                            except (ValueError, TypeError):
+                                                pass
+                            except Exception:
+                                # FAIL-CLOSED: 数据库核验异常坚决不得放行缓存！
+                                cache_valid = False
+                    else:
+                        # 空证据缓存复核：此前研判无匹配规则 (NO_MATCHING_RULE)
+                        # 必须校验当前知识库中是否已有针对该类别生效的 APPROVED 规则
+                        if storage is None or not hasattr(storage, "get_rules"):
+                            if (
+                                os.environ.get("CONTRACT_KB_ENV", "").lower()
+                                == "production"
+                            ):
+                                cache_valid = False
+                        else:
+                            try:
+                                current_active_rules = storage.get_rules(
+                                    tenant_id=eff_tenant_id, status="APPROVED"
+                                )
+                                cat_upper = (category or "OTHER").upper()
+                                for r in current_active_rules:
+                                    r_params = (
+                                        r.get("parameters") or r.get("params") or {}
+                                    )
+                                    if isinstance(r_params, str):
+                                        try:
+                                            r_params = json.loads(r_params)
+                                        except Exception:
+                                            r_params = {}
+                                    r_cat = (
+                                        str(
+                                            r.get("clause_category")
+                                            or r_params.get("clause_category")
+                                            or ""
+                                        )
+                                        .strip()
+                                        .upper()
+                                    )
+                                    if r_cat == cat_upper or r_cat == "ALL":
+                                        # 知识库新增了匹配规则，旧的空证据缓存立即失效！
+                                        cache_valid = False
+                                        break
+                            except Exception:
+                                # FAIL-CLOSED: 数据库核验异常不可放行空证据缓存
+                                cache_valid = False
 
-        # 1. 安全授权门禁检查（禁止未经授权的外部出境）
-        if not self.is_external_allowed():
-            return self.build_high_precision_fallback(
-                annotation=annotation,
-                error_msg="外部大模型外发调用未授权（需配置 CONTRACT_KB_ALLOW_EXTERNAL_LLM=1）",
-                failure_code="NOT_AUTHORIZED",
-                source="AUTHORIZATION_GATE",
-                elapsed_sec=0.01,
-            )
+                    if cache_valid:
+                        cached_res["id"] = ann_id
+                        cached_res["from_cache"] = True
+                        return cached_res
+                    else:
+                        del self._cache[cache_key]
 
         # 2. 端点有效性与 SSRF 检查
         if not self.base_url:
@@ -409,6 +577,8 @@ class LegalReviewAgent:
                 failure_code="NOT_CONFIGURED",
                 source="CONFIGURATION_GATE",
                 elapsed_sec=0.01,
+                tenant_id=tenant_id,
+                storage=storage,
             )
 
         url_ok, url_err = _is_safe_endpoint_url(self.base_url)
@@ -419,6 +589,8 @@ class LegalReviewAgent:
                 failure_code="SSRF_BLOCKED",
                 source="SECURITY_GATE",
                 elapsed_sec=0.01,
+                tenant_id=eff_tenant_id,
+                storage=storage,
             )
 
         if not self.api_key:
@@ -428,6 +600,8 @@ class LegalReviewAgent:
                 failure_code="NOT_CONFIGURED",
                 source="CONFIGURATION_GATE",
                 elapsed_sec=0.01,
+                tenant_id=eff_tenant_id,
+                storage=storage,
             )
 
         # 3. 自适应熔断器拦截
@@ -438,26 +612,45 @@ class LegalReviewAgent:
                 failure_code="CIRCUIT_OPEN",
                 source="CIRCUIT_BREAKER_FALLBACK",
                 elapsed_sec=0.01,
+                tenant_id=eff_tenant_id,
+                storage=storage,
             )
 
-        # 4. 从可信知识底座检索匹配的已审批企业规则
-        rules_context = retrieve_legal_rules(
+        # 4. 先验证证据，再生成权威 Prompt
+        evidence_bundle = build_governed_evidence_bundle(
             category=category,
             delta_type=delta_type,
             standard_span=std_span,
             reviewed_span=rev_span,
+            tenant_id=eff_tenant_id,
+            storage=storage,
         )
-        governed_rules = retrieve_governed_rules(category, delta_type)
-        evidence_refs = [
-            {
-                "rule_id": r.rule_id,
-                "rule_name": r.name,
-                "revision": r.revision,
-                "approval_status": r.approval_status,
-                "is_statutory": r.is_statutory_mandate,
-            }
-            for r in governed_rules
-        ]
+        rules_context = evidence_bundle.to_prompt_context(
+            delta_type=delta_type, category=category
+        )
+        evidence_refs = []
+        for ev in (
+            evidence_bundle.authoritative_evidence
+            + evidence_bundle.non_authoritative_reference
+        ):
+            evidence_refs.append(
+                {
+                    "source_type": (
+                        "APPROVED_RULE"
+                        if ev.approval_status == "APPROVED"
+                        else "STATIC_REFERENCE"
+                    ),
+                    "tenant_id": eff_tenant_id,
+                    "rule_id": ev.rule_id,
+                    "rule_name": ev.name,
+                    "revision": ev.rule_revision,
+                    "approval_status": ev.approval_status,
+                    "verification_status": ev.verification_status,
+                    "verification_failure_reasons": ev.verification_failure_reasons,
+                    "is_statutory": ev.is_statutory_mandate,
+                    "rule_description": ev.rule_description,
+                }
+            )
 
         # 5. 防提示词注入安全信封封装
         call_nonce = secrets.token_hex(12)
@@ -650,6 +843,134 @@ class LegalReviewAgent:
                 source="SCHEMA_VALIDATION_FALLBACK",
                 elapsed_sec=elapsed,
             )
+
+        # 模型输出证据边界反向核查 (Evidence Boundary Reverse Check)
+        auth_rule_ids = {ev.rule_id for ev in evidence_bundle.authoritative_evidence}
+        full_analysis_text = (
+            f"{result.get('ai_analysis', '')} {result.get('action_advice', '')}"
+        )
+        boundary_violations: list[str] = []
+        for ref in evidence_refs:
+            rid = str(ref.get("rule_id") or "")
+            if rid and rid in full_analysis_text:
+                if rid not in auth_rule_ids:
+                    boundary_violations.append(
+                        f"结论越界引用了未核验规则 [{rid}] 作为依据"
+                    )
+
+        if "国家法律明确规定" in full_analysis_text and not any(
+            ev.is_statutory_mandate for ev in evidence_bundle.authoritative_evidence
+        ):
+            boundary_violations.append(
+                "模型声称法定强制要求，但缺乏对应的已核验法定证据"
+            )
+
+        if boundary_violations:
+            result["review_status"] = ReviewStatus.NEEDS_HUMAN_REVIEW.value
+            result["requires_human_review"] = True
+            result["boundary_violation"] = True
+            result["failure_reason"] = " ; ".join(boundary_violations)
+            result["reasoning"] = (
+                result.get("reasoning") or ""
+            ) + f"【证据边界警报】{result['failure_reason']}"
+            return result
+
+        # TOCTOU 审批撤销复核：核验证据规则在推理期间是否被法务管理员撤销、修订或数据库故障 (Strict Fail-Closed)
+        if storage is not None and hasattr(storage, "get_rules") and evidence_refs:
+            try:
+                active_rules_now = storage.get_rules(
+                    tenant_id=eff_tenant_id, status="APPROVED"
+                )
+                active_map_now = {str(r.get("rule_id")): r for r in active_rules_now}
+                invalidation_reasons: list[str] = []
+                revoked_in_flight: list[str] = []
+                stale_in_flight: list[str] = []
+
+                for ref in evidence_refs:
+                    rid = str(ref.get("rule_id"))
+                    if ref.get("approval_status") == "APPROVED":
+                        if rid not in active_map_now:
+                            invalidation_reasons.append(
+                                f"风控规则 {rid} 已被撤销或失效"
+                            )
+                            revoked_in_flight.append(rid)
+                        else:
+                            curr_r = active_map_now[rid]
+                            c_ver = int(str(ref.get("revision") or 1))
+                            db_ver_raw = (
+                                curr_r.get("version") or curr_r.get("revision") or 1
+                            )
+                            try:
+                                db_ver = int(str(db_ver_raw))
+                            except (ValueError, TypeError):
+                                db_ver = 1
+                            if c_ver != db_ver:
+                                invalidation_reasons.append(
+                                    f"风控规则 {rid} 版本发生变更 (原 r{c_ver} -> 现 r{db_ver})"
+                                )
+                                stale_in_flight.append(rid)
+                            c_desc = str(ref.get("rule_description") or "")
+                            db_desc = str(
+                                curr_r.get("description")
+                                or (curr_r.get("parameters") or {}).get("description")
+                                or ""
+                            )
+                            if c_desc and db_desc and c_desc != db_desc:
+                                invalidation_reasons.append(
+                                    f"风控规则 {rid} 内容已发生修订"
+                                )
+                                stale_in_flight.append(rid)
+
+                if invalidation_reasons:
+                    result["review_status"] = ReviewStatus.NEEDS_HUMAN_REVIEW.value
+                    result["requires_human_review"] = True
+                    result["toctou_revocation_detected"] = True
+                    prefix = (
+                        "【规则撤销失效警报】"
+                        if revoked_in_flight
+                        else "【规则变更失效警报】"
+                    )
+                    result["ai_analysis"] = (
+                        f"{prefix}所依据风控规则发生变更 ({'; '.join(invalidation_reasons)})！"
+                        f"原权威依据已失效，必须由法务重新人工复核。旧研判参考：{result.get('ai_analysis')}"
+                    )
+                    updated_refs = []
+                    for ref in evidence_refs:
+                        rid = str(ref.get("rule_id"))
+                        if rid in revoked_in_flight:
+                            updated_refs.append(
+                                {
+                                    **ref,
+                                    "approval_status": "REVOKED",
+                                    "verification_status": "REVOKED",
+                                }
+                            )
+                        elif rid in stale_in_flight:
+                            updated_refs.append(
+                                {
+                                    **ref,
+                                    "verification_status": "STALE",
+                                }
+                            )
+                        else:
+                            updated_refs.append(ref)
+                    result["evidence_references"] = updated_refs
+                    # 阻断失效结论存入持久缓存
+                    return result
+            except Exception as e:
+                # FAIL-CLOSED: 数据库复核异常必须阻断落盘并转人工复核
+                result["review_status"] = ReviewStatus.NEEDS_HUMAN_REVIEW.value
+                result["requires_human_review"] = True
+                result["toctou_revocation_detected"] = True
+                result["toctou_check_error"] = str(e)
+                result["ai_analysis"] = (
+                    f"【证据核验数据库异常】推理后复核证据规则有效性时数据库连接异常 ({e})！"
+                    f"无法保证权威依据有效性，已安全降级为待人工复核。旧研判参考：{result.get('ai_analysis')}"
+                )
+                for ref in evidence_refs:
+                    ref["verification_status"] = "UNVERIFIED"
+                # 严格阻断写入缓存
+                return result
 
         # 写入缓存
         with self._cache_lock:

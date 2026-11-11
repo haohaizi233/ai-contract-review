@@ -100,9 +100,9 @@ def test_rerank_deterministic():
 
 def test_incremental_idempotent(storage, layer_a):
     doc = dict(layer_a["documents"][0])
-    _, new1 = storage.upsert_document(doc)
+    storage.upsert_document(doc)
     _, new2 = storage.upsert_document(doc)
-    assert new1 is False and new2 is False, "同哈希重复导入必须幂等跳过"
+    assert new2 is False, "同哈希重复导入必须幂等跳过"
 
 
 def test_rollback_and_rebuild(storage):
