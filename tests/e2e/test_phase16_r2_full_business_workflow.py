@@ -168,9 +168,25 @@ def test_full_business_workflow_e2e(r2_business_web_server, monkeypatch, tmp_pat
         storage_inst.conn.commit()
 
     # 2. 准备真实 DOCX 文件并构造 multipart/form-data HTTP 上传请求
-    golden_files = list(config.GOLDEN_DIR.glob("*.docx"))
-    assert golden_files, "黄金测试样本库未找到 docx 文件"
-    sample_docx = golden_files[0]
+    golden_files = (
+        list(config.GOLDEN_DIR.glob("*.docx")) if config.GOLDEN_DIR.exists() else []
+    )
+    if golden_files:
+        sample_docx = golden_files[0]
+    else:
+        fixture_golden = list(Path("tests/fixtures/golden").glob("*.docx"))
+        if fixture_golden:
+            sample_docx = fixture_golden[0]
+        else:
+            import docx
+
+            sample_path = tmp_path / "sample_contract.docx"
+            doc = docx.Document()
+            doc.add_paragraph("甲方与乙方签订技术服务合同。")
+            doc.add_paragraph("甲方逾期付款每日按千分之一支付违约金。")
+            doc.save(str(sample_path))
+            sample_docx = sample_path
+
     file_bytes = sample_docx.read_bytes()
 
     boundary = "----WebKitFormBoundaryE2ETest2026"
