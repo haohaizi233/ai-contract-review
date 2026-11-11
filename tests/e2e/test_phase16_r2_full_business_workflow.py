@@ -121,6 +121,27 @@ def test_full_business_workflow_e2e(r2_business_web_server, monkeypatch, tmp_pat
     bob_id = "reviewer_bob"
 
     # 1. 预先在租户 A 存储中录入已审批出处完备的风控规则与条款
+    def _mock_diff(s_file, forced_template_id=None, doc_name=None):
+        return {
+            "annotations": [
+                {
+                    "id": "ann-r2-01",
+                    "clause_category": "LIABILITY",
+                    "delta_type": "NUMBER_CHANGE",
+                    "clause_title": "逾期付款违约金比例变更",
+                    "standard_span": "甲方逾期付款每日按千分之三支付违约金",
+                    "reviewed_span": "甲方逾期付款每日按千分之一支付违约金",
+                }
+            ],
+            "aligned_blocks": [],
+            "doc_title": doc_name or "测试合同",
+        }
+
+    monkeypatch.setattr(
+        "contract_kb.interfaces.web.routes.contracts.execute_current_diff",
+        _mock_diff,
+    )
+
     rule_id = f"RULE_LATE_FEE_{time.time_ns()}"
     clause_id = f"CLAUSE_FEE_{time.time_ns()}"
     storage_inst.save_rule(
@@ -219,9 +240,13 @@ def test_full_business_workflow_e2e(r2_business_web_server, monkeypatch, tmp_pat
         headers=upload_headers,
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        assert resp.status == 200
-        upload_res = json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            assert resp.status == 200
+            upload_res = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="ignore")
+        pytest.fail(f"HTTP {e.code} during /api/diff/upload: {err_body}")
 
     session_id = upload_res.get("session_id")
     assert session_id, f"上传未能创建有效 session_id: {upload_res}"
