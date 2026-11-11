@@ -43,9 +43,29 @@ def test_resolve_preview_file_reviewed(test_session_id, tmp_path, monkeypatch):
     assert meta["target"] == "reviewed"
     assert meta["ext"] == ".docx"
     assert meta["display_title"] == "《测试专利代理合同》送审稿"
-    assert meta["file_name"] == "测试专利代理合同送审稿.docx"
+    assert meta["file_name"] == "测试专利代理合同-送审稿.docx"
     assert meta["size"] == len(b"PK\x03\x04test docx content")
     assert len(meta["sha256"]) == 64
+
+
+def test_resolve_preview_file_reviewed_hides_technical_name(test_session_id, tmp_path, monkeypatch):
+    """内部/测试占位名（mut_*、contract.*）不得面向用户展示。"""
+    s_file = tmp_path / "contract.docx"
+    s_file.write_bytes(b"PK\x03\x04x")
+    monkeypatch.setattr(
+        "contract_kb.interfaces.web.routes.preview.get_session_file",
+        lambda *a, **k: s_file,
+    )
+    monkeypatch.setattr(
+        "contract_kb.interfaces.web.routes.preview.get_session_meta",
+        lambda *a, **k: {
+            "doc_name": "《国内专利服务合同（年费缴纳）》送审修改稿",
+            "original_filename": "mut_11_late_fee_change.docx",
+        },
+    )
+    _, meta = resolve_preview_file(session_id=test_session_id, target="reviewed")
+    assert not meta["file_name"].startswith("mut_")
+    assert meta["file_name"] == "国内专利服务合同（年费缴纳）-送审修改稿.docx"
 
 
 def test_resolve_preview_file_reviewed_with_original_filename(test_session_id, tmp_path, monkeypatch):

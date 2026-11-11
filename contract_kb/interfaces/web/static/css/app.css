@@ -1509,8 +1509,8 @@
     box-sizing: border-box;
   }
   .preview-canvas-wrapper {
-    transform-origin: top center;
-    transition: transform 0.15s ease-out;
+    /* 使用 zoom 参与布局，避免 transform 缩放后底部留白 */
+    transition: none;
   }
 
   /* docx-preview 样式容器定制与 A4 纸张增强 */
@@ -1573,10 +1573,14 @@
     justify-content: center;
     align-items: flex-start;
   }
-  .preview-split-pane-scroll .docx-preview-body section.docx {
-    transform: scale(0.85);
-    transform-origin: top center;
-    margin-bottom: 16px !important;
+  .preview-split-pane-scroll .docx-preview-body .docx-wrapper {
+    padding-bottom: 0 !important;
+  }
+  .preview-split-pane-scroll .docx-preview-body section.docx:last-child {
+    margin-bottom: 0 !important;
+  }
+  .preview-split-pane-scroll {
+    padding-bottom: 16px;
   }
 
   /* 打印样式适配 */

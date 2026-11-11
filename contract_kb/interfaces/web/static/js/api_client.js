@@ -713,19 +713,31 @@ function applyPreviewZoom() {
   if (label) label.innerText = `${Math.round(previewZoomScale * 100)}%`;
   const wrapper = document.getElementById('previewCanvasWrapper');
   if (wrapper) {
-    wrapper.style.transform = `scale(${previewZoomScale})`;
+    // zoom 会改变布局尺寸，滚动高度与缩放一致，不再产生底部空白
+    wrapper.style.transform = '';
+    wrapper.style.zoom = String(previewZoomScale);
   }
-  const splitLeft = document.getElementById('docxSplitBodyLeft');
-  const splitRight = document.getElementById('docxSplitBodyRight');
-  if (splitLeft) {
-    splitLeft.style.transform = `scale(${previewZoomScale * 0.85})`;
-    splitLeft.style.transformOrigin = 'top center';
-  }
-  if (splitRight) {
-    splitRight.style.transform = `scale(${previewZoomScale * 0.85})`;
-    splitRight.style.transformOrigin = 'top center';
-  }
+  fitSplitPreviewPanes();
 }
+
+// 双栏：按各自纸张宽度自适应窗格宽度（消除横向滚动条），再叠加用户缩放
+function fitSplitPreviewPanes() {
+  [['previewSplitScrollLeft', 'docxSplitBodyLeft'], ['previewSplitScrollRight', 'docxSplitBodyRight']].forEach(([scrollId, bodyId]) => {
+    const scroller = document.getElementById(scrollId);
+    const body = document.getElementById(bodyId);
+    if (!scroller || !body) return;
+    body.style.transform = '';
+    body.style.zoom = '1';
+    const page = body.querySelector('section.docx');
+    if (!page || !scroller.clientWidth) return;
+    const pageWidth = page.offsetWidth || 794;
+    const fit = Math.min(1, (scroller.clientWidth - 32) / pageWidth);
+    body.style.zoom = String(Math.max(0.3, fit * previewZoomScale));
+  });
+}
+window.addEventListener('resize', () => {
+  if (currentPreviewTarget === 'side_by_side') fitSplitPreviewPanes();
+});
 
 function switchPreviewTarget(target) {
   currentPreviewTarget = target || 'reviewed';
@@ -818,8 +830,6 @@ async function loadSinglePreview(target) {
 }
 
 // 左右分栏各自滑动百分比同步控制器
-let isPreviewSyncingScroll = false;
-
 function bindPreviewScrollSync() {
   const left = document.getElementById('previewSplitScrollLeft');
   const right = document.getElementById('previewSplitScrollRight');
@@ -833,19 +843,23 @@ function bindPreviewScrollSync() {
   left._previewSyncBound = true;
 
   const syncScroll = (source, target) => {
-    if (isPreviewSyncingScroll) return;
+    // 忽略由程序同步触发的回声事件（以期望值比对，而非时间锁，避免丢事件）
+    if (source._expectedTop !== undefined && Math.abs(source.scrollTop - source._expectedTop) <= 2) {
+      source._expectedTop = undefined;
+      return;
+    }
+    source._expectedTop = undefined;
     const sourceMax = source.scrollHeight - source.clientHeight;
     const targetMax = target.scrollHeight - target.clientHeight;
     if (sourceMax <= 0 || targetMax <= 0) return;
 
-    isPreviewSyncingScroll = true;
     const ratio = Math.max(0, Math.min(1, source.scrollTop / sourceMax));
-    target.scrollTop = Math.round(ratio * targetMax);
-
-    // 释放锁：等待下一帧重绘后重置，彻底避免死循环回弹
-    requestAnimationFrame(() => {
-      isPreviewSyncingScroll = false;
-    });
+    const next = Math.round(ratio * targetMax);
+    if (Math.abs(target.scrollTop - next) <= 1) return;
+    target._expectedTop = next;
+    target.scrollTop = next;
+    // 兜底：浏览器取整未触发事件时清除标记
+    setTimeout(() => { target._expectedTop = undefined; }, 120);
   };
 
   left.addEventListener('scroll', () => syncScroll(left, right), { passive: true });
@@ -903,7 +917,8 @@ async function loadSideBySidePreview() {
       renderDocumentBlob(revBlob, revInfo.ext, rightBody),
     ]);
 
-    // 绑定左右分栏各自滑动百分比同步
+    // 按各自纸张宽度自适应并叠加缩放，再绑定百分比同步
+    fitSplitPreviewPanes();
     bindPreviewScrollSync();
 
     if (loading) loading.classList.remove('active');

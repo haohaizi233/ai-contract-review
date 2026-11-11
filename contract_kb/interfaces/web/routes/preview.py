@@ -50,6 +50,24 @@ def _calc_sha256(path: Path) -> str:
         return ""
 
 
+_TECHNICAL_NAME_RE = re.compile(
+    r"^(contract\.\w+|current_active_review.*|mut_\d+_.*|verify_.*|golden_.*|WDCLI_[a-f0-9]+_.*|MB\w+?_V[\d.]+?_.*)$",
+    re.IGNORECASE,
+)
+
+
+def _is_technical_name(name: str) -> bool:
+    """判断是否为内部技术/测试占位文件名（不应直接面向用户展示）。"""
+    return bool(_TECHNICAL_NAME_RE.match(Path(name).name))
+
+
+def _friendly_file_name(title: str, ext: str) -> str:
+    """由合同业务标题生成可读文件名，如 《xxx》送审修改稿 -> xxx-送审修改稿.docx。"""
+    t = re.sub(r"[\\/:*?\"<>|]", "", re.sub(r"[《》]", " ", title or "")).strip()
+    t = re.sub(r"\s+", "-", t) or "送审合同"
+    return t if t.lower().endswith(ext) else f"{t}{ext}"
+
+
 def resolve_preview_file(
     session_id: str = "default_session",
     target: str = "reviewed",
@@ -87,12 +105,8 @@ def resolve_preview_file(
 
         # 智能解析面向用户的真实文件名，彻底杜绝暴露内部技术占位文件名 contract.docx
         orig_filename = meta.get("original_filename")
-        if not orig_filename or orig_filename in ("contract.docx", "contract.doc", "contract.pdf"):
-            if s_file == CURRENT_SESSION_FILE or s_file.name == "mut_11_late_fee_change.docx":
-                orig_filename = "mut_11_late_fee_change.docx"
-            else:
-                clean_name = re.sub(r"[《》<>]", "", doc_name).strip()
-                orig_filename = f"{clean_name}{ext}" if not clean_name.lower().endswith(ext) else clean_name
+        if not orig_filename or _is_technical_name(orig_filename):
+            orig_filename = _friendly_file_name(doc_name, ext)
 
         sha = _calc_sha256(s_file)
         size = s_file.stat().st_size
@@ -233,7 +247,11 @@ def resolve_preview_file(
     return tpl_path, {
         "target": "template",
         "template_id": tpl_id,
-        "file_name": tpl_path.name,
+        "file_name": (
+            _friendly_file_name(raw_title, ext)
+            if _is_technical_name(tpl_path.name)
+            else tpl_path.name
+        ),
         "display_title": display_title,
         "ext": ext,
         "size": size,
