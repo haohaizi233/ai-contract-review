@@ -715,6 +715,16 @@ function applyPreviewZoom() {
   if (wrapper) {
     wrapper.style.transform = `scale(${previewZoomScale})`;
   }
+  const splitLeft = document.getElementById('docxSplitBodyLeft');
+  const splitRight = document.getElementById('docxSplitBodyRight');
+  if (splitLeft) {
+    splitLeft.style.transform = `scale(${previewZoomScale * 0.85})`;
+    splitLeft.style.transformOrigin = 'top center';
+  }
+  if (splitRight) {
+    splitRight.style.transform = `scale(${previewZoomScale * 0.85})`;
+    splitRight.style.transformOrigin = 'top center';
+  }
 }
 
 function switchPreviewTarget(target) {
@@ -774,9 +784,11 @@ async function loadSinglePreview(target) {
     }
     const info = await infoResp.json();
     if (info.error) throw new Error(info.error);
+    previewMetaCache[target] = info;
 
-    // 更新信息状态条
-    updatePreviewMetaStrip(info);
+    // 更新信息状态条（确保展示真实文件名，杜绝暴露内部技术占位 contract.docx）
+    const displayDocName = (info.file_name && info.file_name !== 'contract.docx') ? info.file_name : (info.display_title || '-');
+    updatePreviewMetaStrip(info, displayDocName);
 
     // 2. 拉取文件二进制流
     const fileResp = await fetch(`/api/diff/preview_file?target=${encodeURIComponent(target)}&session_id=${encodeURIComponent(sessionId)}`);
@@ -805,16 +817,55 @@ async function loadSinglePreview(target) {
   }
 }
 
+// 左右分栏各自滑动百分比同步控制器
+let isPreviewSyncingScroll = false;
+
+function bindPreviewScrollSync() {
+  const left = document.getElementById('previewSplitScrollLeft');
+  const right = document.getElementById('previewSplitScrollRight');
+  if (!left || !right) return;
+
+  // 重置双方滚动位置到顶部
+  left.scrollTop = 0;
+  right.scrollTop = 0;
+
+  if (left._previewSyncBound) return;
+  left._previewSyncBound = true;
+
+  const syncScroll = (source, target) => {
+    if (isPreviewSyncingScroll) return;
+    const sourceMax = source.scrollHeight - source.clientHeight;
+    const targetMax = target.scrollHeight - target.clientHeight;
+    if (sourceMax <= 0 || targetMax <= 0) return;
+
+    isPreviewSyncingScroll = true;
+    const ratio = Math.max(0, Math.min(1, source.scrollTop / sourceMax));
+    target.scrollTop = Math.round(ratio * targetMax);
+
+    // 释放锁：等待下一帧重绘后重置，彻底避免死循环回弹
+    requestAnimationFrame(() => {
+      isPreviewSyncingScroll = false;
+    });
+  };
+
+  left.addEventListener('scroll', () => syncScroll(left, right), { passive: true });
+  right.addEventListener('scroll', () => syncScroll(right, left), { passive: true });
+}
+
 async function loadSideBySidePreview() {
   const loading = document.getElementById('previewLoading');
   const loadingText = document.getElementById('previewLoadingText');
   const leftBody = document.getElementById('docxSplitBodyLeft');
   const rightBody = document.getElementById('docxSplitBodyRight');
+  const leftScroll = document.getElementById('previewSplitScrollLeft');
+  const rightScroll = document.getElementById('previewSplitScrollRight');
 
   if (loading) loading.classList.add('active');
   if (loadingText) loadingText.innerText = '正在并行调取基准母本与送审合同双份原文件排版...';
   if (leftBody) leftBody.innerHTML = '';
   if (rightBody) rightBody.innerHTML = '';
+  if (leftScroll) leftScroll.scrollTop = 0;
+  if (rightScroll) rightScroll.scrollTop = 0;
 
   const sessionId = (ReviewApiClient && ReviewApiClient.sessionId) || (currentData && currentData.session_id) || 'default_session';
 
@@ -825,8 +876,20 @@ async function loadSideBySidePreview() {
     ]);
     const tplInfo = await tplInfoResp.json();
     const revInfo = await revInfoResp.json();
+    previewMetaCache['template'] = tplInfo;
+    previewMetaCache['reviewed'] = revInfo;
 
-    updatePreviewMetaStrip(revInfo, '送审: ' + (revInfo.file_name || '-') + ' | 母本: ' + (tplInfo.file_name || '-'));
+    const tplDisplayName = tplInfo.file_name || tplInfo.display_title || '基准母本';
+    const revDisplayName = (revInfo.file_name && revInfo.file_name !== 'contract.docx') ? revInfo.file_name : (revInfo.display_title || '送审合同');
+
+    // 更新顶栏元数据条
+    updatePreviewMetaStrip(revInfo, `送审: ${revDisplayName} | 母本: ${tplDisplayName}`);
+
+    // 更新左右分栏标题
+    const leftHeader = document.querySelector('#previewSplitLeft .preview-split-pane-header');
+    const rightHeader = document.querySelector('#previewSplitRight .preview-split-pane-header');
+    if (leftHeader) leftHeader.innerText = `🏛️ 基准母本原始排版: ${tplDisplayName}`;
+    if (rightHeader) rightHeader.innerText = `✏️ 送审合同原始排版: ${revDisplayName}`;
 
     const [tplFileResp, revFileResp] = await Promise.all([
       fetch(`/api/diff/preview_file?target=template&session_id=${encodeURIComponent(sessionId)}`),
@@ -839,6 +902,9 @@ async function loadSideBySidePreview() {
       renderDocumentBlob(tplBlob, tplInfo.ext, leftBody),
       renderDocumentBlob(revBlob, revInfo.ext, rightBody),
     ]);
+
+    // 绑定左右分栏各自滑动百分比同步
+    bindPreviewScrollSync();
 
     if (loading) loading.classList.remove('active');
   } catch (err) {
@@ -914,7 +980,16 @@ function downloadCurrentPreviewFile() {
   const url = `/api/diff/preview_file?target=${encodeURIComponent(target)}&session_id=${encodeURIComponent(sessionId)}`;
   const a = document.createElement('a');
   a.href = url;
-  a.download = '';
+  const info = previewMetaCache[target];
+  if (info && info.file_name && info.file_name !== 'contract.docx') {
+    a.download = info.file_name;
+  } else if (info && info.display_title) {
+    const ext = info.ext || '.docx';
+    const clean = info.display_title.replace(/^[《<]+|[》>]+$/g, '').trim();
+    a.download = clean.endsWith(ext) ? clean : `${clean}${ext}`;
+  } else {
+    a.download = '';
+  }
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

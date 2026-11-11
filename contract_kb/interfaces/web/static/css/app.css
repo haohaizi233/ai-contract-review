@@ -1571,6 +1571,7 @@
     padding: 16px;
     display: flex;
     justify-content: center;
+    align-items: flex-start;
   }
   .preview-split-pane-scroll .docx-preview-body section.docx {
     transform: scale(0.85);

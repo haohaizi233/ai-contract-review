@@ -12,7 +12,11 @@ from contract_kb.application.agents.review_sessions import get_agent_manager
 from contract_kb.modules.templates.material_catalog import get_material_manager
 
 from ..services.diff_service import execute_current_diff
-from ..services.session_files import prepare_session_file, save_session_meta
+from ..services.session_files import (
+    CURRENT_SESSION_FILE,
+    prepare_session_file,
+    save_session_meta,
+)
 
 
 def handle_get_materials_stats(handler: Any) -> None:
@@ -92,6 +96,11 @@ def handle_post_materials_load_contract(handler: Any) -> None:
             session_id, ext=file_path.suffix, tenant_id=tenant_id
         )
         shutil.copyfile(file_path, s_file)
+        if session_id == "default_session" and tenant_id == "default":
+            try:
+                shutil.copyfile(file_path, CURRENT_SESSION_FILE)
+            except Exception:
+                pass
 
         c_info = mgr.cases_by_no.get(c_no, {})
         c_name = c_info.get("name") or c_no
@@ -100,7 +109,11 @@ def handle_post_materials_load_contract(handler: Any) -> None:
         )
         save_session_meta(
             session_id,
-            {"doc_name": doc_name, "forced_template_id": None},
+            {
+                "doc_name": doc_name,
+                "original_filename": file_path.name,
+                "forced_template_id": None,
+            },
             tenant_id=tenant_id,
         )
 

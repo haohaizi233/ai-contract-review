@@ -173,10 +173,19 @@ def handle_post_ref_templates_load(handler: Any) -> None:
                 session_id, ext=target_file.suffix, tenant_id=tenant_id
             )
             shutil.copyfile(target_file, s_file)
+            if session_id == "default_session" and tenant_id == "default":
+                try:
+                    shutil.copyfile(target_file, CURRENT_SESSION_FILE)
+                except Exception:
+                    pass
             doc_name = f"《{clean_name}》标准模板自测核验"
             save_session_meta(
                 session_id,
-                {"doc_name": doc_name, "forced_template_id": tpl_id},
+                {
+                    "doc_name": doc_name,
+                    "original_filename": target_file.name,
+                    "forced_template_id": tpl_id,
+                },
                 tenant_id=tenant_id,
             )
 
@@ -190,10 +199,19 @@ def handle_post_ref_templates_load(handler: Any) -> None:
                 session_id, ext=target_file.suffix, tenant_id=tenant_id
             )
             shutil.copyfile(target_file, s_file)
+            if session_id == "default_session" and tenant_id == "default":
+                try:
+                    shutil.copyfile(target_file, CURRENT_SESSION_FILE)
+                except Exception:
+                    pass
             doc_name = f"《{clean_name}》送审原稿"
             save_session_meta(
                 session_id,
-                {"doc_name": doc_name, "forced_template_id": None},
+                {
+                    "doc_name": doc_name,
+                    "original_filename": target_file.name,
+                    "forced_template_id": None,
+                },
                 tenant_id=tenant_id,
             )
 

@@ -62,6 +62,19 @@ def resolve_preview_file(
         s_file = get_session_file(session_id, tenant_id=tenant_id)
         if not s_file.exists():
             s_file = CURRENT_SESSION_FILE
+        elif (
+            session_id == "default_session"
+            and CURRENT_SESSION_FILE.exists()
+            and CURRENT_SESSION_FILE.stat().st_mtime > s_file.stat().st_mtime
+        ):
+            # 单机工作台模式下，全局活动合同较会话旧文件更新时执行物理同步
+            try:
+                import shutil
+                shutil.copyfile(CURRENT_SESSION_FILE, s_file)
+            except Exception:
+                pass
+            s_file = CURRENT_SESSION_FILE
+
         if not s_file.exists():
             s_file = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
 
@@ -70,13 +83,24 @@ def resolve_preview_file(
 
         meta = get_session_meta(session_id, tenant_id=tenant_id)
         doc_name = meta.get("doc_name") or CURRENT_DOC_NAME
-        sha = _calc_sha256(s_file)
         ext = s_file.suffix.lower()
+
+        # 智能解析面向用户的真实文件名，彻底杜绝暴露内部技术占位文件名 contract.docx
+        orig_filename = meta.get("original_filename")
+        if not orig_filename or orig_filename in ("contract.docx", "contract.doc", "contract.pdf"):
+            if s_file == CURRENT_SESSION_FILE or s_file.name == "mut_11_late_fee_change.docx":
+                orig_filename = "mut_11_late_fee_change.docx"
+            else:
+                clean_name = re.sub(r"[《》<>]", "", doc_name).strip()
+                orig_filename = f"{clean_name}{ext}" if not clean_name.lower().endswith(ext) else clean_name
+
+        sha = _calc_sha256(s_file)
         size = s_file.stat().st_size
 
         return s_file, {
             "target": "reviewed",
-            "file_name": s_file.name,
+            "file_name": orig_filename,
+            "original_filename": orig_filename,
             "display_title": doc_name,
             "ext": ext,
             "size": size,
@@ -241,8 +265,8 @@ def handle_get_preview_file(handler: Any, parsed: urllib.parse.ParseResult) -> N
         ext = file_path.suffix.lower()
         content_type = MIME_TYPES.get(ext, "application/octet-stream")
 
-        # 安全处置文件名防乱码
-        raw_name = file_path.name
+        # 安全处置文件名防乱码，优先使用真实面向业务的文件名
+        raw_name = meta.get("file_name") or file_path.name
         encoded_name = urllib.parse.quote(raw_name)
         ascii_name = re.sub(r"[^\x20-\x7E]", "_", raw_name)
 

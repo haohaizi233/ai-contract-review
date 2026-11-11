@@ -43,8 +43,32 @@ def test_resolve_preview_file_reviewed(test_session_id, tmp_path, monkeypatch):
     assert meta["target"] == "reviewed"
     assert meta["ext"] == ".docx"
     assert meta["display_title"] == "《测试专利代理合同》送审稿"
+    assert meta["file_name"] == "测试专利代理合同送审稿.docx"
     assert meta["size"] == len(b"PK\x03\x04test docx content")
     assert len(meta["sha256"]) == 64
+
+
+def test_resolve_preview_file_reviewed_with_original_filename(test_session_id, tmp_path, monkeypatch):
+    """测试送审文档定位：优先使用元数据中保存的 original_filename。"""
+    s_file = tmp_path / "contract.docx"
+    s_file.write_bytes(b"PK\x03\x04test docx content")
+
+    monkeypatch.setattr(
+        "contract_kb.interfaces.web.routes.preview.get_session_file",
+        lambda *a, **k: s_file,
+    )
+    monkeypatch.setattr(
+        "contract_kb.interfaces.web.routes.preview.get_session_meta",
+        lambda *a, **k: {
+            "doc_name": "《测试专利代理合同》送审稿",
+            "original_filename": "我的送审稿_v2.docx",
+        },
+    )
+
+    path, meta = resolve_preview_file(session_id=test_session_id, target="reviewed")
+    assert path is not None
+    assert meta["file_name"] == "我的送审稿_v2.docx"
+    assert meta["original_filename"] == "我的送审稿_v2.docx"
 
 
 def test_resolve_preview_file_template(test_session_id, tmp_path, monkeypatch):

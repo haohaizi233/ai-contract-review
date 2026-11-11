@@ -69,10 +69,12 @@ const html = `<!DOCTYPE html>
       </div>
       <div class="preview-split-container" id="previewSplitContainer" style="display:none;">
         <div class="preview-split-pane" id="previewSplitLeft">
-          <div class="preview-split-pane-scroll"><div class="docx-preview-body" id="docxSplitBodyLeft"></div></div>
+          <div class="preview-split-pane-header">🏛️ 基准母本原始排版</div>
+          <div class="preview-split-pane-scroll" id="previewSplitScrollLeft"><div class="docx-preview-body" id="docxSplitBodyLeft"></div></div>
         </div>
         <div class="preview-split-pane" id="previewSplitRight">
-          <div class="preview-split-pane-scroll"><div class="docx-preview-body" id="docxSplitBodyRight"></div></div>
+          <div class="preview-split-pane-header">✏️ 送审合同原始排版</div>
+          <div class="preview-split-pane-scroll" id="previewSplitScrollRight"><div class="docx-preview-body" id="docxSplitBodyRight"></div></div>
         </div>
       </div>
     </div>
@@ -254,6 +256,70 @@ ${cleanAppJs}
     state = await evaluate(`({ scale: previewZoomScale, label: document.getElementById('previewZoomValue').innerText })`);
     assert.equal(state.scale, 1.0);
     assert.equal(state.label, '100%');
+
+    console.log('8. Testing Alt+3 shortcut for side-by-side mode and percentage scroll sync...');
+    await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '3', altKey: true, bubbles: true }))`);
+    await new Promise(r => setTimeout(r, 1200));
+
+    state = await evaluate(`({
+      target: currentPreviewTarget,
+      splitVisible: document.getElementById('previewSplitContainer').style.display !== 'none',
+      leftRendered: document.getElementById('docxSplitBodyLeft').children.length,
+      rightRendered: document.getElementById('docxSplitBodyRight').children.length,
+      metaText: document.getElementById('previewMetaFileName').innerText,
+      leftHeader: document.querySelector('#previewSplitLeft .preview-split-pane-header').innerText,
+      rightHeader: document.querySelector('#previewSplitRight .preview-split-pane-header').innerText,
+    })`);
+    console.log('Alt+3 Result:', state);
+    assert.equal(state.target, 'side_by_side');
+    assert.equal(state.splitVisible, true);
+    assert.ok(state.leftRendered > 0, 'Left split pane rendered');
+    assert.ok(state.rightRendered > 0, 'Right split pane rendered');
+    assert.ok(state.metaText.includes('送审: 送审合同修改稿.docx'), 'Should display friendly reviewed file name instead of contract.docx');
+    assert.ok(state.metaText.includes('母本: 国内专利服务合同（年费缴纳）-事务所.docx'), 'Should display template file name');
+    assert.ok(state.leftHeader.includes('国内专利服务合同（年费缴纳）-事务所.docx'));
+    assert.ok(state.rightHeader.includes('送审合同修改稿.docx'));
+
+    console.log('9. Testing proportional scroll synchronization...');
+    // Scroll left to 50%
+    const scrollRes1 = await evaluate(`(() => {
+      const left = document.getElementById('previewSplitScrollLeft');
+      const right = document.getElementById('previewSplitScrollRight');
+      const leftMax = left.scrollHeight - left.clientHeight;
+      const rightMax = right.scrollHeight - right.clientHeight;
+      left.scrollTop = Math.round(leftMax * 0.5);
+      left.dispatchEvent(new Event('scroll'));
+      return {
+        leftMax,
+        rightMax,
+        leftScroll: left.scrollTop,
+        rightScroll: right.scrollTop,
+        leftRatio: left.scrollTop / leftMax,
+        rightRatio: right.scrollTop / rightMax,
+      };
+    })()`);
+    console.log('Scroll 50% test:', scrollRes1);
+    assert.ok(Math.abs(scrollRes1.leftRatio - scrollRes1.rightRatio) < 0.05, 'Right scroll ratio should match left scroll ratio (~50%)');
+
+    // Scroll right to 80%
+    const scrollRes2 = await evaluate(`(() => {
+      const left = document.getElementById('previewSplitScrollLeft');
+      const right = document.getElementById('previewSplitScrollRight');
+      const leftMax = left.scrollHeight - left.clientHeight;
+      const rightMax = right.scrollHeight - right.clientHeight;
+      right.scrollTop = Math.round(rightMax * 0.8);
+      right.dispatchEvent(new Event('scroll'));
+      return {
+        leftMax,
+        rightMax,
+        leftScroll: left.scrollTop,
+        rightScroll: right.scrollTop,
+        leftRatio: left.scrollTop / leftMax,
+        rightRatio: right.scrollTop / rightMax,
+      };
+    })()`);
+    console.log('Scroll 80% test:', scrollRes2);
+    assert.ok(Math.abs(scrollRes2.leftRatio - scrollRes2.rightRatio) < 0.05, 'Left scroll ratio should match right scroll ratio (~80%)');
 
     console.log('ALL BROWSER PREVIEW TESTS PASSED SUCCESSFULLY!');
     ws.close();

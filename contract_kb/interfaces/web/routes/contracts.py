@@ -16,6 +16,7 @@ from contract_kb.application.agents.review_sessions import get_agent_manager
 
 from ..services.diff_service import execute_current_diff
 from ..services.session_files import (
+    CURRENT_SESSION_FILE,
     get_session_file,
     prepare_session_file,
     save_session_meta,
@@ -45,9 +46,18 @@ def handle_get_sample(handler: Any, parsed: urllib.parse.ParseResult) -> None:
 
         s_file = get_session_file(session_id, tenant_id=tenant_id)
         shutil.copyfile(sample_file, s_file)
+        if session_id == "default_session" and tenant_id == "default":
+            try:
+                shutil.copyfile(sample_file, CURRENT_SESSION_FILE)
+            except Exception:
+                pass
         save_session_meta(
             session_id,
-            {"doc_name": doc_name, "forced_template_id": None},
+            {
+                "doc_name": doc_name,
+                "original_filename": sample_file.name,
+                "forced_template_id": None,
+            },
             tenant_id=tenant_id,
         )
 
@@ -125,9 +135,18 @@ def handle_post_upload(handler: Any) -> None:
             )
             s_file = prepare_session_file(session_id, ext=ext, tenant_id=tenant_id)
             s_file.write_bytes(file_bytes)
+            if session_id == "default_session" and tenant_id == "default":
+                try:
+                    CURRENT_SESSION_FILE.write_bytes(file_bytes)
+                except Exception:
+                    pass
             save_session_meta(
                 session_id,
-                {"doc_name": doc_name, "forced_template_id": None},
+                {
+                    "doc_name": doc_name,
+                    "original_filename": safe_name,
+                    "forced_template_id": None,
+                },
                 tenant_id=tenant_id,
             )
 

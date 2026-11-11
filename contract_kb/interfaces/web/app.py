@@ -60,9 +60,12 @@ from .routes import (
     handle_post_upload,
 )
 from .services import (
+    CURRENT_DOC_NAME,
     CURRENT_SESSION_FILE,
     execute_current_diff,
     get_ranked_templates_catalog,
+    get_session_file,
+    save_session_meta,
 )
 
 WEB_DIR = Path(__file__).resolve().parent
@@ -137,7 +140,21 @@ def generate_rendered_html(
             sample_file = config.GOLDEN_DIR / "mut_11_late_fee_change.docx"
             if not CURRENT_SESSION_FILE.exists():
                 shutil.copyfile(sample_file, CURRENT_SESSION_FILE)
+            default_s_file = get_session_file("default_session", tenant_id="default")
+            if not default_s_file.exists() or CURRENT_SESSION_FILE.stat().st_mtime > default_s_file.stat().st_mtime:
+                shutil.copyfile(CURRENT_SESSION_FILE, default_s_file)
+                save_session_meta(
+                    "default_session",
+                    {
+                        "doc_name": CURRENT_DOC_NAME,
+                        "original_filename": "mut_11_late_fee_change.docx",
+                        "forced_template_id": None,
+                    },
+                    tenant_id="default",
+                )
             initial_data = execute_current_diff(CURRENT_SESSION_FILE)
+            initial_data["session_id"] = "default_session"
+            initial_data["tenant_id"] = "default"
             data_json = _safe_json_embed(initial_data)
         except Exception:
             data_json = "null"
@@ -509,7 +526,22 @@ def start_local_default_review() -> None:
     principal = authenticate_web_request(
         method="GET", path="/", query="", headers={}, raw_body=b""
     )
+    if CURRENT_SESSION_FILE.exists():
+        default_file = get_session_file("default_session", tenant_id=principal.tenant_id)
+        shutil.copyfile(CURRENT_SESSION_FILE, default_file)
+        save_session_meta(
+            "default_session",
+            {
+                "doc_name": CURRENT_DOC_NAME,
+                "original_filename": "mut_11_late_fee_change.docx",
+                "forced_template_id": None,
+            },
+            tenant_id=principal.tenant_id,
+        )
     initial_data = execute_current_diff(CURRENT_SESSION_FILE)
+    initial_data["session_id"] = "default_session"
+    initial_data["tenant_id"] = principal.tenant_id
+    initial_data["user_id"] = principal.user_id
     get_agent_manager().start_document_review(
         initial_data,
         session_id="default_session",
