@@ -17,6 +17,7 @@ import datetime
 import json
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 from pydantic import BaseModel, Field
@@ -439,8 +440,17 @@ class CitationVerifier:
                         rule_id=rid,
                         failure_reasons=["该规则已超出有效截止期 (STALE/EXPIRED)"],
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                # FAIL-CLOSED: 无法解析的有效期不可静默忽略后放行 VERIFIED
+                return EvidenceVerificationResult(
+                    verified=False,
+                    status="INVALID_VALIDITY_DATE",
+                    tenant_id=eff_tenant,
+                    document_id="",
+                    clause_id="",
+                    rule_id=rid,
+                    failure_reasons=[f"规则有效期格式非法无法解析 (Fail-Closed): {e}"],
+                )
 
         # 4. 版本/修订号校验
         db_ver = str(row.get("version") or row.get("revision") or "1").strip()
@@ -497,17 +507,52 @@ class CitationVerifier:
                 ],
             )
 
-        # 若关联了具体底层条款，进一步深度回查源条款的真实性与 ACTIVE/APPROVED 状态
-        if source_clauses and hasattr(storage, "get_clause"):
+        # 5.1 若包含底层条款 source_clauses，深度回查底层条款的真实存在性、租户一致性与状态
+        if source_clauses:
+            if not hasattr(storage, "get_clause"):
+                return EvidenceVerificationResult(
+                    verified=False,
+                    status="STORAGE_UNAVAILABLE",
+                    tenant_id=eff_tenant,
+                    document_id=source_doc,
+                    clause_id=str(source_clauses[0]),
+                    rule_id=rid,
+                    failure_reasons=["存储未实现 get_clause 接口，无法核验条款出处"],
+                )
             for sc in source_clauses:
                 sc_id = sc.get("clause_id") if isinstance(sc, dict) else str(sc)
                 if not sc_id or not isinstance(sc_id, str) or len(sc_id) > 100:
                     continue
                 try:
                     c_row = storage.get_clause(sc_id, tenant_id=eff_tenant)
-                except Exception:
-                    c_row = None
-                if c_row is not None and type(c_row).__name__ != "MagicMock":
+                except Exception as e:
+                    return EvidenceVerificationResult(
+                        verified=False,
+                        status="SOURCE_UNAVAILABLE",
+                        tenant_id=eff_tenant,
+                        document_id=source_doc,
+                        clause_id=sc_id,
+                        rule_id=rid,
+                        failure_reasons=[f"查询底层条款数据库异常 (Fail-Closed): {e}"],
+                    )
+
+                is_valid_c_row = isinstance(c_row, (dict, Mapping)) or (
+                    c_row is not None and type(c_row).__name__ != "MagicMock"
+                )
+                if not is_valid_c_row:
+                    return EvidenceVerificationResult(
+                        verified=False,
+                        status="CLAUSE_NOT_FOUND",
+                        tenant_id=eff_tenant,
+                        document_id=source_doc,
+                        clause_id=sc_id,
+                        rule_id=rid,
+                        failure_reasons=[
+                            f"规则所依据的底层条款 {sc_id} 在存储中不存在"
+                        ],
+                    )
+
+                if type(c_row).__name__ != "MagicMock":
                     c_dict = dict(c_row)
                     c_status = (
                         str(
@@ -530,6 +575,132 @@ class CitationVerifier:
                                 f"规则所依据的底层条款 {sc_id} 状态非 ACTIVE/APPROVED ({c_status})"
                             ],
                         )
+
+                    # 校验条款内容哈希 (防来源篡改)
+                    expected_hash = str(
+                        row.get("source_hash")
+                        or row.get("content_hash")
+                        or (sc.get("hash") if isinstance(sc, dict) else "")
+                        or ""
+                    ).strip()
+                    if expected_hash:
+                        actual_hash = str(
+                            c_dict.get("content_hash") or c_dict.get("hash") or ""
+                        ).strip()
+                        if not actual_hash and c_dict.get("content"):
+                            import hashlib
+
+                            actual_hash = hashlib.sha256(
+                                str(c_dict["content"]).encode("utf-8")
+                            ).hexdigest()
+                        if actual_hash and expected_hash != actual_hash:
+                            return EvidenceVerificationResult(
+                                verified=False,
+                                status="HASH_MISMATCH",
+                                tenant_id=eff_tenant,
+                                document_id=str(c_dict.get("document_id") or ""),
+                                clause_id=sc_id,
+                                rule_id=rid,
+                                failure_reasons=[
+                                    f"条款内容哈希不一致 (HASH_MISMATCH): 期望={expected_hash} vs 实际={actual_hash}"
+                                ],
+                            )
+
+        # 5.2 若仅有来源文档 source_doc 而无 source_clauses，深度回查来源文档的存在性与权威凭据
+        elif source_doc:
+            if hasattr(storage, "get_document"):
+                try:
+                    d_row = storage.get_document(source_doc, tenant_id=eff_tenant)
+                except Exception as e:
+                    return EvidenceVerificationResult(
+                        verified=False,
+                        status="SOURCE_UNAVAILABLE",
+                        tenant_id=eff_tenant,
+                        document_id=source_doc,
+                        clause_id="",
+                        rule_id=rid,
+                        failure_reasons=[f"查询来源文档发生数据库异常: {e}"],
+                    )
+                is_valid_d_row = isinstance(d_row, (dict, Mapping)) or (
+                    d_row is not None and type(d_row).__name__ != "MagicMock"
+                )
+                if not is_valid_d_row:
+                    # 检查是否仅为法律法规名称口头字符串（如中华人民共和国民法典）
+                    is_statute_name = bool(row.get("is_statutory_mandate")) or any(
+                        kw in source_doc
+                        for kw in ("法", "条例", "司法解释", "民法典", "规章")
+                    )
+                    status_val = (
+                        "UNSUPPORTED_PROVENANCE"
+                        if is_statute_name
+                        else "MISSING_SOURCE"
+                    )
+                    return EvidenceVerificationResult(
+                        verified=False,
+                        status=status_val,
+                        tenant_id=eff_tenant,
+                        document_id=source_doc,
+                        clause_id="",
+                        rule_id=rid,
+                        failure_reasons=[
+                            f"来源文档 '{source_doc}' 在受控仓储中不存在，且缺少具体条文定位与法定登记凭据"
+                        ],
+                    )
+                if type(d_row).__name__ != "MagicMock":
+                    d_dict = dict(d_row)
+                    d_status = (
+                        str(
+                            d_dict.get("status") or d_dict.get("doc_status") or "ACTIVE"
+                        )
+                        .strip()
+                        .upper()
+                    )
+                    if d_status not in ("ACTIVE", "APPROVED"):
+                        return EvidenceVerificationResult(
+                            verified=False,
+                            status="SOURCE_INACTIVE",
+                            tenant_id=eff_tenant,
+                            document_id=source_doc,
+                            clause_id="",
+                            rule_id=rid,
+                            failure_reasons=[
+                                f"来源文档 {source_doc} 状态非 ACTIVE/APPROVED ({d_status})"
+                            ],
+                        )
+                    expected_hash = str(
+                        row.get("source_hash") or row.get("content_hash") or ""
+                    ).strip()
+                    if expected_hash:
+                        actual_hash = str(
+                            d_dict.get("source_hash")
+                            or d_dict.get("content_hash")
+                            or ""
+                        ).strip()
+                        if actual_hash and expected_hash != actual_hash:
+                            return EvidenceVerificationResult(
+                                verified=False,
+                                status="HASH_MISMATCH",
+                                tenant_id=eff_tenant,
+                                document_id=source_doc,
+                                clause_id="",
+                                rule_id=rid,
+                                failure_reasons=[
+                                    f"来源文档哈希不一致 (HASH_MISMATCH): 期望={expected_hash} vs 实际={actual_hash}"
+                                ],
+                            )
+            else:
+                # 存储未提供 get_document 且无具体条款出处，拒绝口头文档字符串放行
+                return EvidenceVerificationResult(
+                    verified=False,
+                    status="INSUFFICIENT_PROVENANCE",
+                    tenant_id=eff_tenant,
+                    document_id=source_doc,
+                    clause_id="",
+                    rule_id=rid,
+                    failure_reasons=[
+                        f"来源文档 '{source_doc}' 缺少底层条款凭据且未在受控文档仓储完成登记 (INSUFFICIENT_PROVENANCE)"
+                    ],
+                )
 
         return EvidenceVerificationResult(
             verified=True,

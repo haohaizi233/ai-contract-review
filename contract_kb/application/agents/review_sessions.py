@@ -502,14 +502,16 @@ class AgentReviewSession:
                 try:
                     res = review_fn(**review_kwargs)
                 except TypeError as te:
-                    if "unexpected keyword argument" in str(te) and (
-                        "storage" in review_kwargs or "tenant_id" in review_kwargs
-                    ):
-                        review_kwargs.pop("storage", None)
-                        review_kwargs.pop("tenant_id", None)
-                        res = review_fn(**review_kwargs)
-                    else:
-                        raise
+                    # FAIL-CLOSED: 严禁通过剔除 storage/tenant_id 安全参数降级重试！
+                    res = agent.build_high_precision_fallback(
+                        annotation=ann_item,
+                        error_msg=f"Agent 接口不匹配或缺少受信任执行上下文 (AGENT_INTERFACE_MISMATCH): {te}",
+                        failure_code="AGENT_INTERFACE_MISMATCH",
+                        source="AGENT_INTERFACE_MISMATCH",
+                        elapsed_sec=0.05,
+                        tenant_id=self.tenant_id,
+                        storage=storage,
+                    )
             except Exception as e:
                 res = agent.build_high_precision_fallback(
                     annotation=ann_item,

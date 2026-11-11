@@ -43,8 +43,8 @@ from contract_kb.domain.models.review_identity import (
     ReviewStatus,
 )
 from .knowledge_adapter import (
+    build_governed_evidence_bundle,
     retrieve_governed_rules,
-    retrieve_legal_rules,
 )
 from contract_kb.infrastructure.ai.llm_providers import (
     DATA_CLOSE,
@@ -521,6 +521,46 @@ class LegalReviewAgent:
                             except Exception:
                                 # FAIL-CLOSED: 数据库核验异常坚决不得放行缓存！
                                 cache_valid = False
+                    else:
+                        # 空证据缓存复核：此前研判无匹配规则 (NO_MATCHING_RULE)
+                        # 必须校验当前知识库中是否已有针对该类别生效的 APPROVED 规则
+                        if storage is None or not hasattr(storage, "get_rules"):
+                            if (
+                                os.environ.get("CONTRACT_KB_ENV", "").lower()
+                                == "production"
+                            ):
+                                cache_valid = False
+                        else:
+                            try:
+                                current_active_rules = storage.get_rules(
+                                    tenant_id=eff_tenant_id, status="APPROVED"
+                                )
+                                cat_upper = (category or "OTHER").upper()
+                                for r in current_active_rules:
+                                    r_params = (
+                                        r.get("parameters") or r.get("params") or {}
+                                    )
+                                    if isinstance(r_params, str):
+                                        try:
+                                            r_params = json.loads(r_params)
+                                        except Exception:
+                                            r_params = {}
+                                    r_cat = (
+                                        str(
+                                            r.get("clause_category")
+                                            or r_params.get("clause_category")
+                                            or ""
+                                        )
+                                        .strip()
+                                        .upper()
+                                    )
+                                    if r_cat == cat_upper or r_cat == "ALL":
+                                        # 知识库新增了匹配规则，旧的空证据缓存立即失效！
+                                        cache_valid = False
+                                        break
+                            except Exception:
+                                # FAIL-CLOSED: 数据库核验异常不可放行空证据缓存
+                                cache_valid = False
 
                     if cache_valid:
                         cached_res["id"] = ann_id
@@ -576,8 +616,8 @@ class LegalReviewAgent:
                 storage=storage,
             )
 
-        # 4. 从可信知识底座检索匹配的已审批企业规则并执行 Citation 真实核验
-        rules_context = retrieve_legal_rules(
+        # 4. 先验证证据，再生成权威 Prompt
+        evidence_bundle = build_governed_evidence_bundle(
             category=category,
             delta_type=delta_type,
             standard_span=std_span,
@@ -585,40 +625,30 @@ class LegalReviewAgent:
             tenant_id=eff_tenant_id,
             storage=storage,
         )
-        governed_rules = retrieve_governed_rules(
-            category,
-            delta_type,
-            standard_span=std_span,
-            reviewed_span=rev_span,
-            tenant_id=eff_tenant_id,
-            storage=storage,
+        rules_context = evidence_bundle.to_prompt_context(
+            delta_type=delta_type, category=category
         )
-        verifier = CitationVerifier()
         evidence_refs = []
-        for r in governed_rules:
-            ver_res = verifier.verify_rule_evidence(
-                storage=storage,
-                rule_item=r,
-                expected_tenant_id=eff_tenant_id,
-            )
+        for ev in (
+            evidence_bundle.authoritative_evidence
+            + evidence_bundle.non_authoritative_reference
+        ):
             evidence_refs.append(
                 {
                     "source_type": (
                         "APPROVED_RULE"
-                        if r.approval_status == "APPROVED"
+                        if ev.approval_status == "APPROVED"
                         else "STATIC_REFERENCE"
                     ),
                     "tenant_id": eff_tenant_id,
-                    "rule_id": r.rule_id,
-                    "rule_name": r.name,
-                    "revision": r.revision,
-                    "approval_status": r.approval_status,
-                    "verification_status": (
-                        "VERIFIED" if ver_res.verified else ver_res.status
-                    ),
-                    "verification_failure_reasons": ver_res.failure_reasons,
-                    "is_statutory": r.is_statutory_mandate,
-                    "rule_description": r.rule_description,
+                    "rule_id": ev.rule_id,
+                    "rule_name": ev.name,
+                    "revision": ev.rule_revision,
+                    "approval_status": ev.approval_status,
+                    "verification_status": ev.verification_status,
+                    "verification_failure_reasons": ev.verification_failure_reasons,
+                    "is_statutory": ev.is_statutory_mandate,
+                    "rule_description": ev.rule_description,
                 }
             )
 
@@ -813,6 +843,37 @@ class LegalReviewAgent:
                 source="SCHEMA_VALIDATION_FALLBACK",
                 elapsed_sec=elapsed,
             )
+
+        # 模型输出证据边界反向核查 (Evidence Boundary Reverse Check)
+        auth_rule_ids = {ev.rule_id for ev in evidence_bundle.authoritative_evidence}
+        full_analysis_text = (
+            f"{result.get('ai_analysis', '')} {result.get('action_advice', '')}"
+        )
+        boundary_violations: list[str] = []
+        for ref in evidence_refs:
+            rid = str(ref.get("rule_id") or "")
+            if rid and rid in full_analysis_text:
+                if rid not in auth_rule_ids:
+                    boundary_violations.append(
+                        f"结论越界引用了未核验规则 [{rid}] 作为依据"
+                    )
+
+        if "国家法律明确规定" in full_analysis_text and not any(
+            ev.is_statutory_mandate for ev in evidence_bundle.authoritative_evidence
+        ):
+            boundary_violations.append(
+                "模型声称法定强制要求，但缺乏对应的已核验法定证据"
+            )
+
+        if boundary_violations:
+            result["review_status"] = ReviewStatus.NEEDS_HUMAN_REVIEW.value
+            result["requires_human_review"] = True
+            result["boundary_violation"] = True
+            result["failure_reason"] = " ; ".join(boundary_violations)
+            result["reasoning"] = (
+                result.get("reasoning") or ""
+            ) + f"【证据边界警报】{result['failure_reason']}"
+            return result
 
         # TOCTOU 审批撤销复核：核验证据规则在推理期间是否被法务管理员撤销、修订或数据库故障 (Strict Fail-Closed)
         if storage is not None and hasattr(storage, "get_rules") and evidence_refs:

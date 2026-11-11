@@ -47,6 +47,11 @@ def test_trusted_agent_end_to_end_governance_lifecycle(tmp_path):
 
     mock_storage = MagicMock()
     mock_storage.get_rules.return_value = [approved_rule_data]
+    mock_storage.get_document.return_value = {
+        "document_id": "集团合规风控红线2026",
+        "tenant_id": tenant_id,
+        "status": "APPROVED",
+    }
 
     # 2. 受控检索召回已审批规则
     rules = retrieve_governed_rules(

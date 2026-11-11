@@ -51,12 +51,11 @@ def test_toctou_in_flight_rule_revocation_triggers_alarm_and_blocks_cache():
         },
     }
 
-    # 检索阶段 (retrieve_legal_rules, retrieve_governed_rules, CitationVerifier)：规则依然有效
+    # 检索阶段与 CitationVerifier 来源核验阶段：规则依然有效
     # 推理后 TOCTOU 复核阶段：规则已被法务管理员撤销 (返回空列表)
     mock_storage.get_rules.side_effect = [
-        [active_rule],  # retrieve_legal_rules
         [active_rule],  # retrieve_governed_rules
-        [active_rule],  # verify_rule_evidence
+        [active_rule],  # CitationVerifier.verify_rule_evidence
         [],  # post-inference TOCTOU 复核时已撤销
     ]
 

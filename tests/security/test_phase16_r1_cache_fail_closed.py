@@ -145,18 +145,10 @@ def test_toctou_rule_revocation_triggers_human_review_and_aborts_cache():
             del agent._cache[cache_key]
 
     revoking_storage = MagicMock()
-    # 第一次查询 (检索阶段): APPROVED
-    # 第二次查询 (TOCTOU 复核阶段): 规则被撤销 (status=REVOKED) 或不存在
+    # 第一次查询 (检索阶段 build_governed_evidence_bundle -> retrieve_governed_rules): APPROVED
+    # 第二次查询 (CitationVerifier.verify_rule_evidence 数据库权威出处回查): APPROVED
+    # 第三次查询 (TOCTOU 复核阶段): 规则被撤销 (status=REVOKED) 或不存在 -> 必须触发失效警报并转人工复核
     revoking_storage.get_rules.side_effect = [
-        [
-            {
-                "rule_id": "RULE_TERM_01",
-                "clause_category": "TERMINATION",
-                "status": "APPROVED",
-                "name": "解除权风控",
-                "parameters": {},
-            }
-        ],
         [
             {
                 "rule_id": "RULE_TERM_01",

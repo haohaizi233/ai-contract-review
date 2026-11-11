@@ -98,6 +98,9 @@ def test_feedback_dataset_export_train_eval_isolation() -> None:
             "contract_kb.application.agents.knowledge_adapter.FEEDBACK_BASE_DIR",
             tmp_base,
         ):
+            from contract_kb.interfaces.http.auth import Principal
+
+            approver = Principal(user_id="chief_counsel", roles=["admin"])
             # 记录多条反馈数据（包含不同文档哈希，以触发 holdout 切分）
             for idx in range(10):
                 file_hash = f"contract_hash_{idx:03d}"
@@ -117,6 +120,7 @@ def test_feedback_dataset_export_train_eval_isolation() -> None:
                     },
                     reviewer_id="lead_counsel",
                     is_approved=True,  # 已经审批入库
+                    approver_principal=approver,
                 )
 
             # 导出 SFT 微调数据

@@ -19,7 +19,7 @@ import json
 import os
 import re
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -303,6 +303,159 @@ def retrieve_governed_rules(
     return matching_rules
 
 
+@dataclass
+class VerifiedLegalEvidence:
+    """经过 CitationVerifier 核验后的强类型法务证据对象。"""
+
+    rule_id: str
+    name: str
+    tenant_id: str
+    rule_revision: str
+    approval_status: str
+    verification_status: str  # VERIFIED, UNVERIFIED, INSUFFICIENT_PROVENANCE, etc.
+    source_document_id: str = ""
+    source_clause_id: str = ""
+    source_hash: str | None = None
+    source_version: str = ""
+    quoted_text: str = ""
+    effective_at: float | None = None
+    expiry_at: float | None = None
+    verification_time: float = 0.0
+    verification_failure_reasons: list[str] = field(default_factory=list)
+    is_statutory_mandate: bool = False
+    rule_description: str = ""
+    advice_template: str = ""
+
+
+@dataclass
+class LegalEvidenceBundle:
+    """证据依据包：严格区分权威依据、非权威参考与阻断规则。"""
+
+    tenant_id: str
+    authoritative_evidence: list[VerifiedLegalEvidence] = field(default_factory=list)
+    non_authoritative_reference: list[VerifiedLegalEvidence] = field(
+        default_factory=list
+    )
+    blocked_rules: list[VerifiedLegalEvidence] = field(default_factory=list)
+
+    def to_prompt_context(
+        self, delta_type: str | None = None, category: str | None = None
+    ) -> str:
+        parts: list[str] = []
+        if self.authoritative_evidence:
+            parts.append("【企业已审批权威风控依据（必须优先遵从）】")
+            for ev in self.authoritative_evidence:
+                badge = (
+                    "[国家法定规范·强制遵从]"
+                    if ev.is_statutory_mandate
+                    else "[企业已审批风控基准·优先适用]"
+                )
+                parts.append(
+                    f"{badge} 《{ev.name}》（版本 r{ev.rule_revision}，编号 {ev.rule_id}）：\n{ev.rule_description}"
+                )
+
+        if self.non_authoritative_reference:
+            parts.append("【非权威参考资料（仅供法务人工研判辅助，不得作为确证依据）】")
+            for ev in self.non_authoritative_reference:
+                parts.append(
+                    f"[非权威参考·不可作为确证依据] 《{ev.name}》（编号 {ev.rule_id}，核验状态: {ev.verification_status}）：\n{ev.rule_description}"
+                )
+
+        if not self.authoritative_evidence and not self.non_authoritative_reference:
+            parts.append(
+                "【企业通用风控指引】所有非标条款变动均需评估权利义务对等性，严防单方加重责任或减损救济途径。（注：当前未匹配到企业生效已审批风控红线，相关研判仅供参考，必须由法务人工复核）"
+            )
+
+        if delta_type == "NUMBER_CHANGE":
+            parts.append(
+                "★ 数值要素变动核实：重点核对金额、比率、付款节点或账户要素真实性。"
+            )
+        elif delta_type == "PARTY_CHANGE":
+            parts.append(
+                "★ 签约与责任主体核实：严防我方单方为客户义务兜底，确保主体资质适格。"
+            )
+        elif delta_type == "MISSING_CLAUSE":
+            parts.append(
+                "★ 母本条款缺失警示：核心条款缺失存在法律真空，需重点确认是否需强制恢复。"
+            )
+
+        cat_key = (category or "OTHER").upper()
+        matched_fewshot = None
+        for item in FEW_SHOT_PRECEDENTS:
+            if item["category"] == cat_key or item["delta_type"] == delta_type:
+                matched_fewshot = item
+                break
+        if matched_fewshot:
+            parts.append(
+                f"【历史审批实践案例（仅供参考，非法定强制标准）】\n"
+                f"- 母本原文: {matched_fewshot['standard'][:50]}...\n"
+                f"- 送审变动: {matched_fewshot['reviewed'][:50]}...\n"
+                f"- 处置参考: {matched_fewshot['advice']}"
+            )
+
+        return "\n\n".join(parts)
+
+
+def build_governed_evidence_bundle(
+    category: str | None,
+    delta_type: str | None,
+    standard_span: str = "",
+    reviewed_span: str = "",
+    tenant_id: str = "default",
+    storage: Any = None,
+) -> LegalEvidenceBundle:
+    """对检索出的候选规则执行 CitationVerifier 真实核验，构建结构化证据依据包。"""
+    from contract_kb.modules.retrieval.citation import CitationVerifier
+
+    rules = retrieve_governed_rules(
+        category=category,
+        delta_type=delta_type,
+        standard_span=standard_span,
+        reviewed_span=reviewed_span,
+        tenant_id=tenant_id,
+        storage=storage,
+    )
+    bundle = LegalEvidenceBundle(tenant_id=tenant_id)
+    verifier = CitationVerifier()
+    for r in rules:
+        if hasattr(r, "to_dict"):
+            r_dict = r.to_dict()
+        else:
+            r_dict = asdict(r)
+        ver_res = verifier.verify_rule_evidence(
+            storage=storage, rule_item=r_dict, expected_tenant_id=tenant_id
+        )
+        evidence = VerifiedLegalEvidence(
+            rule_id=r.rule_id,
+            name=r.name,
+            tenant_id=tenant_id,
+            rule_revision=str(r.revision),
+            approval_status=r.approval_status,
+            verification_status=ver_res.status,
+            source_document_id=ver_res.document_id,
+            source_clause_id=ver_res.clause_id,
+            source_hash=ver_res.source_hash,
+            quoted_text=r.rule_description,
+            verification_time=time.time(),
+            verification_failure_reasons=ver_res.failure_reasons,
+            is_statutory_mandate=r.is_statutory_mandate,
+            rule_description=r.rule_description,
+            advice_template=r.advice_template,
+        )
+        if ver_res.verified and ver_res.status == "VERIFIED":
+            bundle.authoritative_evidence.append(evidence)
+        elif ver_res.status in (
+            "REVOKED",
+            "APPROVAL_REVOKED",
+            "TENANT_MISMATCH",
+            "HASH_MISMATCH",
+        ):
+            bundle.blocked_rules.append(evidence)
+        else:
+            bundle.non_authoritative_reference.append(evidence)
+    return bundle
+
+
 def retrieve_legal_rules(
     category: str | None,
     delta_type: str | None,
@@ -311,62 +464,16 @@ def retrieve_legal_rules(
     tenant_id: str = "default",
     storage: Any = None,
 ) -> str:
-    """组装针对条款变动的受控法务提示词依据。"""
-    cat_key = (category or "OTHER").upper()
-    rules = retrieve_governed_rules(
-        category,
-        delta_type,
+    """组装针对条款变动的受控法务提示词依据（严格先核验，后生成提示词上下文）。"""
+    bundle = build_governed_evidence_bundle(
+        category=category,
+        delta_type=delta_type,
         standard_span=standard_span,
         reviewed_span=reviewed_span,
         tenant_id=tenant_id,
         storage=storage,
     )
-
-    rules_parts: list[str] = []
-    if rules:
-        for r in rules:
-            auth_badge = (
-                "[国家法定规范·强制遵从]"
-                if r.is_statutory_mandate
-                else "[企业已审批风控基准·优先适用]"
-            )
-            rules_parts.append(
-                f"{auth_badge} 《{r.name}》（版本 r{r.revision}，编号 {r.rule_id}）：\n{r.rule_description}"
-            )
-    else:
-        rules_parts.append(
-            "【企业通用风控指引】所有非标条款变动均需评估权利义务对等性，严防单方加重责任或减损救济途径。（注：当前未匹配到企业生效已审批风控红线，相关研判仅供参考，必须由法务人工复核）"
-        )
-
-    # 关键变动专项要点
-    if delta_type == "NUMBER_CHANGE":
-        rules_parts.append(
-            "★ 数值要素变动核实：重点核对金额、比率、付款节点或账户要素真实性。"
-        )
-    elif delta_type == "PARTY_CHANGE":
-        rules_parts.append(
-            "★ 签约与责任主体核实：严防我方单方为客户义务兜底，确保主体资质适格。"
-        )
-    elif delta_type == "MISSING_CLAUSE":
-        rules_parts.append(
-            "★ 母本条款缺失警示：核心条款缺失存在法律真空，需重点确认是否需强制恢复。"
-        )
-
-    # 仅提供一条非强制历史参考案例
-    matched_fewshot = None
-    for item in FEW_SHOT_PRECEDENTS:
-        if item["category"] == cat_key or item["delta_type"] == delta_type:
-            matched_fewshot = item
-            break
-    if matched_fewshot:
-        rules_parts.append(
-            f"【历史审批实践案例（仅供参考，非法定强制标准）】\n"
-            f"- 母本原文: {matched_fewshot['standard'][:50]}...\n"
-            f"- 送审变动: {matched_fewshot['reviewed'][:50]}...\n"
-            f"- 处置参考: {matched_fewshot['advice']}"
-        )
-
-    return "\n\n".join(rules_parts)
+    return bundle.to_prompt_context(delta_type=delta_type, category=category)
 
 
 # ---------------- Phase 13R7: 法务反馈与微调数据合规治理 ----------------
@@ -450,7 +557,6 @@ def record_user_feedback(
         tenant_id = str(payload.get("tenant_id") or tenant_id or "default")
         # 客户端 payload 字典传入的自批请求必须直接降级为 False，严防自提自批
         is_approved = False
-        is_payload_dict = True
     else:
         final_task_id = str(task_id)
         sample_data = sample_data or {}
@@ -459,32 +565,22 @@ def record_user_feedback(
             file_sha256 = str(sample_data.get("file_sha256") or "0" * 64)
         if not annotation_id:
             annotation_id = str(sample_data.get("annotation_id") or "unspecified_ann")
-        is_payload_dict = False
 
-    # 服务层授权检查：拒绝无凭证的自审批
+    # 服务层授权检查：拒绝无凭证的自审批，删除审核人名称字符串兼容后门
     can_approve = False
     approver_name: str | None = None
     if approver_principal is not None:
         has_role_fn = getattr(approver_principal, "has_role", None)
         if callable(has_role_fn) and (has_role_fn("admin") or has_role_fn("reviewer")):
-            can_approve = True
-            approver_name = getattr(
-                approver_principal, "user_id", str(approver_principal)
-            )
-    elif (
-        is_approved
-        and not is_payload_dict
-        and str(reviewer_id)
-        in (
-            "legal_admin",
-            "admin",
-            "lead_counsel",
-            "chief_counsel",
-        )
-    ):
-        # 兼容受信任法务管理员内部直接记录已审批样本
-        can_approve = True
-        approver_name = str(reviewer_id)
+            approver_id = str(
+                getattr(approver_principal, "user_id", str(approver_principal))
+            ).strip()
+            # 严格防止自提自批：提交人与审批人不能为同一身份
+            if approver_id and reviewer_id and approver_id == str(reviewer_id).strip():
+                can_approve = False
+            else:
+                can_approve = True
+                approver_name = approver_id
 
     final_approved = bool(is_approved and can_approve)
 
@@ -592,15 +688,15 @@ def approve_feedback_for_training(
     ):
         raise PermissionError("权限不足：仅管理员或授权法务复核员可批准训练样本")
 
-    approver_tenant = getattr(approver, "tenant_id", "default")
-    if (
-        approver_tenant
-        and tenant_id
-        and approver_tenant != tenant_id
-        and approver_tenant != "default"
-    ):
+    approver_tenant = str(getattr(approver, "tenant_id", "") or "default").strip()
+    target_tenant = str(tenant_id or "default").strip()
+    is_cross_admin = bool(
+        getattr(approver, "is_system_admin", False)
+        or (getattr(approver, "is_admin", False) and approver_tenant in ("*", "system"))
+    )
+    if approver_tenant != target_tenant and not is_cross_admin:
         raise PermissionError(
-            f"禁止跨租户批准训练数据：操作租户={approver_tenant} vs 目标租户={tenant_id}"
+            f"禁止跨租户批准训练数据：操作租户={approver_tenant} vs 目标租户={target_tenant}"
         )
 
     tenant_base = get_tenant_feedback_dir(tenant_id)
@@ -609,6 +705,7 @@ def approve_feedback_for_training(
         raise ValueError(f"未找到租户 {tenant_id} 的待审反馈记录文件")
 
     found_record: dict[str, Any] | None = None
+    already_approved = False
     all_raw_lines: list[str] = []
     with raw_file.open("r", encoding="utf-8") as rf:
         for line in rf:
@@ -618,8 +715,29 @@ def approve_feedback_for_training(
             if str(rec.get("task_id")) == str(task_id) and str(
                 rec.get("annotation_id")
             ) == str(annotation_id):
+                # 严格防自提自批安全校验
+                submitter_id = str(
+                    rec.get("reviewer_id")
+                    or rec.get("submitter_id")
+                    or rec.get("user_id")
+                    or ""
+                ).strip()
+                approver_id = str(getattr(approver, "user_id", str(approver))).strip()
+                if submitter_id and approver_id and submitter_id == approver_id:
+                    raise PermissionError(
+                        f"防自提自批安全阻断：反馈提交人 ({submitter_id}) 不可审批自己的反馈样本进入训练集"
+                    )
+
+                if rec.get("is_approved_for_training") and not rec.get(
+                    "approval_revoked"
+                ):
+                    already_approved = True
+                    found_record = rec
+                    all_raw_lines.append(line if line.endswith("\n") else line + "\n")
+                    continue
+
                 rec["is_approved_for_training"] = True
-                rec["approved_by"] = getattr(approver, "user_id", str(approver))
+                rec["approved_by"] = approver_id
                 rec["approved_at"] = time.time()
                 rec["approval_reason"] = reason
                 rec["approval_revision"] = int(rec.get("approval_revision", 0)) + 1
@@ -633,6 +751,18 @@ def approve_feedback_for_training(
         raise ValueError(
             f"未找到对应的待审反馈记录: task_id={task_id}, annotation_id={annotation_id}"
         )
+
+    # 幂等返回：若已审批且未撤销，不重复刷盘写入
+    if already_approved:
+        return {
+            "status": "APPROVED_FOR_TRAINING",
+            "task_id": task_id,
+            "annotation_id": annotation_id,
+            "approved_by": found_record["approved_by"],
+            "approved_at": found_record["approved_at"],
+            "revision": found_record["approval_revision"],
+            "idempotent": True,
+        }
 
     # 原子回写更新 raw_feedback
     tmp_raw = raw_file.with_suffix(f".tmp_{time.time_ns()}")
