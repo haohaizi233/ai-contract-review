@@ -174,6 +174,49 @@ dropZone.addEventListener('drop', (e) => {
 });
 
 window.addEventListener('keydown', (e) => {
+  // 1. 原格式高保真在线预览核心快捷键 (Alt+1 母本 / Alt+2 送审 / Alt+3 并排)
+  if (e.altKey && (e.key === '1' || e.key === 'm' || e.key === 'M')) {
+    e.preventDefault();
+    openOriginalPreview('template');
+    return;
+  }
+  if (e.altKey && (e.key === '2' || e.key === 's' || e.key === 'S')) {
+    e.preventDefault();
+    openOriginalPreview('reviewed');
+    return;
+  }
+  if (e.altKey && (e.key === '3' || e.key === 'b' || e.key === 'B')) {
+    e.preventDefault();
+    openOriginalPreview('side_by_side');
+    return;
+  }
+
+  // 2. 预览模态弹窗处于打开状态时的专用交互快捷键
+  const previewModal = document.getElementById('previewModal');
+  if (previewModal && previewModal.classList.contains('open')) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closePreviewModal();
+      return;
+    }
+    if (e.key === '+' || e.key === '=') {
+      e.preventDefault();
+      adjustPreviewZoom(0.1);
+      return;
+    }
+    if (e.key === '-' || e.key === '_') {
+      e.preventDefault();
+      adjustPreviewZoom(-0.1);
+      return;
+    }
+    if (e.key === '0') {
+      e.preventDefault();
+      resetPreviewZoom();
+      return;
+    }
+  }
+
+  // 3. 原有批注导航与弹窗关闭快捷键
   if (e.key === '[' || (e.altKey && e.key === 'ArrowUp')) {
     prevAnnotation();
   } else if (e.key === ']' || (e.altKey && e.key === 'ArrowDown')) {
@@ -184,6 +227,7 @@ window.addEventListener('keydown', (e) => {
     closeMaterialModal();
     closeRefTemplateModal();
     closeCaseDetailModal();
+    closePreviewModal();
   }
 });
 

@@ -62,6 +62,9 @@ async function fetchTemplateListQuietly() {
 // ==================== 模板选择与更换模块（按置信度从上往下排） ====================
 function initTemplateModal() {
   document.getElementById('tplModalTotalCount').innerText = allTemplates.length;
+  const selected = allTemplates.find(t => isCurrentTemplate(t));
+  const name = currentData && (currentData.clean_template_name || currentData.matched_template_display || currentData.matched_template_name);
+  document.getElementById('tplCurrentSelection').innerText = `当前使用：${(selected && selected.name) || name || '尚未选择'}${currentData ? (currentData.is_manual_override ? '（手动指定）' : '（自动匹配）') : ''}`;
   renderCategoryTabs();
   renderTemplateItems();
 }
@@ -110,11 +113,20 @@ function onTemplateSearchInput(e) {
   renderTemplateItems();
 }
 
+function isCurrentTemplate(template) {
+  if (!currentData) return false;
+  if (currentData.matched_template_raw_id === template.document_id) return true;
+  if (currentData.template_content_hash && template.source_hash) {
+    return currentData.template_content_hash === template.source_hash;
+  }
+  return currentData.matched_template_id === template.document_id
+    || Boolean(template.template_code && currentData.matched_template_id === template.template_code);
+}
+
 function renderTemplateItems() {
   const container = document.getElementById('tplListContainer');
   container.innerHTML = '';
 
-  const currentTplId = currentData ? (currentData.matched_template_id || '') : '';
 
   // 过滤并确保严格从上往下按置信度排序
   const filtered = allTemplates.filter(t => {
@@ -148,7 +160,7 @@ function renderTemplateItems() {
   }
 
   filtered.forEach(t => {
-    const isCurrent = t.document_id === currentTplId;
+    const isCurrent = isCurrentTemplate(t);
     const card = document.createElement('div');
     card.className = `tpl-card-item ${isCurrent ? 'active-tpl' : ''}`;
     card.onclick = () => switchTemplate(t.document_id, t.name);
@@ -641,5 +653,293 @@ function loadRefTemplate(relPath, mode) {
     .catch(err => {
       hideLoading();
       showToast(`载入模板失败: ${err.message}`, 'error');
+    });
+}
+
+// ==================== 原格式高保真在线预览 (Alt+1 母本 / Alt+2 送审) ====================
+let currentPreviewTarget = 'reviewed';
+let previewZoomScale = 1.0;
+let previewMetaCache = {};
+let previewAbortController = null;
+
+function openOriginalPreview(target) {
+  const modal = document.getElementById('previewModal');
+  if (!modal) return;
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden', 'false');
+  switchPreviewTarget(target || 'reviewed');
+}
+
+function closePreviewModal() {
+  const modal = document.getElementById('previewModal');
+  if (!modal) return;
+  modal.classList.remove('open');
+  modal.setAttribute('aria-hidden', 'true');
+  if (previewAbortController) {
+    try { previewAbortController.abort(); } catch (e) {}
+    previewAbortController = null;
+  }
+}
+
+function closePreviewModalOnBackdrop(e) {
+  if (e.target && e.target.id === 'previewModal') {
+    closePreviewModal();
+  }
+}
+
+function togglePreviewFullscreen() {
+  const dialog = document.getElementById('previewModalDialog');
+  const btn = document.getElementById('btnPreviewFullscreen');
+  if (!dialog) return;
+  const isFull = dialog.classList.toggle('fullscreen');
+  if (btn) {
+    btn.innerHTML = isFull ? '🗗 还原' : '🗖 全屏';
+    btn.title = isFull ? '还原窗口大小' : '切换全屏模式';
+  }
+}
+
+function adjustPreviewZoom(delta) {
+  previewZoomScale = Math.min(2.0, Math.max(0.5, Math.round((previewZoomScale + delta) * 10) / 10));
+  applyPreviewZoom();
+}
+
+function resetPreviewZoom() {
+  previewZoomScale = 1.0;
+  applyPreviewZoom();
+}
+
+function applyPreviewZoom() {
+  const label = document.getElementById('previewZoomValue');
+  if (label) label.innerText = `${Math.round(previewZoomScale * 100)}%`;
+  const wrapper = document.getElementById('previewCanvasWrapper');
+  if (wrapper) {
+    wrapper.style.transform = `scale(${previewZoomScale})`;
+  }
+}
+
+function switchPreviewTarget(target) {
+  currentPreviewTarget = target || 'reviewed';
+
+  // 更新标签高亮
+  const tabTpl = document.getElementById('previewTabTemplate');
+  const tabRev = document.getElementById('previewTabReviewed');
+  const tabSide = document.getElementById('previewTabSideBySide');
+  if (tabTpl) tabTpl.classList.toggle('active', currentPreviewTarget === 'template');
+  if (tabRev) tabRev.classList.toggle('active', currentPreviewTarget === 'reviewed');
+  if (tabSide) tabSide.classList.toggle('active', currentPreviewTarget === 'side_by_side');
+
+  // 更新顶栏标题
+  const titleEl = document.getElementById('previewModalTitle');
+  const iconEl = document.getElementById('previewHeaderIcon');
+  if (currentPreviewTarget === 'template') {
+    if (titleEl) titleEl.innerText = '标准基准母本 · Word 原格式高保真在线预览';
+    if (iconEl) iconEl.innerText = '🏛️';
+  } else if (currentPreviewTarget === 'reviewed') {
+    if (titleEl) titleEl.innerText = '送审修改稿 · Word 原格式高保真在线预览';
+    if (iconEl) iconEl.innerText = '✏️';
+  } else {
+    if (titleEl) titleEl.innerText = '原版排版左右双栏高保真对照预览';
+    if (iconEl) iconEl.innerText = '📖';
+  }
+
+  const singleContainer = document.getElementById('previewDocContainer');
+  const splitContainer = document.getElementById('previewSplitContainer');
+
+  if (currentPreviewTarget === 'side_by_side') {
+    if (singleContainer) singleContainer.style.display = 'none';
+    if (splitContainer) splitContainer.style.display = 'flex';
+    loadSideBySidePreview();
+  } else {
+    if (singleContainer) singleContainer.style.display = 'flex';
+    if (splitContainer) splitContainer.style.display = 'none';
+    loadSinglePreview(currentPreviewTarget);
+  }
+}
+
+async function loadSinglePreview(target) {
+  const loading = document.getElementById('previewLoading');
+  const loadingText = document.getElementById('previewLoadingText');
+  const body = document.getElementById('docxPreviewBody');
+  if (loading) loading.classList.add('active');
+  if (loadingText) loadingText.innerText = `正在调取并在线高保真解析【${target === 'template' ? '基准母本' : '送审合同'}】原文件...`;
+  if (body) body.innerHTML = '';
+
+  const sessionId = (ReviewApiClient && ReviewApiClient.sessionId) || (currentData && currentData.session_id) || 'default_session';
+
+  try {
+    // 1. 获取文件元数据
+    const infoResp = await fetch(`/api/diff/preview_file?target=${encodeURIComponent(target)}&session_id=${encodeURIComponent(sessionId)}&info=1`);
+    if (!infoResp.ok) {
+      throw new Error(`获取文件元数据失败 (HTTP ${infoResp.status})`);
+    }
+    const info = await infoResp.json();
+    if (info.error) throw new Error(info.error);
+
+    // 更新信息状态条
+    updatePreviewMetaStrip(info);
+
+    // 2. 拉取文件二进制流
+    const fileResp = await fetch(`/api/diff/preview_file?target=${encodeURIComponent(target)}&session_id=${encodeURIComponent(sessionId)}`);
+    if (!fileResp.ok) throw new Error(`下载原文件数据流失败 (HTTP ${fileResp.status})`);
+    const blob = await fileResp.blob();
+
+    // 3. 渲染
+    await renderDocumentBlob(blob, info.ext, body);
+    if (loading) loading.classList.remove('active');
+  } catch (err) {
+    if (loading) loading.classList.remove('active');
+    if (body) {
+      body.innerHTML = `
+        <div style="background:#FFF; padding:40px; border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,0.2); max-width:600px; margin:40px auto; text-align:center; color:#1E293B;">
+          <div style="font-size:36px; margin-bottom:12px;">⚠️</div>
+          <h3 style="margin-bottom:8px; color:#DC2626;">原文件在线预览未能完成</h3>
+          <p style="color:#64748B; font-size:13px; margin-bottom:20px; line-height:1.6;">${escapeHtml(err.message || String(err))}</p>
+          <div style="display:flex; justify-content:center; gap:10px;">
+            <button class="btn btn-primary" onclick="downloadCurrentPreviewFile()">📥 直接下载原文件</button>
+            <button class="btn btn-emerald" onclick="openCurrentFileInLocalApp()">🖥️ 本地Office打开</button>
+          </div>
+        </div>
+      `;
+    }
+    showToast(`在线预览加载异常: ${err.message}`, 'warning');
+  }
+}
+
+async function loadSideBySidePreview() {
+  const loading = document.getElementById('previewLoading');
+  const loadingText = document.getElementById('previewLoadingText');
+  const leftBody = document.getElementById('docxSplitBodyLeft');
+  const rightBody = document.getElementById('docxSplitBodyRight');
+
+  if (loading) loading.classList.add('active');
+  if (loadingText) loadingText.innerText = '正在并行调取基准母本与送审合同双份原文件排版...';
+  if (leftBody) leftBody.innerHTML = '';
+  if (rightBody) rightBody.innerHTML = '';
+
+  const sessionId = (ReviewApiClient && ReviewApiClient.sessionId) || (currentData && currentData.session_id) || 'default_session';
+
+  try {
+    const [tplInfoResp, revInfoResp] = await Promise.all([
+      fetch(`/api/diff/preview_file?target=template&session_id=${encodeURIComponent(sessionId)}&info=1`),
+      fetch(`/api/diff/preview_file?target=reviewed&session_id=${encodeURIComponent(sessionId)}&info=1`),
+    ]);
+    const tplInfo = await tplInfoResp.json();
+    const revInfo = await revInfoResp.json();
+
+    updatePreviewMetaStrip(revInfo, '送审: ' + (revInfo.file_name || '-') + ' | 母本: ' + (tplInfo.file_name || '-'));
+
+    const [tplFileResp, revFileResp] = await Promise.all([
+      fetch(`/api/diff/preview_file?target=template&session_id=${encodeURIComponent(sessionId)}`),
+      fetch(`/api/diff/preview_file?target=reviewed&session_id=${encodeURIComponent(sessionId)}`),
+    ]);
+    const tplBlob = await tplFileResp.blob();
+    const revBlob = await revFileResp.blob();
+
+    await Promise.all([
+      renderDocumentBlob(tplBlob, tplInfo.ext, leftBody),
+      renderDocumentBlob(revBlob, revInfo.ext, rightBody),
+    ]);
+
+    if (loading) loading.classList.remove('active');
+  } catch (err) {
+    if (loading) loading.classList.remove('active');
+    showToast(`双栏原格式载入异常: ${err.message}`, 'warning');
+  }
+}
+
+async function renderDocumentBlob(blob, ext, container) {
+  ext = (ext || '').toLowerCase();
+  container.innerHTML = '';
+
+  if (ext === '.pdf') {
+    const url = URL.createObjectURL(blob);
+    const iframe = document.createElement('iframe');
+    iframe.src = url;
+    iframe.style.width = '100%';
+    iframe.style.minHeight = '80vh';
+    iframe.style.border = 'none';
+    container.appendChild(iframe);
+    return;
+  }
+
+  // 默认作为 DOCX 高保真解析
+  if (window.docx && typeof window.docx.renderAsync === 'function') {
+    const arrayBuffer = await blob.arrayBuffer();
+    await window.docx.renderAsync(arrayBuffer, container, null, {
+      className: 'docx',
+      inWrapper: true,
+      ignoreWidth: false,
+      ignoreHeight: false,
+      ignoreFonts: false,
+      breakPages: true,
+      experimental: true,
+      trimXmlDeclaration: true,
+      useBase64URL: true,
+      showChanges: false,
+    });
+  } else {
+    // 降级提示
+    container.innerHTML = `
+      <div style="background:#FFF; padding:30px; border-radius:8px; text-align:center; color:#334155;">
+        <p>⚠️ 前端 docx-preview 引擎尚未加载就绪，请直接下载原文件预览。</p>
+        <button class="btn btn-primary" onclick="downloadCurrentPreviewFile()">📥 下载此文件</button>
+      </div>
+    `;
+  }
+}
+
+function updatePreviewMetaStrip(info, customSummary) {
+  const fileNameEl = document.getElementById('previewMetaFileName');
+  const extEl = document.getElementById('previewMetaExt');
+  const sizeEl = document.getElementById('previewMetaSize');
+  const hashEl = document.getElementById('previewMetaHash');
+  const tipEl = document.getElementById('previewMetaTip');
+
+  if (fileNameEl) fileNameEl.innerText = customSummary || info.file_name || '-';
+  if (extEl) extEl.innerText = (info.ext || '.docx').replace('.', '').toUpperCase();
+  if (sizeEl) sizeEl.innerText = `${((info.size || 0) / 1024).toFixed(1)} KB`;
+  if (hashEl) {
+    const h = info.sha256 || '';
+    hashEl.innerText = h ? `${h.slice(0, 10)}...${h.slice(-6)}` : '-';
+    hashEl.title = `完整 SHA256: ${h}`;
+  }
+  if (tipEl) {
+    tipEl.innerText = `💡 原格式还原：支持真实页边距、段落缩进、印章表格与字体样式。快捷键 Alt+1 查母本，Alt+2 查送审。`;
+  }
+}
+
+function downloadCurrentPreviewFile() {
+  const target = currentPreviewTarget === 'side_by_side' ? 'reviewed' : currentPreviewTarget;
+  const sessionId = (ReviewApiClient && ReviewApiClient.sessionId) || (currentData && currentData.session_id) || 'default_session';
+  const url = `/api/diff/preview_file?target=${encodeURIComponent(target)}&session_id=${encodeURIComponent(sessionId)}`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  showToast(`已开始下载【${target === 'template' ? '基准母本' : '送审合同'}】原件！`, 'info');
+}
+
+function openCurrentFileInLocalApp() {
+  const target = currentPreviewTarget === 'side_by_side' ? 'reviewed' : currentPreviewTarget;
+  const sessionId = (ReviewApiClient && ReviewApiClient.sessionId) || (currentData && currentData.session_id) || 'default_session';
+
+  showToast(`正在通过系统关联程序打开【${target === 'template' ? '基准母本' : '送审合同'}】原件...`, 'info');
+  fetch('/api/diff/open_local', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target: target, session_id: sessionId })
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        showToast(`调用本地打开提示: ${data.message || data.error}`, 'warning');
+      } else {
+        showToast(data.message || '已成功唤起系统默认 Office 软件！', 'success');
+      }
+    })
+    .catch(err => {
+      showToast(`唤起失败: ${err.message}`, 'error');
     });
 }

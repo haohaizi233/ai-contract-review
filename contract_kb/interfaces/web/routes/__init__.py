@@ -23,6 +23,11 @@ from .materials import (
     handle_get_materials_stats,
     handle_post_materials_load_contract,
 )
+from .preview import (
+    handle_get_preview_file,
+    handle_post_open_local,
+    resolve_preview_file,
+)
 from .reviews import handle_post_human_decision, handle_post_rerun_review
 from .templates import (
     handle_get_ref_templates_catalog,
@@ -38,6 +43,7 @@ __all__ = [
     "handle_get_materials_case_detail",
     "handle_get_materials_cases",
     "handle_get_materials_stats",
+    "handle_get_preview_file",
     "handle_get_ref_templates_catalog",
     "handle_get_sample",
     "handle_get_templates_list",
@@ -47,6 +53,7 @@ __all__ = [
     "handle_post_feedback",
     "handle_post_human_decision",
     "handle_post_materials_load_contract",
+    "handle_post_open_local",
     "handle_post_prioritize_card",
     "handle_post_ref_templates_load",
     "handle_post_rerun_review",
@@ -57,4 +64,5 @@ __all__ = [
     "handle_post_templates_reload",
     "handle_post_toggle_pause",
     "handle_post_upload",
+    "resolve_preview_file",
 ]

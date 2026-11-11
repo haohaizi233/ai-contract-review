@@ -37,6 +37,7 @@ from .routes import (
     handle_get_materials_case_detail,
     handle_get_materials_cases,
     handle_get_materials_stats,
+    handle_get_preview_file,
     handle_get_ref_templates_catalog,
     handle_get_sample,
     handle_get_templates_list,
@@ -46,6 +47,7 @@ from .routes import (
     handle_post_feedback,
     handle_post_human_decision,
     handle_post_materials_load_contract,
+    handle_post_open_local,
     handle_post_prioritize_card,
     handle_post_ref_templates_load,
     handle_post_rerun_review,
@@ -88,12 +90,17 @@ def load_html_template() -> str:
     """从包内 templates/ 与 static/ 目录加载并组装完整前端模板（不依赖当前工作目录）。"""
     html_skeleton = (TEMPLATES_DIR / "index.html").read_text(encoding="utf-8")
     css_content = (STATIC_DIR / "css" / "app.css").read_text(encoding="utf-8")
-    js_files = [
+    vendor_files = [
+        STATIC_DIR / "js" / "vendor" / "jszip.min.js",
+        STATIC_DIR / "js" / "vendor" / "docx-preview.min.js",
+    ]
+    core_files = [
         STATIC_DIR / "js" / "app.js",
         STATIC_DIR / "js" / "api_client.js",
         STATIC_DIR / "js" / "review_workspace.js",
         STATIC_DIR / "js" / "agent_stream.js",
     ]
+    js_files = [p for p in vendor_files if p.exists()] + core_files
     js_content = "\n\n".join(p.read_text(encoding="utf-8") for p in js_files)
     html = html_skeleton.replace("/* __APP_CSS_PLACEHOLDER__ */", css_content)
     html = html.replace("/* __APP_JS_PLACEHOLDER__ */", js_content)
@@ -203,6 +210,7 @@ WEB_ROUTE_ROLES: dict[str, str] = {
     "GET /api/templates/list": ROLE_VIEWER,
     "GET /api/diff/agent_stream": ROLE_VIEWER,
     "GET /api/diff/agent_status": ROLE_VIEWER,
+    "GET /api/diff/preview_file": ROLE_VIEWER,
     "GET /api/ref_templates/catalog": ROLE_VIEWER,
     "GET /api/materials/stats": ROLE_VIEWER,
     "GET /api/materials/cases": ROLE_VIEWER,
@@ -210,6 +218,7 @@ WEB_ROUTE_ROLES: dict[str, str] = {
     "GET /api/diff/sample": ROLE_REVIEWER,
     "POST /api/templates/reload": ROLE_ADMIN,
     "POST /api/diff/switch-template": ROLE_REVIEWER,
+    "POST /api/diff/open_local": ROLE_REVIEWER,
     "POST /api/diff/prioritize_card": ROLE_REVIEWER,
     "POST /api/diff/toggle_pause": ROLE_REVIEWER,
     "POST /api/diff/rerun_review": ROLE_REVIEWER,
@@ -397,6 +406,8 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
                 self.end_headers()
         elif parsed.path == "/api/diff/agent_stream":
             handle_get_agent_stream(self)
+        elif parsed.path == "/api/diff/preview_file":
+            handle_get_preview_file(self, parsed)
         elif parsed.path == "/api/templates/list":
             handle_get_templates_list(self)
         elif parsed.path == "/api/diff/sample":
@@ -428,6 +439,8 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
             handle_post_templates_reload(self)
         elif parsed.path == "/api/diff/switch-template":
             handle_post_switch_template(self)
+        elif parsed.path == "/api/diff/open_local":
+            handle_post_open_local(self)
         elif parsed.path == "/api/diff/prioritize_card":
             handle_post_prioritize_card(self)
         elif parsed.path == "/api/diff/toggle_pause":

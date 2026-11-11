@@ -40,6 +40,7 @@
     <button class="btn btn-blue" id="btnOpenRefTemplateModal" onclick="openRefTemplateModal()" title="全景浏览【参考/】目录 54 套官方标准模板">📑 模板库全景 (参考/)</button>
     <button class="btn" id="btnSwitchTemplate" onclick="openTemplateModal()">🔄 更换母本</button>
     <button class="btn btn-purple" id="btnReloadTemplates" onclick="reloadTemplates()">⚡ 热加载母本库</button>
+    <button class="btn btn-sky" id="btnHeaderPreview" onclick="openOriginalPreview('reviewed')" title="在线全屏预览送审或母本 Word 原格式排版 (快捷键: Alt+1 模板 / Alt+2 送审)">👁️ 原格式在线预览</button>
     <button class="btn btn-primary" onclick="openUploadModal()">📂 上传送审合同</button>
     <button class="btn" onclick="window.print()">🖨️ 导出对比单</button>
   </div>
@@ -92,6 +93,7 @@
       <div class="col-header-info">
         <span class="col-icon">🏛️</span>
         <span class="col-header-title">标准参考母本（基准正文）</span>
+        <button class="col-preview-btn" onclick="openOriginalPreview('template')" title="在线打开基准母本 Word 原格式文件预览 (快捷键: Alt+1 或 Alt+M)">👁️ 原格式预览 <kbd>Alt+1</kbd></button>
       </div>
       <span class="col-header-sub" id="headerStdName">母本库</span>
     </div>
@@ -106,6 +108,7 @@
       <div class="col-header-info">
         <span class="col-icon">✏️</span>
         <span class="col-header-title">送审合同（待审修改稿·增删对比）</span>
+        <button class="col-preview-btn" onclick="openOriginalPreview('reviewed')" title="在线打开送审合同 Word 原格式文件预览 (快捷键: Alt+2 或 Alt+S)">👁️ 原格式预览 <kbd>Alt+2</kbd></button>
       </div>
       <span class="col-header-sub" id="headerRevName">待审稿</span>
     </div>
@@ -334,6 +337,86 @@
     <div class="detail-modal-footer">
       <button class="btn btn-emerald" id="detailBtnLoadDiff" onclick="loadCurrentDetailContract()">⚡ 载入此案卷合同并比对</button>
       <button class="btn" onclick="closeCaseDetailModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 模态弹窗：原格式高保真在线预览 (Alt+1 母本 / Alt+2 送审) ==================== -->
+<div class="modal-overlay preview-modal-overlay" id="previewModal" onclick="closePreviewModalOnBackdrop(event)" role="dialog" aria-modal="true" aria-labelledby="previewModalTitle">
+  <div class="preview-modal-dialog" id="previewModalDialog" onclick="event.stopPropagation()">
+    <!-- 弹窗顶栏 -->
+    <div class="preview-modal-header">
+      <div class="preview-header-left">
+        <div class="preview-title-badge">
+          <span class="preview-icon" id="previewHeaderIcon">📄</span>
+          <span class="preview-title-text" id="previewModalTitle">原格式高保真在线预览</span>
+        </div>
+        <!-- 快速切换标签组 -->
+        <div class="preview-tabs-group" role="tablist">
+          <button class="preview-tab-btn" id="previewTabTemplate" onclick="switchPreviewTarget('template')" title="查看标准基准母本 Word 原格式排版 (快捷键: Alt+1 或 Alt+M)">🏛️ 基准母本 <kbd>Alt+1</kbd></button>
+          <button class="preview-tab-btn active" id="previewTabReviewed" onclick="switchPreviewTarget('reviewed')" title="查看送审修改稿 Word 原格式排版 (快捷键: Alt+2 或 Alt+S)">✏️ 送审合同 <kbd>Alt+2</kbd></button>
+          <button class="preview-tab-btn" id="previewTabSideBySide" onclick="switchPreviewTarget('side_by_side')" title="左右原格式高保真并排比对 (快捷键: Alt+3 或 Alt+B)">📖 双原版并排 <kbd>Alt+3</kbd></button>
+        </div>
+      </div>
+
+      <div class="preview-header-right">
+        <!-- 缩放控制工具组 -->
+        <div class="preview-zoom-group">
+          <button class="preview-tool-btn" onclick="adjustPreviewZoom(-0.1)" title="缩小排版 (-)">－</button>
+          <span class="preview-zoom-label" id="previewZoomValue">100%</span>
+          <button class="preview-tool-btn" onclick="adjustPreviewZoom(0.1)" title="放大排版 (+)">＋</button>
+          <button class="preview-tool-btn" onclick="resetPreviewZoom()" title="重置比例 (0)">重置</button>
+        </div>
+
+        <div class="preview-actions-group">
+          <button class="preview-action-btn" id="btnPreviewDownload" onclick="downloadCurrentPreviewFile()" title="下载当前原格式文档">📥 下载原件</button>
+          <button class="preview-action-btn" id="btnPreviewOpenLocal" onclick="openCurrentFileInLocalApp()" title="在本地 Word/WPS 程序中直接打开原文件 (仅限本机服务)">🖥️ 本地Office打开</button>
+          <button class="preview-action-btn" id="btnPreviewFullscreen" onclick="togglePreviewFullscreen()" title="全屏/还原视口">🗖 全屏</button>
+          <button class="preview-close-btn" onclick="closePreviewModal()" title="关闭预览 (ESC)">✕</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 文档元数据状态条 -->
+    <div class="preview-meta-strip">
+      <div class="preview-meta-left">
+        <span class="preview-meta-tag"><b id="previewMetaTypeLabel">文档:</b> <span id="previewMetaFileName">国内专利服务合同.docx</span></span>
+        <span class="preview-ext-badge" id="previewMetaExt">DOCX</span>
+        <span class="preview-meta-tag">大小: <span id="previewMetaSize">0 KB</span></span>
+        <span class="preview-meta-tag" id="previewMetaHashTag">SHA256: <code class="preview-hash-code" id="previewMetaHash">-</code></span>
+      </div>
+      <div class="preview-meta-tip" id="previewMetaTip">💡 原格式原汁原味还原：呈现真实页边距、段落缩进、印章表格与字体样式。快捷键 Alt+1 查母本，Alt+2 查送审。</div>
+    </div>
+
+    <!-- 预览核心视口 -->
+    <div class="preview-viewport" id="previewViewport">
+      <div class="preview-loading" id="previewLoading">
+        <div class="preview-spinner"></div>
+        <div class="preview-loading-text" id="previewLoadingText">正在载入 Word 原始文档版式与样式表...</div>
+      </div>
+
+      <!-- 单文档容器 -->
+      <div class="preview-document-container" id="previewDocContainer">
+        <div class="preview-canvas-wrapper" id="previewCanvasWrapper">
+          <div class="docx-preview-body" id="docxPreviewBody"></div>
+        </div>
+      </div>
+
+      <!-- 双文档左右原格式并排容器 -->
+      <div class="preview-split-container" id="previewSplitContainer" style="display:none;">
+        <div class="preview-split-pane" id="previewSplitLeft">
+          <div class="preview-split-pane-header">🏛️ 基准母本原始排版</div>
+          <div class="preview-split-pane-scroll" id="previewSplitScrollLeft">
+            <div class="docx-preview-body" id="docxSplitBodyLeft"></div>
+          </div>
+        </div>
+        <div class="preview-split-pane" id="previewSplitRight">
+          <div class="preview-split-pane-header">✏️ 送审合同原始排版</div>
+          <div class="preview-split-pane-scroll" id="previewSplitScrollRight">
+            <div class="docx-preview-body" id="docxSplitBodyRight"></div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
