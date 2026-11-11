@@ -45,6 +45,30 @@ python -m mypy contract_kb --ignore-missing-imports --no-error-summary
 
 ---
 
-## 四、验证结论
+## 四、远端 CI 持续集成执行证据与结果
+
+代码推送到分支 `fix/phase16-trust-boundary-security` 后，触发 GitHub Actions 持续集成流水线，全流程验证通过：
+
+- **触发 Commit SHA**：`665d463`
+- **关联 Pull Request**：[PR #4: feat(phase16-s): security trust boundaries, fail-closed auth, and governed agent](https://github.com/haohaizi233/ai-contract-review/pull/4)
+- **GitHub Actions Run ID**：`42939292990`
+- **Run URL**：`https://github.com/haohaizi233/ai-contract-review/actions/runs/42939292990`
+- **执行状态**：`completed`
+- **最终结论**：`success` (100% 通过)
+
+### 各 Job 执行状态
+
+| Job 名称 | 状态 | 结论 | 耗时与说明 |
+|---|---|---|---|
+| `lint-and-type` | completed | **success** | Ruff format check, Ruff lint, Mypy 全部通过 |
+| `security-gate` | completed | **success** | 结构性安全检查与敏感数据扫描全部通过 |
+| `test-pg` | completed | **success** | PostgreSQL 真实服务集成与存储契约测试通过 |
+| `test-synthetic` | completed | **success** | 单元/契约/集成/安全/API 全量测试全部通过 |
+| `real-corpus-regression` | completed | **skipped** | 按规则仅在 release/定时触发 |
+| `pr-ci-gate-enforce` | completed | **success** | PR 合并门禁强校验通过 |
+
+---
+
+## 五、验证结论
 
 全量回归测试证明，本次针对可信证据出处、权威提示词策略、防自审边界、空证据缓存与 Worker 执行上下文的整改，在保持已有合同分析、母本对齐、知识库管理和安全认证各项业务功能 100% 向后兼容的同时，彻底封堵了全部安全漏洞。
