@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -74,10 +75,20 @@ def get_ranked_templates_catalog(
     """为库中官方标准模板计算针对当前送审合同的匹配置信度，并严格从高到低从上往下排序。"""
     st = create_storage()
     try:
-        all_docs = st.list_documents()
-        docs = [d for d in all_docs if d.get("document_type") != "governance_doc"]
-        if not docs:
-            docs = all_docs
+        # Historical imports and evaluation fixtures are not current mother templates.
+        sources = {
+            (p.name, hashlib.sha256(p.read_bytes()).hexdigest())
+            for p in config.TEMPLATE_DIR.rglob("*.docx")
+            if not p.name.startswith(("~", "synth_")) and "合同编号制度" not in p.name
+        }
+        docs = []
+        seen = set()
+        for d in st.list_documents(tenant_id="default"):
+            key = (d.get("source_file"), d.get("source_hash"))
+            if key not in sources or d.get("status") != "ACTIVE" or key in seen:
+                continue
+            seen.add(key)
+            docs.append(d)
 
         matched_tpl = None
         target_subtype = "PATENT_ANNUAL_FEE"
@@ -162,6 +173,8 @@ def get_ranked_templates_catalog(
         templates.append(
             {
                 "document_id": doc_id,
+                "source_hash": d.get("source_hash") or "",
+                "template_code": fname.split("_")[0] if fname.startswith("MB") else "",
                 "display_code": display_code,
                 "is_standard_mb": not is_hex_hash(doc_id),
                 "name": clean_name,

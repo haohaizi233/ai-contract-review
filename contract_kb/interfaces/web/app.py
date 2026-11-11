@@ -7,6 +7,8 @@ import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import shutil
 import sys
@@ -64,6 +66,22 @@ from .services import (
 WEB_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = WEB_DIR / "templates"
 STATIC_DIR = WEB_DIR / "static"
+
+# Console pipes can fill when the desktop launcher stops draining stderr.
+# Access logging must never block HTTP responses on that console pipe.
+_ACCESS_LOGGER = logging.getLogger("contract_kb.web.access")
+_ACCESS_LOGGER.setLevel(logging.INFO)
+_ACCESS_LOGGER.propagate = False
+if not _ACCESS_LOGGER.handlers:
+    _access_handler = RotatingFileHandler(
+        config.DATA_DIR / "web_access.log",
+        maxBytes=2 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+        delay=True,
+    )
+    _access_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _ACCESS_LOGGER.addHandler(_access_handler)
 
 
 def load_html_template() -> str:
@@ -149,7 +167,12 @@ def generate_rendered_html(
         except Exception:
             material_json = "{}"
 
-    html = HTML_TEMPLATE.replace("__INITIAL_DATA_PLACEHOLDER__", data_json)
+    base_template = (
+        load_html_template()
+        if not HTML_TEMPLATE or not os.environ.get("PYTEST_CURRENT_TEST")
+        else HTML_TEMPLATE
+    )
+    html = base_template.replace("__INITIAL_DATA_PLACEHOLDER__", data_json)
     html = html.replace("__ALL_TEMPLATES_PLACEHOLDER__", catalog_json)
     html = html.replace("__REF_TEMPLATES_PLACEHOLDER__", ref_json)
     html = html.replace("__MATERIAL_DATA_PLACEHOLDER__", material_json)
@@ -219,7 +242,10 @@ class DiffVisualizerHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         if args and any("Connection" in str(a) or "10053" in str(a) for a in args):
             return
-        super().log_message(format, *args)
+        table = getattr(self, "_control_char_table", None)
+        raw_msg = format % args
+        message = raw_msg.translate(table) if table is not None else raw_msg
+        _ACCESS_LOGGER.info("%s %s", self.address_string(), message)
 
     def _send_cors_headers(self):
         origin = self.headers.get("Origin", "")
@@ -460,6 +486,25 @@ def create_web_server(
     return ThreadingHTTPServer((host, port), DiffVisualizerHandler)
 
 
+def start_local_default_review() -> None:
+    """预加载本地示例，使用与本地 HTTP 请求相同的认证身份。"""
+    if os.environ.get("DIFF_WEB_MODE", "").upper() == "ENTERPRISE" or bool(
+        os.environ.get("CONTRACT_KB_AUTH_SHARED_KEY")
+    ):
+        return
+
+    principal = authenticate_web_request(
+        method="GET", path="/", query="", headers={}, raw_body=b""
+    )
+    initial_data = execute_current_diff(CURRENT_SESSION_FILE)
+    get_agent_manager().start_document_review(
+        initial_data,
+        session_id="default_session",
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     try:
         sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
@@ -489,8 +534,7 @@ def main(argv: list[str] | None = None) -> None:
         shutil.copyfile(default_sample, CURRENT_SESSION_FILE)
 
     if CURRENT_SESSION_FILE.exists():
-        initial_data = execute_current_diff(CURRENT_SESSION_FILE)
-        get_agent_manager().start_document_review(initial_data)
+        start_local_default_review()
 
     export_standalone_html()
     if args.export_only:

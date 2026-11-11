@@ -49,10 +49,10 @@
 <div class="toolbar-strip">
   <div class="tool-left">
     <!-- 视图模式切换 -->
-    <div class="segmented-control">
-      <button class="seg-btn active" id="btnModeSide" onclick="setViewMode('side')">📖 原格式双栏对照</button>
-      <button class="seg-btn" id="btnModeSingle" onclick="setViewMode('single')">📄 单版标红审阅</button>
-      <button class="seg-btn" id="btnModeDiff" onclick="setViewMode('diff')">🎯 仅看变更条款</button>
+    <div class="segmented-control" role="group" aria-label="视图模式切换">
+      <button class="seg-btn active" id="btnModeSide" onclick="setViewMode('side')" title="左右双栏精确对照排版（标准母本 + 送审修改稿 + 批注专栏）">📖 原格式双栏对照</button>
+      <button class="seg-btn" id="btnModeReviewed" onclick="setViewMode('reviewed')" title="仅保留右半边送审修改稿与批注专栏（隐藏左侧母本）">📑 送审与批注</button>
+      <button class="seg-btn" id="btnModeDiff" onclick="setViewMode('diff')" title="仅保留发生变更/高危的条款">🎯 仅看变更条款</button>
     </div>
 
     <!-- 标红风格切换 -->
@@ -220,6 +220,7 @@
       <button class="btn" onclick="resetAutoTemplate()" title="切回由 AI 智能自动识别母本">🎯 恢复自动识别</button>
     </div>
 
+    <div id="tplCurrentSelection" style="padding:10px 20px; background:#EFF6FF; color:#1E40AF; font-size:13px; font-weight:600;" role="status">当前使用：尚未选择</div>
     <div class="tpl-category-tabs" id="tplCategoryTabs"></div>
 
     <div class="tpl-list-scroll" id="tplListContainer"></div>

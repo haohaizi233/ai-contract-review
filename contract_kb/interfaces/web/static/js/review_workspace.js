@@ -262,6 +262,10 @@ function syncClauseHeights() {
     if (r) r.style.minHeight = '0px';
   });
 
+  // The standard column is hidden in single and reviewed mode; keep the reviewed text at
+  // its natural height instead of balancing against an invisible column.
+  if (currentViewMode === 'single' || currentViewMode === 'reviewed') return;
+
   blocks.forEach(b => {
     const s = document.getElementById(`std-${b.block_id}`);
     const r = document.getElementById(`rev-${b.block_id}`);
@@ -752,13 +756,23 @@ function setAnnotationStatus(annId, status) {
 
 function setViewMode(mode) {
   currentViewMode = mode;
-  document.getElementById('btnModeSide').classList.toggle('active', mode === 'side');
-  document.getElementById('btnModeSingle').classList.toggle('active', mode === 'single');
-  document.getElementById('btnModeDiff').classList.toggle('active', mode === 'diff');
+  const btnSide = document.getElementById('btnModeSide');
+  const btnReviewed = document.getElementById('btnModeReviewed');
+  const btnSingle = document.getElementById('btnModeSingle');
+  const btnDiff = document.getElementById('btnModeDiff');
 
+  if (btnSide) btnSide.classList.toggle('active', mode === 'side');
+  if (btnReviewed) btnReviewed.classList.toggle('active', mode === 'reviewed');
+  if (btnSingle) btnSingle.classList.toggle('active', mode === 'single');
+  if (btnDiff) btnDiff.classList.toggle('active', mode === 'diff');
+
+  document.body.classList.toggle('mode-reviewed', mode === 'reviewed');
   document.body.classList.toggle('mode-single', mode === 'single');
   renderContractColumns();
   syncClauseHeights();
+  if (typeof scheduleResync === 'function') {
+    scheduleResync();
+  }
 }
 
 function setRedlineMode(isRedlineOnly) {
