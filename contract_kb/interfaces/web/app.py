@@ -141,7 +141,10 @@ def generate_rendered_html(
             if not CURRENT_SESSION_FILE.exists():
                 shutil.copyfile(sample_file, CURRENT_SESSION_FILE)
             default_s_file = get_session_file("default_session", tenant_id="default")
-            if not default_s_file.exists() or CURRENT_SESSION_FILE.stat().st_mtime > default_s_file.stat().st_mtime:
+            if (
+                not default_s_file.exists()
+                or CURRENT_SESSION_FILE.stat().st_mtime > default_s_file.stat().st_mtime
+            ):
                 shutil.copyfile(CURRENT_SESSION_FILE, default_s_file)
                 save_session_meta(
                     "default_session",
@@ -527,7 +530,9 @@ def start_local_default_review() -> None:
         method="GET", path="/", query="", headers={}, raw_body=b""
     )
     if CURRENT_SESSION_FILE.exists():
-        default_file = get_session_file("default_session", tenant_id=principal.tenant_id)
+        default_file = get_session_file(
+            "default_session", tenant_id=principal.tenant_id
+        )
         shutil.copyfile(CURRENT_SESSION_FILE, default_file)
         save_session_meta(
             "default_session",
@@ -579,7 +584,10 @@ def main(argv: list[str] | None = None) -> None:
         need_reset = not CURRENT_SESSION_FILE.exists()
         if not need_reset:
             try:
-                if CURRENT_SESSION_FILE.stat().st_size < 100 or CURRENT_SESSION_FILE.read_bytes()[:4] != b"PK\x03\x04":
+                if (
+                    CURRENT_SESSION_FILE.stat().st_size < 100
+                    or CURRENT_SESSION_FILE.read_bytes()[:4] != b"PK\x03\x04"
+                ):
                     need_reset = True
             except Exception:
                 need_reset = True

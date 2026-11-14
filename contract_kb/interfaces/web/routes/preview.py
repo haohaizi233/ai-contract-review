@@ -88,6 +88,7 @@ def resolve_preview_file(
             # 单机工作台模式下，全局活动合同较会话旧文件更新时执行物理同步
             try:
                 import shutil
+
                 shutil.copyfile(CURRENT_SESSION_FILE, s_file)
             except Exception:
                 pass
@@ -183,9 +184,7 @@ def resolve_preview_file(
     # 2. 若依据微盘文件名未命中，通过剥离前缀/后缀纯净名称智能模糊匹配
     if not tpl_path:
         stem_raw = Path(src_file).stem if src_file else (matched_tpl.get("name") or "")
-        clean_stem = re.sub(
-            r"^(MB\w+?_V[\d\.]+?_|WDCLI_[a-f0-9]+_)", "", stem_raw
-        )
+        clean_stem = re.sub(r"^(MB\w+?_V[\d\.]+?_|WDCLI_[a-f0-9]+_)", "", stem_raw)
         clean_base = re.sub(
             r"[-_](恒程|创新|代理|知识产权|事务所|公司|企业).*$", "", clean_stem
         ).strip()
@@ -204,7 +203,10 @@ def resolve_preview_file(
                         or clean_base in p.stem
                         or p_clean in clean_base
                     ):
-                        if p.suffix.lower() == ".doc" and p.with_suffix(".docx").exists():
+                        if (
+                            p.suffix.lower() == ".doc"
+                            and p.with_suffix(".docx").exists()
+                        ):
                             tpl_path = p.with_suffix(".docx")
                         else:
                             tpl_path = p
@@ -239,9 +241,7 @@ def resolve_preview_file(
 
     tpl_id = matched_tpl.get("document_id") if matched_tpl else ""
     display_title = (
-        f"《{raw_title}》基准母本原件"
-        if not raw_title.startswith("《")
-        else raw_title
+        f"《{raw_title}》基准母本原件" if not raw_title.startswith("《") else raw_title
     )
 
     return tpl_path, {
@@ -293,7 +293,7 @@ def handle_get_preview_file(handler: Any, parsed: urllib.parse.ParseResult) -> N
         handler.send_header("Content-Length", str(len(data)))
         handler.send_header(
             "Content-Disposition",
-            f'inline; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}',
+            f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}",
         )
         handler.send_header("Cache-Control", "no-cache, must-revalidate")
         handler._send_cors_headers()
@@ -308,7 +308,9 @@ def handle_post_open_local(handler: Any) -> None:
     session_id, tenant_id, _ = handler._get_request_identity()
 
     # 安全边界：仅允许来自本机 loopback 的桌面端请求调用本地打开
-    client_ip = handler.client_address[0] if getattr(handler, "client_address", None) else ""
+    client_ip = (
+        handler.client_address[0] if getattr(handler, "client_address", None) else ""
+    )
     if client_ip not in ("127.0.0.1", "::1", "localhost", "testserver"):
         handler._send_json(
             400,
@@ -328,7 +330,9 @@ def handle_post_open_local(handler: Any) -> None:
             session_id=session_id, target=target, tenant_id=tenant_id
         )
         if not file_path or not file_path.exists():
-            handler._send_json(404, {"error": f"本地未找到对应原文件 (target={target})"})
+            handler._send_json(
+                404, {"error": f"本地未找到对应原文件 (target={target})"}
+            )
             return
 
         if os.name == "nt" and hasattr(os, "startfile"):

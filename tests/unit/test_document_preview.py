@@ -48,7 +48,9 @@ def test_resolve_preview_file_reviewed(test_session_id, tmp_path, monkeypatch):
     assert len(meta["sha256"]) == 64
 
 
-def test_resolve_preview_file_reviewed_hides_technical_name(test_session_id, tmp_path, monkeypatch):
+def test_resolve_preview_file_reviewed_hides_technical_name(
+    test_session_id, tmp_path, monkeypatch
+):
     """内部/测试占位名（mut_*、contract.*）不得面向用户展示。"""
     s_file = tmp_path / "contract.docx"
     s_file.write_bytes(b"PK\x03\x04x")
@@ -68,7 +70,9 @@ def test_resolve_preview_file_reviewed_hides_technical_name(test_session_id, tmp
     assert meta["file_name"] == "国内专利服务合同（年费缴纳）-送审修改稿.docx"
 
 
-def test_resolve_preview_file_reviewed_with_original_filename(test_session_id, tmp_path, monkeypatch):
+def test_resolve_preview_file_reviewed_with_original_filename(
+    test_session_id, tmp_path, monkeypatch
+):
     """测试送审文档定位：优先使用元数据中保存的 original_filename。"""
     s_file = tmp_path / "contract.docx"
     s_file.write_bytes(b"PK\x03\x04test docx content")
@@ -197,7 +201,9 @@ def test_handle_post_open_local_remote_client_forbidden(test_session_id, monkeyp
     assert data["error"] == "remote_not_supported"
 
 
-def test_handle_post_open_local_loopback_client_allowed(test_session_id, tmp_path, monkeypatch):
+def test_handle_post_open_local_loopback_client_allowed(
+    test_session_id, tmp_path, monkeypatch
+):
     """安全边界检查：本机 loopback 环境下允许解析本地文件。"""
     sample_file = tmp_path / "test.docx"
     sample_file.write_bytes(b"content")
