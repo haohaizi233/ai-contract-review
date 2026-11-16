@@ -209,9 +209,18 @@ def test_worker_exception_graceful_fallback_and_single_card_retry() -> None:
         assert ann2["ai_analysis"] == "重试后成功分析"
         assert ann2["_source"] == "RETRY_SUCCESS"
 
-        # 确认本轮重试仅触发一次 all_complete
+        # 确认本轮重试触发了 card_complete 并且携带了完整字段（杜绝前端 card-risk-pill 等出现 undefined）
         events = []
         while not q.empty():
             events.append(q.get_nowait())
+        complete_events = [e for e in events if e["event"] == "card_complete"]
+        assert len(complete_events) == 1
+        card_data = complete_events[0]["data"]
+        assert card_data["risk_label"] == "重试成功"
+        assert card_data["risk_level"] == "HIGH"
+        assert card_data["ai_analysis"] == "重试后成功分析"
+        assert card_data["action_advice"] == "恢复保密条款"
+        assert card_data["result"]["risk_label"] == "重试成功"
+
         all_complete_events = [e for e in events if e["event"] == "all_complete"]
         assert len(all_complete_events) == 1

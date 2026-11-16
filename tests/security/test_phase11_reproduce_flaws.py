@@ -209,8 +209,24 @@ def test_reproduce_p1_03_clause_extractor_paragraph_breaks():
     )
 
 
-def test_reproduce_p1_04_external_llm_authorization_default():
-    """P1-04: External LLM access must default to False (fail-closed secure default)."""
-    assert config.ALLOW_EXTERNAL_LLM is False, (
-        f"Flaw P1-04 reproduced: ALLOW_EXTERNAL_LLM defaults to {config.ALLOW_EXTERNAL_LLM}"
-    )
+def test_reproduce_p1_04_external_llm_authorization_default(monkeypatch):
+    """P1-04: External LLM access must default to False (fail-closed secure default).
+
+    The default must hold in a *clean* environment: no CONTRACT_KB_ALLOW_EXTERNAL_LLM
+    env var and no .env file contribution. Ambient local configuration (dotenv) is
+    explicitly authorized opt-in, not a default, so it is neutralized here to assert
+    the true fail-closed default, then ambient config is restored afterwards.
+    """
+    import importlib
+
+    import dotenv
+
+    with monkeypatch.context() as m:
+        m.delenv("CONTRACT_KB_ALLOW_EXTERNAL_LLM", raising=False)
+        m.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: None)
+        fresh_config = importlib.reload(config)
+        assert fresh_config.ALLOW_EXTERNAL_LLM is False, (
+            f"Flaw P1-04 reproduced: ALLOW_EXTERNAL_LLM defaults to {fresh_config.ALLOW_EXTERNAL_LLM}"
+        )
+    # 退出 monkeypatch 上下文后重载，恢复本地环境的显式配置状态
+    importlib.reload(config)

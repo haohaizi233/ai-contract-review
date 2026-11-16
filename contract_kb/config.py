@@ -9,6 +9,15 @@ from pathlib import Path
 # 项目根目录 = 本文件上两级
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+try:
+    from dotenv import load_dotenv
+
+    env_path = PROJECT_ROOT / ".env"
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=False)
+except ImportError:
+    pass
+
 # 模板源目录（默认工作区 参考/ 目录）
 TEMPLATE_DIR = Path(os.environ.get("CONTRACT_KB_TEMPLATE_DIR", PROJECT_ROOT / "参考"))
 # 辅助资料目录

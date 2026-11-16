@@ -110,7 +110,8 @@ def get_embedding_provider_by_spec(spec: str | None = None) -> EmbeddingProvider
         return SentenceTransformerEmbedding(resolved.split(":", 1)[1])
     if resolved.startswith("cloud:"):
         allow_ext = (
-            os.environ.get("CONTRACT_KB_ALLOW_EXTERNAL_LLM", "0") == "1"
+            os.environ.get("CONTRACT_KB_ALLOW_EXTERNAL_LLM", "0").strip().lower()
+            in ("1", "true", "yes")
             or config.ALLOW_EXTERNAL_LLM
         )
         if not allow_ext:

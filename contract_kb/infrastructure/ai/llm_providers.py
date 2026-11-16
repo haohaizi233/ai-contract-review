@@ -397,7 +397,11 @@ def get_llm_provider(
                 f"已配置授权 LLM=openai_compat 但缺少 {missing}；"
                 "fail-closed 直接报错，不允许静默回退为 None（避免语义审核被无声跳过）"
             )
-        allow_ext = e.get("CONTRACT_KB_ALLOW_EXTERNAL_LLM", "0").strip() == "1"
+        allow_ext = e.get("CONTRACT_KB_ALLOW_EXTERNAL_LLM", "0").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
         if not _is_loopback_endpoint(base_url) and not allow_ext:
             raise LLMConfigError(
                 "外部 LLM 数据出境门禁拒绝：非本机回环端点必须显式设置 "

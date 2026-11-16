@@ -563,6 +563,17 @@ class AgentReviewSession:
                     "result": res,
                     "completed": self.completed_count,
                     "total": self.total_count,
+                    "risk_level": target.get("risk_level") or res.get("risk_level"),
+                    "risk_label": target.get("risk_label") or res.get("risk_label"),
+                    "ai_analysis": target.get("ai_analysis") or res.get("ai_analysis"),
+                    "action_advice": target.get("action_advice")
+                    or res.get("action_advice"),
+                    "reasoning": target.get("_reasoning") or res.get("reasoning", ""),
+                    "source": target.get("_source") or res.get("source", "AI_AGENT"),
+                    "elapsed_sec": target.get("_elapsedSec")
+                    or res.get("elapsed_sec", 0),
+                    "from_cache": target.get("_fromCache")
+                    or res.get("from_cache", False),
                 },
             )
 
@@ -630,6 +641,24 @@ class AgentReviewSession:
                     "result": fallback_res,
                     "completed": self.completed_count,
                     "total": self.total_count,
+                    "risk_level": target.get("risk_level")
+                    if target
+                    else fallback_res.get("risk_level"),
+                    "risk_label": target.get("risk_label")
+                    if target
+                    else fallback_res.get("risk_label"),
+                    "ai_analysis": target.get("ai_analysis")
+                    if target
+                    else fallback_res.get("ai_analysis"),
+                    "action_advice": target.get("action_advice")
+                    if target
+                    else fallback_res.get("action_advice"),
+                    "reasoning": target.get("_reasoning")
+                    if target
+                    else fallback_res.get("reasoning", ""),
+                    "source": "WATCHDOG_FALLBACK",
+                    "elapsed_sec": elapsed,
+                    "from_cache": False,
                 },
             )
 

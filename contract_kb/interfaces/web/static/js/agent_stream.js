@@ -179,27 +179,30 @@ function initAgentSSE(force = false) {
 }
 
 function handleAgentSnapshot(snap) {
+  if (!snap) return;
   agentState.status = snap.status || 'IDLE';
   agentState.currentAnnId = snap.current_ann_id;
-  agentState.completed = snap.completed_count || 0;
-  agentState.total = snap.total_count || 0;
+  agentState.completed = (snap.completed !== undefined) ? snap.completed : (snap.completed_count || 0);
+  agentState.total = (snap.total !== undefined) ? snap.total : (snap.total_count || 0);
   if (snap.circuit_breaker) {
     agentState.circuitBreaker = snap.circuit_breaker;
   }
 
   // 批量合并已研判卡片
-  if (currentData && currentData.annotations && snap.completed_cards) {
-    snap.completed_cards.forEach(card => {
+  const cards = snap.completed_cards || snap.annotations;
+  if (currentData && currentData.annotations && cards) {
+    cards.forEach(card => {
       const ann = currentData.annotations.find(a => a.id === card.id);
-      if (ann) {
-        ann.risk_level = card.risk_level || ann.risk_level;
-        ann.risk_label = card.risk_label || ann.risk_label;
-        ann.ai_analysis = card.ai_analysis || ann.ai_analysis;
-        ann.action_advice = card.action_advice || ann.action_advice;
-        ann._reasoning = card.reasoning || '';
-        ann._source = card.source || 'AI_AGENT';
-        ann._elapsedSec = card.elapsed_sec || 0;
-        ann._fromCache = card.from_cache || false;
+      if (ann && (card._aiDone || card.ai_analysis || (card.result && card.result.ai_analysis))) {
+        const res = card.result || card;
+        ann.risk_level = res.risk_level || ann.risk_level;
+        ann.risk_label = res.risk_label || ann.risk_label;
+        ann.ai_analysis = res.ai_analysis || ann.ai_analysis;
+        ann.action_advice = res.action_advice || ann.action_advice;
+        ann._reasoning = res.reasoning || card._reasoning || '';
+        ann._source = res.source || card._source || 'AI_AGENT';
+        ann._elapsedSec = (res.elapsed_sec !== undefined) ? res.elapsed_sec : (card._elapsedSec || 0);
+        ann._fromCache = (res.from_cache !== undefined) ? res.from_cache : (card._fromCache || false);
         ann._aiDone = true;
       }
     });
@@ -209,23 +212,35 @@ function handleAgentSnapshot(snap) {
 }
 
 function handleCardComplete(data) {
-  agentState.completed = data.completed;
-  agentState.total = data.total;
+  if (!data) return;
+  const res = data.result || data;
+
+  agentState.completed = (data.completed !== undefined) ? data.completed : (res.completed !== undefined ? res.completed : agentState.completed);
+  agentState.total = (data.total !== undefined) ? data.total : (res.total !== undefined ? res.total : agentState.total);
   if (agentState.currentAnnId === data.id) {
     agentState.currentAnnId = null;
   }
 
+  const riskLevel = res.risk_level || data.risk_level || '';
+  const riskLabel = res.risk_label || data.risk_label || '';
+  const aiAnalysis = res.ai_analysis !== undefined ? res.ai_analysis : (data.ai_analysis !== undefined ? data.ai_analysis : '');
+  const actionAdvice = res.action_advice !== undefined ? res.action_advice : (data.action_advice !== undefined ? data.action_advice : '');
+  const reasoning = res.reasoning || data.reasoning || res._reasoning || data._reasoning || '';
+  const source = res.source || data.source || res._source || data._source || 'AI_AGENT';
+  const elapsedSec = (res.elapsed_sec !== undefined) ? res.elapsed_sec : ((data.elapsed_sec !== undefined) ? data.elapsed_sec : ((res._elapsedSec !== undefined) ? res._elapsedSec : 0));
+  const fromCache = (res.from_cache !== undefined) ? res.from_cache : ((data.from_cache !== undefined) ? data.from_cache : ((res._fromCache !== undefined) ? res._fromCache : false));
+
   if (currentData && currentData.annotations) {
     const ann = currentData.annotations.find(a => a.id === data.id);
     if (ann) {
-      ann.risk_level = data.risk_level;
-      ann.risk_label = data.risk_label;
-      ann.ai_analysis = data.ai_analysis;
-      ann.action_advice = data.action_advice;
-      ann._reasoning = data.reasoning;
-      ann._source = data.source;
-      ann._elapsedSec = data.elapsed_sec;
-      ann._fromCache = data.from_cache;
+      if (riskLevel) ann.risk_level = riskLevel;
+      if (riskLabel) ann.risk_label = riskLabel;
+      if (aiAnalysis) ann.ai_analysis = aiAnalysis;
+      if (actionAdvice) ann.action_advice = actionAdvice;
+      ann._reasoning = reasoning;
+      ann._source = source;
+      ann._elapsedSec = elapsedSec;
+      ann._fromCache = fromCache;
       ann._aiDone = true;
     }
   }
@@ -236,28 +251,28 @@ function handleCardComplete(data) {
     card.classList.remove('agent-running');
     const pill = card.querySelector('.card-risk-pill');
     if (pill) {
-      pill.className = `card-risk-pill ${data.risk_level}`;
-      pill.innerText = data.risk_label;
+      if (riskLevel) pill.className = `card-risk-pill ${riskLevel}`;
+      if (riskLabel) pill.innerText = riskLabel;
     }
     const analysisEl = card.querySelector('.card-analysis');
-    if (analysisEl) analysisEl.innerText = data.ai_analysis;
+    if (analysisEl && aiAnalysis) analysisEl.innerText = aiAnalysis;
     const adviceEl = card.querySelector('.card-advice');
-    if (adviceEl) adviceEl.innerText = data.action_advice;
+    if (adviceEl && actionAdvice) adviceEl.innerText = actionAdvice;
 
     // 更新来源标签
     let sBadge = card.querySelector('.card-source-badge');
     let badgeText = '🤖 AI研判';
     let badgeClass = 'ai';
-    if (data.source === 'FALLBACK_RULE' || data.source === 'CIRCUIT_BREAKER_FALLBACK') {
+    if (source === 'FALLBACK_RULE' || source === 'CIRCUIT_BREAKER_FALLBACK') {
       badgeText = '🛡️ 容灾规则降级'; badgeClass = 'fallback';
-    } else if (data.source === 'WATCHDOG_TIMEOUT_FALLBACK') {
+    } else if (source === 'WATCHDOG_TIMEOUT_FALLBACK' || source === 'WATCHDOG_FALLBACK') {
       badgeText = '⏱️ 看门狗抢救'; badgeClass = 'watchdog';
-    } else if (data.source === 'CHECKPOINT_RESUMED') {
+    } else if (source === 'CHECKPOINT_RESUMED') {
       badgeText = '💾 断点自愈恢复'; badgeClass = 'resume';
-    } else if (data.from_cache) {
+    } else if (fromCache) {
       badgeText = '⚡ 本地缓存'; badgeClass = 'cache';
-    } else if (data.elapsed_sec) {
-      badgeText = `🤖 AI研判 ${data.elapsed_sec}s`;
+    } else if (elapsedSec) {
+      badgeText = `🤖 AI研判 ${elapsedSec}s`;
     }
     if (sBadge) {
       sBadge.className = `card-source-badge ${badgeClass}`;
@@ -367,7 +382,16 @@ async function rerunAgentReview() {
     hideLoading();
     if (res.success) {
       showToast('已清空旧任务，全新研判流水线已就绪启动！', 'success');
-      initAgentSSE();
+      if (currentData && currentData.annotations) {
+        currentData.annotations.forEach(a => {
+          a._aiDone = false;
+        });
+      }
+      agentState.completed = 0;
+      agentState.status = 'RUNNING';
+      updateAgentUI();
+      renderAnnotationsSidebar();
+      initAgentSSE(true);
     }
   } catch (err) {
     hideLoading();
